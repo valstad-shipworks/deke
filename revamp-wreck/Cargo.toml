@@ -1,0 +1,10 @@
+[package]
+name = "revamp-wreck"
+version = "1.0.0"
+edition = "2024"
+
+[dependencies]
+revamp-types = { path = "../revamp-types" }
+wreck = "0.1.8"
+glam = "0.32.1"
+uuid = { version = "1", features = ["v4"] }

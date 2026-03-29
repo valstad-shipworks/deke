@@ -1,0 +1,13 @@
+[workspace]
+members = ["revamp-types", "revamp-wreck", "revamp-rrt", "revamp-macro", "revamp-test"]
+resolver = "2"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+opt-level = 3
+
+[profile.bench]
+lto = "fat"
+codegen-units = 1
+opt-level = 3
