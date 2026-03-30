@@ -1,6 +1,6 @@
 use glam::{Affine3A, Mat3A, Vec3A};
 
-use crate::SRobotQ;
+use crate::{RevampError, SRobotQ};
 
 #[inline(always)]
 fn fast_sin_cos(x: f32) -> (f32, f32) {
@@ -36,8 +36,24 @@ fn fast_sin_cos(x: f32) -> (f32, f32) {
 }
 
 pub trait FKChain<const N: usize>: Clone + Send + Sync {
-    fn fk(&self, q: &SRobotQ<N>) -> [Affine3A; N];
-    fn fk_end(&self, q: &SRobotQ<N>) -> Affine3A;
+    type Error: Into<RevampError>;
+    fn fk(&self, q: &SRobotQ<N>) -> Result<[Affine3A; N], Self::Error>;
+    fn fk_end(&self, q: &SRobotQ<N>) -> Result<Affine3A, Self::Error>;
+}
+
+#[inline(always)]
+#[cfg(debug_assertions)]
+fn check_finite<const N: usize>(q: &SRobotQ<N>) -> Result<(), RevampError> {
+    if q.any_non_finite() {
+        return Err(RevampError::JointsNonFinite);
+    }
+    Ok(())
+}
+
+#[inline(always)]
+#[cfg(not(debug_assertions))]
+fn check_finite<const N: usize>(_: &SRobotQ<N>) -> Result<(), std::convert::Infallible> {
+    Ok(())
 }
 
 /// Accumulate a local rotation + translation into the running transform.
@@ -106,18 +122,22 @@ impl<const N: usize> DHChain<N> {
             theta_offset,
         }
     }
-
 }
 
 impl<const N: usize> FKChain<N> for DHChain<N> {
+    #[cfg(debug_assertions)]
+    type Error = RevampError;
+    #[cfg(not(debug_assertions))]
+    type Error = std::convert::Infallible;
+
     /// DH forward kinematics exploiting the structure of `Rz(θ)·Rx(α)`.
     ///
     /// The per-joint accumulation decomposes into two 2D column rotations:
     ///   1. Rotate `(c0, c1)` by θ  →  `(new_c0, perp)`
     ///   2. Rotate `(perp, c2)` by α  →  `(new_c1, new_c2)`
     /// Translation reuses `new_c0`:  `t += a·new_c0 + d·old_c2`
-    #[inline]
-    fn fk(&self, q: &SRobotQ<N>) -> [Affine3A; N] {
+    fn fk(&self, q: &SRobotQ<N>) -> Result<[Affine3A; N], Self::Error> {
+        check_finite::<N>(q)?;
         let mut out = [Affine3A::IDENTITY; N];
         let mut c0 = Vec3A::X;
         let mut c1 = Vec3A::Y;
@@ -148,11 +168,11 @@ impl<const N: usize> FKChain<N> for DHChain<N> {
             };
             i += 1;
         }
-        out
+        Ok(out)
     }
 
-    #[inline]
-    fn fk_end(&self, q: &SRobotQ<N>) -> Affine3A {
+    fn fk_end(&self, q: &SRobotQ<N>) -> Result<Affine3A, Self::Error> {
+        check_finite::<N>(q)?;
         let mut c0 = Vec3A::X;
         let mut c1 = Vec3A::Y;
         let mut c2 = Vec3A::Z;
@@ -178,10 +198,10 @@ impl<const N: usize> FKChain<N> for DHChain<N> {
             i += 1;
         }
 
-        Affine3A {
+        Ok(Affine3A {
             matrix3: Mat3A::from_cols(c0, c1, c2),
             translation: t,
-        }
+        })
     }
 }
 
@@ -272,21 +292,9 @@ impl<const N: usize> HPChain<N> {
         let ca_sb = ca * sb;
         let ca_cb = ca * cb;
 
-        let c0 = Vec3A::new(
-            ct * cb - st * sa_sb,
-            st * cb + ct * sa_sb,
-            -ca_sb,
-        );
-        let c1 = Vec3A::new(
-            -st * ca,
-            ct * ca,
-            sa,
-        );
-        let c2 = Vec3A::new(
-            ct * sb + st * sa_cb,
-            st * sb - ct * sa_cb,
-            ca_cb,
-        );
+        let c0 = Vec3A::new(ct * cb - st * sa_sb, st * cb + ct * sa_sb, -ca_sb);
+        let c1 = Vec3A::new(-st * ca, ct * ca, sa);
+        let c2 = Vec3A::new(ct * sb + st * sa_cb, st * sb - ct * sa_cb, ca_cb);
         let t = Vec3A::new(
             ai * c0.x + di * c2.x,
             ai * c0.y + di * c2.y,
@@ -298,8 +306,13 @@ impl<const N: usize> HPChain<N> {
 }
 
 impl<const N: usize> FKChain<N> for HPChain<N> {
-    #[inline]
-    fn fk(&self, q: &SRobotQ<N>) -> [Affine3A; N] {
+    #[cfg(debug_assertions)]
+    type Error = RevampError;
+    #[cfg(not(debug_assertions))]
+    type Error = std::convert::Infallible;
+
+    fn fk(&self, q: &SRobotQ<N>) -> Result<[Affine3A; N], Self::Error> {
+        check_finite::<N>(q)?;
         let mut out = [Affine3A::IDENTITY; N];
         let mut acc_m = Mat3A::IDENTITY;
         let mut acc_t = Vec3A::ZERO;
@@ -316,11 +329,11 @@ impl<const N: usize> FKChain<N> for HPChain<N> {
             };
             i += 1;
         }
-        out
+        Ok(out)
     }
 
-    #[inline]
-    fn fk_end(&self, q: &SRobotQ<N>) -> Affine3A {
+    fn fk_end(&self, q: &SRobotQ<N>) -> Result<Affine3A, Self::Error> {
+        check_finite(q)?;
         let mut acc_m = Mat3A::IDENTITY;
         let mut acc_t = Vec3A::ZERO;
 
@@ -332,10 +345,10 @@ impl<const N: usize> FKChain<N> for HPChain<N> {
             i += 1;
         }
 
-        Affine3A {
+        Ok(Affine3A {
             matrix3: acc_m,
             translation: acc_t,
-        }
+        })
     }
 }
 
@@ -394,9 +407,7 @@ impl<const N: usize> URDFChain<N> {
                 let (sr, cr) = roll.sin_cos();
                 let (sp, cp) = pitch.sin_cos();
                 let (sy, cy) = yaw.sin_cos();
-                fr_c0[i] = Vec3A::new(
-                    (cy * cp) as f32, (sy * cp) as f32, (-sp) as f32,
-                );
+                fr_c0[i] = Vec3A::new((cy * cp) as f32, (sy * cp) as f32, (-sp) as f32);
                 fr_c1[i] = Vec3A::new(
                     (cy * sp * sr - sy * cr) as f32,
                     (sy * sp * sr + cy * cr) as f32,
@@ -421,7 +432,14 @@ impl<const N: usize> URDFChain<N> {
             }
         }
 
-        Self { fr_c0, fr_c1, fr_c2, fr_identity, fixed_trans, axis }
+        Self {
+            fr_c0,
+            fr_c1,
+            fr_c2,
+            fr_identity,
+            fixed_trans,
+            axis,
+        }
     }
 
     /// Apply fixed rotation + joint rotation to accumulator columns.
@@ -481,8 +499,13 @@ impl<const N: usize> URDFChain<N> {
 }
 
 impl<const N: usize> FKChain<N> for URDFChain<N> {
-    #[inline]
-    fn fk(&self, q: &SRobotQ<N>) -> [Affine3A; N] {
+    #[cfg(debug_assertions)]
+    type Error = RevampError;
+    #[cfg(not(debug_assertions))]
+    type Error = std::convert::Infallible;
+
+    fn fk(&self, q: &SRobotQ<N>) -> Result<[Affine3A; N], Self::Error> {
+        check_finite(q)?;
         let mut out = [Affine3A::IDENTITY; N];
         let mut c0 = Vec3A::X;
         let mut c1 = Vec3A::Y;
@@ -500,11 +523,11 @@ impl<const N: usize> FKChain<N> for URDFChain<N> {
             };
             i += 1;
         }
-        out
+        Ok(out)
     }
 
-    #[inline]
-    fn fk_end(&self, q: &SRobotQ<N>) -> Affine3A {
+    fn fk_end(&self, q: &SRobotQ<N>) -> Result<Affine3A, Self::Error> {
+        check_finite(q)?;
         let mut c0 = Vec3A::X;
         let mut c1 = Vec3A::Y;
         let mut c2 = Vec3A::Z;
@@ -517,9 +540,9 @@ impl<const N: usize> FKChain<N> for URDFChain<N> {
             i += 1;
         }
 
-        Affine3A {
+        Ok(Affine3A {
             matrix3: Mat3A::from_cols(c0, c1, c2),
             translation: t,
-        }
+        })
     }
 }

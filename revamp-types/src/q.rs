@@ -1,5 +1,5 @@
 use ndarray::Array1;
-use wide::{f32x8, CmpGt, CmpLt};
+use wide::{CmpGt, CmpLt, f32x8};
 
 use crate::{RevampError, RevampResult};
 
@@ -251,7 +251,8 @@ impl<const N: usize> SRobotQ<N> {
                 off += 8;
             }
             let a = acc.to_array();
-            a[0].max(a[1]).max(a[2].max(a[3]))
+            a[0].max(a[1])
+                .max(a[2].max(a[3]))
                 .max(a[4].max(a[5]).max(a[6].max(a[7])))
         } else {
             self.0.iter().copied().fold(f32::NEG_INFINITY, f32::max)
@@ -267,7 +268,8 @@ impl<const N: usize> SRobotQ<N> {
                 off += 8;
             }
             let a = acc.to_array();
-            a[0].min(a[1]).min(a[2].min(a[3]))
+            a[0].min(a[1])
+                .min(a[2].min(a[3]))
                 .min(a[4].min(a[5]).min(a[6].min(a[7])))
         } else {
             self.0.iter().copied().fold(f32::INFINITY, f32::min)
@@ -342,6 +344,19 @@ impl<const N: usize> SRobotQ<N> {
     }
 
     /// Returns `true` if any element of `self` is greater than the corresponding element of `other`.
+    pub fn any_non_finite(&self) -> bool {
+        let mut off = 0;
+        while off < N {
+            let v = simd_load(&self.0, off);
+            let bad = v.is_nan() | v.is_inf();
+            if (bad.to_bitmask() & Self::lane_mask(off)) != 0 {
+                return true;
+            }
+            off += 8;
+        }
+        false
+    }
+
     pub fn any_gt(&self, other: &Self) -> bool {
         let mut off = 0;
         while off < N {
@@ -372,7 +387,11 @@ impl<const N: usize> SRobotQ<N> {
     #[inline(always)]
     const fn lane_mask(off: usize) -> u32 {
         let active = N.saturating_sub(off);
-        if active >= 8 { 0b11111111 } else { (1 << active) - 1 }
+        if active >= 8 {
+            0b11111111
+        } else {
+            (1 << active) - 1
+        }
     }
 
     pub fn is_close(&self, other: &Self, tol: f32) -> bool {
@@ -669,7 +688,10 @@ impl<const N: usize> TryFrom<&[f32]> for SRobotQ<N> {
     #[inline]
     fn try_from(slice: &[f32]) -> Result<Self, Self::Error> {
         if slice.len() != N {
-            return Err(RevampError::ShapeMismatch { expected: N, found: slice.len() });
+            return Err(RevampError::ShapeMismatch {
+                expected: N,
+                found: slice.len(),
+            });
         }
         let mut arr = [0.0; N];
         arr.copy_from_slice(slice);
@@ -701,7 +723,10 @@ impl<const N: usize> TryFrom<&[f64]> for SRobotQ<N> {
     #[inline]
     fn try_from(slice: &[f64]) -> Result<Self, Self::Error> {
         if slice.len() != N {
-            return Err(RevampError::ShapeMismatch { expected: N, found: slice.len() });
+            return Err(RevampError::ShapeMismatch {
+                expected: N,
+                found: slice.len(),
+            });
         }
         let mut arr = [0.0f32; N];
         let mut i = 0;
@@ -738,7 +763,10 @@ impl<const N: usize> TryFrom<&RobotQ> for SRobotQ<N> {
     fn try_from(q: &RobotQ) -> Result<Self, Self::Error> {
         let slice = q.as_slice().unwrap_or(&[]);
         if slice.len() != N {
-            return Err(RevampError::ShapeMismatch { expected: N, found: slice.len() });
+            return Err(RevampError::ShapeMismatch {
+                expected: N,
+                found: slice.len(),
+            });
         }
         let mut arr = [0.0; N];
         arr.copy_from_slice(slice);
@@ -753,7 +781,10 @@ impl<const N: usize> TryFrom<RobotQ> for SRobotQ<N> {
     fn try_from(q: RobotQ) -> Result<Self, Self::Error> {
         let slice = q.as_slice().unwrap_or(&[]);
         if slice.len() != N {
-            return Err(RevampError::ShapeMismatch { expected: N, found: slice.len() });
+            return Err(RevampError::ShapeMismatch {
+                expected: N,
+                found: slice.len(),
+            });
         }
         let mut arr = [0.0; N];
         arr.copy_from_slice(slice);

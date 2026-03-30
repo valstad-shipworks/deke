@@ -1,12 +1,12 @@
-use revamp_types::{RevampResult, RobotPath, SRobotQ, Token, Validator};
+use revamp_types::{RevampResult, RobotPath, SRobotQ, Validator};
 use tinyrand::Rand;
 
+use crate::RrtDiagnostic;
 use crate::rrtc::{
-    path_cost, rand_f64, sample_uniform, solve as rrtc_solve, validate_edge, weighted_distance,
-    RrtcSettings,
+    RrtcSettings, path_cost, rand_f64, sample_uniform, solve as rrtc_solve, validate_edge,
+    weighted_distance,
 };
 use crate::tree::RrtTree;
-use crate::RrtDiagnostic;
 
 #[derive(Debug, Clone)]
 pub struct AorrtcSettings<const N: usize> {
@@ -71,12 +71,7 @@ impl<const N: usize> Phs<N> {
         self.c_best = c_best;
     }
 
-    fn sample(
-        &self,
-        rng: &mut impl Rand,
-        lower: &SRobotQ<N>,
-        upper: &SRobotQ<N>,
-    ) -> SRobotQ<N> {
+    fn sample(&self, rng: &mut impl Rand, lower: &SRobotQ<N>, upper: &SRobotQ<N>) -> SRobotQ<N> {
         if self.c_best >= f64::INFINITY || self.c_best <= self.c_min + 1e-10 {
             return sample_uniform(rng, lower, upper);
         }
@@ -223,13 +218,13 @@ fn steer<const N: usize>(
     }
 }
 
-pub(crate) fn solve<const N: usize, TKN: Token>(
+pub(crate) fn solve<const N: usize>(
     start: &SRobotQ<N>,
     goal: &SRobotQ<N>,
-    validator: &mut impl Validator<N, TKN>,
+    validator: &mut impl Validator<N>,
     settings: &AorrtcSettings<N>,
     rng: &mut impl Rand,
-) -> (RevampResult<RobotPath, TKN>, RrtDiagnostic) {
+) -> (RevampResult<RobotPath>, RrtDiagnostic) {
     let timer = std::time::Instant::now();
     let coeffs = {
         let mut c = [0.0f64; N];
@@ -302,7 +297,10 @@ pub(crate) fn solve<const N: usize, TKN: Token>(
 
             if settings.rrtc.dynamic_domain && near_dist > tree_a.radius(near_idx) {
                 let r = tree_a.radius(near_idx);
-                tree_a.set_radius(near_idx, (r * (1.0 - settings.rrtc.alpha)).max(settings.rrtc.min_radius));
+                tree_a.set_radius(
+                    near_idx,
+                    (r * (1.0 - settings.rrtc.alpha)).max(settings.rrtc.min_radius),
+                );
                 continue;
             }
 
@@ -312,7 +310,10 @@ pub(crate) fn solve<const N: usize, TKN: Token>(
             if validate_edge(&q_near, &q_new, settings.rrtc.resolution, validator).is_err() {
                 if settings.rrtc.dynamic_domain {
                     let r = tree_a.radius(near_idx);
-                    tree_a.set_radius(near_idx, (r * (1.0 - settings.rrtc.alpha)).max(settings.rrtc.min_radius));
+                    tree_a.set_radius(
+                        near_idx,
+                        (r * (1.0 - settings.rrtc.alpha)).max(settings.rrtc.min_radius),
+                    );
                 }
                 continue;
             }
@@ -328,7 +329,9 @@ pub(crate) fn solve<const N: usize, TKN: Token>(
                         let cand_cost = tree_a.cost(cand_idx) + cand_dist;
                         if cand_cost < new_cost && cand_idx != best_parent {
                             let q_cand = *tree_a.node(cand_idx);
-                            if validate_edge(&q_cand, &q_new, settings.rrtc.resolution, validator).is_ok() {
+                            if validate_edge(&q_cand, &q_new, settings.rrtc.resolution, validator)
+                                .is_ok()
+                            {
                                 best_parent = cand_idx;
                                 new_cost = cand_cost;
                                 improved = true;

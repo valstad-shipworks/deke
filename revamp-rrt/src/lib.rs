@@ -1,6 +1,6 @@
 use std::fmt;
 
-use revamp_types::{Planner, RevampError, RevampResult, RobotPath, SRobotQ, Token, Validator};
+use revamp_types::{Planner, RevampError, RevampResult, RobotPath, SRobotQ, Validator};
 use tinyrand::{Seeded, StdRand};
 
 mod aorrtc;
@@ -12,7 +12,7 @@ mod tree;
 pub use aorrtc::AorrtcSettings;
 pub use krrtc::KrrtcSettings;
 pub use rrtc::RrtcSettings;
-pub use scurve::{direction_cosine, JointKinLimits, KinematicLimits};
+pub use scurve::{JointKinLimits, KinematicLimits, direction_cosine};
 
 #[derive(Debug, Clone)]
 pub struct RrtDiagnostic {
@@ -60,15 +60,19 @@ impl<const N: usize> RrtcPlanner<N> {
     }
 }
 
-impl<const N: usize, TKN: Token + 'static> Planner<N, TKN> for RrtcPlanner<N> {
+impl<const N: usize> Planner<N> for RrtcPlanner<N> {
     type Diagnostic = RrtDiagnostic;
 
-    fn plan<E: Into<RevampError<TKN>>, A: TryInto<SRobotQ<N>, Error = E>, B: TryInto<SRobotQ<N>, Error = E>>(
+    fn plan<
+        E: Into<RevampError>,
+        A: TryInto<SRobotQ<N>, Error = E>,
+        B: TryInto<SRobotQ<N>, Error = E>,
+    >(
         &self,
         start: A,
         goal: B,
-        validators: &mut impl Validator<N, TKN>,
-    ) -> (RevampResult<RobotPath, TKN>, Self::Diagnostic) {
+        validators: &mut impl Validator<N>,
+    ) -> (RevampResult<RobotPath>, Self::Diagnostic) {
         let start = match start.try_into().map_err(|e| e.into()) {
             Ok(s) => s,
             Err(e) => return (Err(e), RrtDiagnostic::empty()),
@@ -93,15 +97,19 @@ impl<const N: usize> AorrtcPlanner<N> {
     }
 }
 
-impl<const N: usize, TKN: Token + 'static> Planner<N, TKN> for AorrtcPlanner<N> {
+impl<const N: usize> Planner<N> for AorrtcPlanner<N> {
     type Diagnostic = RrtDiagnostic;
 
-    fn plan<E: Into<RevampError<TKN>>, A: TryInto<SRobotQ<N>, Error = E>, B: TryInto<SRobotQ<N>, Error = E>>(
+    fn plan<
+        E: Into<RevampError>,
+        A: TryInto<SRobotQ<N>, Error = E>,
+        B: TryInto<SRobotQ<N>, Error = E>,
+    >(
         &self,
         start: A,
         goal: B,
-        validators: &mut impl Validator<N, TKN>,
-    ) -> (RevampResult<RobotPath, TKN>, Self::Diagnostic) {
+        validators: &mut impl Validator<N>,
+    ) -> (RevampResult<RobotPath>, Self::Diagnostic) {
         let start = match start.try_into().map_err(|e| e.into()) {
             Ok(s) => s,
             Err(e) => return (Err(e), RrtDiagnostic::empty()),
@@ -126,15 +134,19 @@ impl<const N: usize> KrrtcPlanner<N> {
     }
 }
 
-impl<const N: usize, TKN: Token + 'static> Planner<N, TKN> for KrrtcPlanner<N> {
+impl<const N: usize> Planner<N> for KrrtcPlanner<N> {
     type Diagnostic = RrtDiagnostic;
 
-    fn plan<E: Into<RevampError<TKN>>, A: TryInto<SRobotQ<N>, Error = E>, B: TryInto<SRobotQ<N>, Error = E>>(
+    fn plan<
+        E: Into<RevampError>,
+        A: TryInto<SRobotQ<N>, Error = E>,
+        B: TryInto<SRobotQ<N>, Error = E>,
+    >(
         &self,
         start: A,
         goal: B,
-        validators: &mut impl Validator<N, TKN>,
-    ) -> (RevampResult<RobotPath, TKN>, Self::Diagnostic) {
+        validators: &mut impl Validator<N>,
+    ) -> (RevampResult<RobotPath>, Self::Diagnostic) {
         let start = match start.try_into().map_err(|e| e.into()) {
             Ok(s) => s,
             Err(e) => return (Err(e), RrtDiagnostic::empty()),

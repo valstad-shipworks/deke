@@ -23,9 +23,29 @@ struct CricketJson {
 
 #[derive(Debug, Clone)]
 enum ShapeData {
-    Sphere { x: f32, y: f32, z: f32, radius: f32 },
-    Cylinder { x: f32, y: f32, z: f32, rpy: [f32; 3], radius: f32, length: f32 },
-    Box { x: f32, y: f32, z: f32, rpy: [f32; 3], sx: f32, sy: f32, sz: f32 },
+    Sphere {
+        x: f32,
+        y: f32,
+        z: f32,
+        radius: f32,
+    },
+    Cylinder {
+        x: f32,
+        y: f32,
+        z: f32,
+        rpy: [f32; 3],
+        radius: f32,
+        length: f32,
+    },
+    Box {
+        x: f32,
+        y: f32,
+        z: f32,
+        rpy: [f32; 3],
+        sx: f32,
+        sy: f32,
+        sz: f32,
+    },
 }
 
 impl ShapeData {
@@ -99,7 +119,10 @@ fn parse_urdf(xml: &str) -> (Vec<LinkData>, Vec<JointData>) {
         if node.tag_name().name() == "link" {
             let name = node.attribute("name").unwrap().to_string();
             let mut shapes = Vec::new();
-            for col in node.children().filter(|n| n.tag_name().name() == "collision") {
+            for col in node
+                .children()
+                .filter(|n| n.tag_name().name() == "collision")
+            {
                 let geom = col
                     .children()
                     .find(|n| n.tag_name().name() == "geometry")
@@ -109,14 +132,26 @@ fn parse_urdf(xml: &str) -> (Vec<LinkData>, Vec<JointData>) {
                 if let Some(sphere) = geom.children().find(|n| n.tag_name().name() == "sphere") {
                     let radius: f32 = sphere.attribute("radius").unwrap().parse().unwrap();
                     shapes.push(ShapeData::Sphere { x, y, z, radius });
-                } else if let Some(cyl) = geom.children().find(|n| n.tag_name().name() == "cylinder") {
+                } else if let Some(cyl) =
+                    geom.children().find(|n| n.tag_name().name() == "cylinder")
+                {
                     let radius: f32 = cyl.attribute("radius").unwrap().parse().unwrap();
                     let length: f32 = cyl.attribute("length").unwrap().parse().unwrap();
-                    shapes.push(ShapeData::Cylinder { x, y, z, rpy, radius, length });
+                    shapes.push(ShapeData::Cylinder {
+                        x,
+                        y,
+                        z,
+                        rpy,
+                        radius,
+                        length,
+                    });
                 } else if let Some(bx) = geom.children().find(|n| n.tag_name().name() == "box") {
                     let size = parse_xyz(bx.attribute("size").unwrap());
                     shapes.push(ShapeData::Box {
-                        x, y, z, rpy,
+                        x,
+                        y,
+                        z,
+                        rpy,
                         sx: size[0] as f32,
                         sy: size[1] as f32,
                         sz: size[2] as f32,
@@ -144,9 +179,7 @@ fn parse_urdf(xml: &str) -> (Vec<LinkData>, Vec<JointData>) {
                 .attribute("link")
                 .unwrap()
                 .to_string();
-            let origin = node
-                .children()
-                .find(|n| n.tag_name().name() == "origin");
+            let origin = node.children().find(|n| n.tag_name().name() == "origin");
             let (origin_xyz, origin_rpy) = if let Some(o) = origin {
                 (
                     parse_xyz(o.attribute("xyz").unwrap_or("0 0 0")),
@@ -160,9 +193,7 @@ fn parse_urdf(xml: &str) -> (Vec<LinkData>, Vec<JointData>) {
                 .find(|n| n.tag_name().name() == "axis")
                 .map(|a| parse_xyz(a.attribute("xyz").unwrap_or("0 0 1")))
                 .unwrap_or([0.0, 0.0, 1.0]);
-            let limit = node
-                .children()
-                .find(|n| n.tag_name().name() == "limit");
+            let limit = node.children().find(|n| n.tag_name().name() == "limit");
             let (lower, upper, velocity) = if let Some(l) = limit {
                 (
                     l.attribute("lower").unwrap_or("0").parse().unwrap(),
@@ -328,11 +359,7 @@ fn rpy_to_axes(rpy: [f32; 3]) -> ([f32; 3], [f32; 3], [f32; 3]) {
     let (sp, cp) = (rpy[1] as f64).sin_cos();
     let (sy, cy) = (rpy[2] as f64).sin_cos();
 
-    let col0 = [
-        (cy * cp) as f32,
-        (sy * cp) as f32,
-        (-sp) as f32,
-    ];
+    let col0 = [(cy * cp) as f32, (sy * cp) as f32, (-sp) as f32];
     let col1 = [
         (cy * sp * sr - sy * cr) as f32,
         (sy * sp * sr + cy * cr) as f32,
@@ -358,7 +385,14 @@ fn shape_const_token(shape: &ShapeData, padding: f32) -> Option<(TokenStream2, &
             };
             Some((tok, "sphere"))
         }
-        ShapeData::Cylinder { x, y, z, rpy, radius, length } if !shape.has_rotation() => {
+        ShapeData::Cylinder {
+            x,
+            y,
+            z,
+            rpy,
+            radius,
+            length,
+        } if !shape.has_rotation() => {
             let half = length / 2.0;
             let p1z = z - half;
             let p2z = z + half;
@@ -371,7 +405,15 @@ fn shape_const_token(shape: &ShapeData, padding: f32) -> Option<(TokenStream2, &
             };
             Some((tok, "cylinder"))
         }
-        ShapeData::Box { x, y, z, rpy, sx, sy, sz } if !shape.has_rotation() => {
+        ShapeData::Box {
+            x,
+            y,
+            z,
+            rpy,
+            sx,
+            sy,
+            sz,
+        } if !shape.has_rotation() => {
             let hx = sx / 2.0;
             let hy = sy / 2.0;
             let hz = sz / 2.0;
@@ -396,7 +438,14 @@ fn shape_runtime_token(shape: &ShapeData, padding: f32) -> TokenStream2 {
                 collider.add(wreck::Sphere::new(glam::Vec3::new(#x, #y, #z), #r));
             }
         }
-        ShapeData::Cylinder { x, y, z, rpy, radius, length } => {
+        ShapeData::Cylinder {
+            x,
+            y,
+            z,
+            rpy,
+            radius,
+            length,
+        } => {
             let half = length / 2.0;
             let (.., c2) = rpy_to_axes(*rpy);
             // Cylinder along local Z: endpoints at origin ± half * col2, then translate
@@ -414,14 +463,28 @@ fn shape_runtime_token(shape: &ShapeData, padding: f32) -> TokenStream2 {
                 ));
             }
         }
-        ShapeData::Box { x, y, z, rpy, sx, sy, sz } => {
+        ShapeData::Box {
+            x,
+            y,
+            z,
+            rpy,
+            sx,
+            sy,
+            sz,
+        } => {
             let hx = sx / 2.0;
             let hy = sy / 2.0;
             let hz = sz / 2.0;
             let (c0, c1, c2) = rpy_to_axes(*rpy);
-            let c0x = c0[0]; let c0y = c0[1]; let c0z = c0[2];
-            let c1x = c1[0]; let c1y = c1[1]; let c1z = c1[2];
-            let c2x = c2[0]; let c2y = c2[1]; let c2z = c2[2];
+            let c0x = c0[0];
+            let c0y = c0[1];
+            let c0z = c0[2];
+            let c1x = c1[0];
+            let c1y = c1[1];
+            let c1z = c1[2];
+            let c2x = c2[0];
+            let c2y = c2[1];
+            let c2z = c2[2];
             quote! {
                 collider.add(wreck::Cuboid::new(
                     glam::Vec3::new(#x, #y, #z),
@@ -439,7 +502,11 @@ fn shape_runtime_token(shape: &ShapeData, padding: f32) -> TokenStream2 {
 
 /// Generate const arrays and runtime add statements for a link's shapes.
 /// Returns (const_definitions, collider_build_tokens).
-fn gen_link_shapes(prefix: &str, shapes: &[ShapeData], padding: f32) -> (Vec<TokenStream2>, Vec<TokenStream2>) {
+fn gen_link_shapes(
+    prefix: &str,
+    shapes: &[ShapeData],
+    padding: f32,
+) -> (Vec<TokenStream2>, Vec<TokenStream2>) {
     let mut const_spheres: Vec<TokenStream2> = Vec::new();
     let mut const_cylinders: Vec<TokenStream2> = Vec::new();
     let mut const_cuboids: Vec<TokenStream2> = Vec::new();
@@ -498,12 +565,11 @@ pub fn cricket(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as MacroInput);
     let json_path_str = input.json_path.value();
 
-    let manifest_dir =
-        std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
     let json_path = PathBuf::from(&manifest_dir).join(&json_path_str);
 
-    let json_content =
-        std::fs::read_to_string(&json_path).expect(&format!("failed to read {}", json_path.display()));
+    let json_content = std::fs::read_to_string(&json_path)
+        .expect(&format!("failed to read {}", json_path.display()));
     let config: CricketJson =
         serde_json::from_str(&json_content).expect("failed to parse cricket json");
 
@@ -511,10 +577,10 @@ pub fn cricket(input: TokenStream) -> TokenStream {
     let urdf_path = json_dir.join(&config.urdf);
     let srdf_path = json_dir.join(&config.srdf);
 
-    let urdf_content =
-        std::fs::read_to_string(&urdf_path).expect(&format!("failed to read {}", urdf_path.display()));
-    let srdf_content =
-        std::fs::read_to_string(&srdf_path).expect(&format!("failed to read {}", srdf_path.display()));
+    let urdf_content = std::fs::read_to_string(&urdf_path)
+        .expect(&format!("failed to read {}", urdf_path.display()));
+    let srdf_content = std::fs::read_to_string(&srdf_path)
+        .expect(&format!("failed to read {}", srdf_path.display()));
 
     let (links, joints) = parse_urdf(&urdf_content);
     let disabled_pairs = parse_srdf(&srdf_content);
@@ -524,8 +590,11 @@ pub fn cricket(input: TokenStream) -> TokenStream {
 
     let mod_name = format_ident!("{}", config.name.to_lowercase());
 
-    let link_map: HashMap<String, usize> =
-        links.iter().enumerate().map(|(i, l)| (l.name.clone(), i)).collect();
+    let link_map: HashMap<String, usize> = links
+        .iter()
+        .enumerate()
+        .map(|(i, l)| (l.name.clone(), i))
+        .collect();
 
     let joint_child_names: Vec<String> = joints.iter().map(|j| j.child.clone()).collect();
 
@@ -591,13 +660,25 @@ pub fn cricket(input: TokenStream) -> TokenStream {
         all_const_defs.extend(const_defs);
 
         let (filter_links, filter_ee, filter_obstacles, filter_base) = build_filter(
-            joint_idx, n_joints, &joint_child_names, ee_link_name, base_link_name,
-            &disabled_pairs, &forced_ee, &ignored_env,
+            joint_idx,
+            n_joints,
+            &joint_child_names,
+            ee_link_name,
+            base_link_name,
+            &disabled_pairs,
+            &forced_ee,
+            &ignored_env,
         );
 
         let filter_link_bools: Vec<TokenStream2> = filter_links
             .iter()
-            .map(|b| if *b { quote! { true } } else { quote! { false } })
+            .map(|b| {
+                if *b {
+                    quote! { true }
+                } else {
+                    quote! { false }
+                }
+            })
             .collect();
 
         let has_shapes = !link.shapes.is_empty();
@@ -625,7 +706,7 @@ pub fn cricket(input: TokenStream) -> TokenStream {
                         obstacles: #filter_obstacles,
                     },
                     Vec::new(),
-                    #joint_idx as isize,
+                    #joint_idx as i16,
                 )
             }
         });
@@ -642,13 +723,25 @@ pub fn cricket(input: TokenStream) -> TokenStream {
             all_const_defs.extend(const_defs);
 
             let (ee_filter_links, _, ee_filter_obstacles, ee_filter_base) = build_filter(
-                n_joints, n_joints, &joint_child_names, ee_link_name, base_link_name,
-                &disabled_pairs, &forced_ee, &ignored_env,
+                n_joints,
+                n_joints,
+                &joint_child_names,
+                ee_link_name,
+                base_link_name,
+                &disabled_pairs,
+                &forced_ee,
+                &ignored_env,
             );
 
             let ee_filter_bools: Vec<TokenStream2> = ee_filter_links
                 .iter()
-                .map(|b| if *b { quote! { true } } else { quote! { false } })
+                .map(|b| {
+                    if *b {
+                        quote! { true }
+                    } else {
+                        quote! { false }
+                    }
+                })
                 .collect();
 
             let has_shapes = !ee_link.shapes.is_empty();
@@ -674,7 +767,7 @@ pub fn cricket(input: TokenStream) -> TokenStream {
                         obstacles: #ee_filter_obstacles,
                     },
                     Vec::new(),
-                    #n_joints as isize + 1,
+                    #n_joints as i16 + 1,
                 )
             };
         } else {
@@ -688,7 +781,7 @@ pub fn cricket(input: TokenStream) -> TokenStream {
                         obstacles: true,
                     },
                     Vec::new(),
-                    #n_joints as isize + 1,
+                    #n_joints as i16 + 1,
                 )
             };
         }
@@ -703,7 +796,7 @@ pub fn cricket(input: TokenStream) -> TokenStream {
                     obstacles: false,
                 },
                 Vec::new(),
-                #n_joints as isize + 1,
+                #n_joints as i16 + 1,
             )
         };
     }
@@ -713,17 +806,30 @@ pub fn cricket(input: TokenStream) -> TokenStream {
     if let Some(&base_idx) = link_map.get(base_link_name.as_str()) {
         let base_link = &links[base_idx];
         if !base_link.shapes.is_empty() {
-            let (const_defs, build_stmts) = gen_link_shapes("BASE_LINK", &base_link.shapes, sphere_padding);
+            let (const_defs, build_stmts) =
+                gen_link_shapes("BASE_LINK", &base_link.shapes, sphere_padding);
             all_const_defs.extend(const_defs);
 
             let (base_filter_links, base_filter_ee, base_filter_obstacles, _) = build_filter(
-                n_joints + 1, n_joints, &joint_child_names, ee_link_name, base_link_name,
-                &disabled_pairs, &forced_ee, &ignored_env,
+                n_joints + 1,
+                n_joints,
+                &joint_child_names,
+                ee_link_name,
+                base_link_name,
+                &disabled_pairs,
+                &forced_ee,
+                &ignored_env,
             );
 
             let base_filter_bools: Vec<TokenStream2> = base_filter_links
                 .iter()
-                .map(|b| if *b { quote! { true } } else { quote! { false } })
+                .map(|b| {
+                    if *b {
+                        quote! { true }
+                    } else {
+                        quote! { false }
+                    }
+                })
                 .collect();
 
             base_collider_build = quote! {
@@ -740,7 +846,7 @@ pub fn cricket(input: TokenStream) -> TokenStream {
                         obstacles: #base_filter_obstacles,
                     },
                     Vec::new(),
-                    -1isize,
+                    -1i16,
                 ))
             };
         } else {
@@ -776,17 +882,16 @@ pub fn cricket(input: TokenStream) -> TokenStream {
 
             pub type CollisionValidator = revamp_wreck::WreckValidator<
                 #n_lit,
-                isize,
                 revamp_types::URDFChain<#n_lit>,
             >;
 
             pub type Validator = revamp_types::ValidatorAnd<
-                revamp_types::JointValidator<#n_lit, isize>,
+                revamp_types::JointValidator<#n_lit>,
                 CollisionValidator,
             >;
 
             pub fn validator(environment: wreck::Collider) -> Validator {
-                let fk = revamp_types::URDFChain::new(URDF_JOINTS);
+                let fk = revamp_types::URDFChain::<#n_lit>::new(URDF_JOINTS);
 
                 let links = [#(#link_collider_builds),*];
                 let ee = #ee_collider_build;

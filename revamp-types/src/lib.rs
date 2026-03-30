@@ -1,71 +1,55 @@
 use std::{
-    convert::Infallible, fmt::{Debug, Display}, hash::Hash
+    convert::Infallible,
+    fmt::{Debug, Display},
 };
 
 pub use glam;
 pub use wide;
 
+mod fk;
+mod fk_dynamic;
 mod path;
 mod q;
 mod validator;
-mod fk;
+mod validator_dynamic;
 
 pub use fk::{DHChain, DHJoint, FKChain, HPChain, HPJoint, URDFChain, URDFJoint};
+pub use fk_dynamic::{BoxFK, DynamicDHChain, DynamicHPChain, DynamicURDFChain};
 pub use path::RobotPath;
 pub use q::{RobotQ, SRobotQ};
-pub use validator::{Validator, ValidatorAnd, ValidatorOr, ValidatorNot, JointValidator};
+pub use validator::{JointValidator, Validator, ValidatorAnd, ValidatorNot, ValidatorOr};
+pub use validator_dynamic::DynamicJointValidator;
 
 #[derive(Debug, Clone)]
-pub enum RevampError<TKN: Token = NoToken> {
+pub enum RevampError {
     ShapeMismatch { expected: usize, found: usize },
-    SelfCollison(TKN, TKN),
-    EnvironmentCollision(TKN, TKN),
+    JointsNonFinite,
+    SelfCollison(i16, i16),
+    EnvironmentCollision(i16, i16),
     ExceedJointLimits,
     OutOfIterations,
-    SuperError
+    SuperError,
 }
 
-impl<TKN: Token> From<Infallible> for RevampError<TKN> {
+impl From<Infallible> for RevampError {
     fn from(_: Infallible) -> Self {
         unreachable!()
     }
 }
 
-pub type RevampResult<T, TKN = NoToken> = Result<T, RevampError<TKN>>;
+pub type RevampResult<T> = Result<T, RevampError>;
 
-pub trait Token: Debug + Display + Hash + Clone + Send + Sync + PartialEq + Eq {}
-impl Token for String {}
-impl<'a> Token for &'a str {}
-impl Token for usize {}
-impl Token for isize {}
-impl Token for u64 {}
-impl Token for u32 {}
-impl Token for u16 {}
-impl Token for u8 {}
-impl Token for i64 {}
-impl Token for i32 {}
-impl Token for i16 {}
-impl Token for i8 {}
-
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct NoToken;
-impl std::fmt::Display for NoToken {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "NoToken")
-    }
-}
-impl Token for NoToken {}
-
-
-pub trait Planner<const N: usize, TKN: Token>:
-    Sized + Clone + Debug + Send + Sync + 'static
-{
+pub trait Planner<const N: usize>: Sized + Clone + Debug + Send + Sync + 'static {
     type Diagnostic: Display + Send + Sync;
 
-    fn plan<E: Into<RevampError<TKN>>, A: TryInto<SRobotQ<N>, Error = E>, B: TryInto<SRobotQ<N>, Error = E>>(
+    fn plan<
+        E: Into<RevampError>,
+        A: TryInto<SRobotQ<N>, Error = E>,
+        B: TryInto<SRobotQ<N>, Error = E>,
+    >(
         &self,
         start: A,
         goal: B,
-        validators: &mut impl Validator<N, TKN>,
-    ) -> (RevampResult<RobotPath, TKN>, Self::Diagnostic);
+        validators: &mut impl Validator<N>,
+    ) -> (RevampResult<RobotPath>, Self::Diagnostic);
 }

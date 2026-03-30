@@ -256,10 +256,7 @@ mod tests {
         let d = 0.001;
         let t = min_time_1d(d, &lim);
         let expected = 4.0 * (d / lim.j_max).cbrt();
-        assert!(
-            (t - expected).abs() < 1e-10,
-            "expected {expected}, got {t}"
-        );
+        assert!((t - expected).abs() < 1e-10, "expected {expected}, got {t}");
     }
 
     #[test]
@@ -289,8 +286,16 @@ mod tests {
     fn time_optimal_cost_bottleneck() {
         let limits = KinematicLimits {
             joints: [
-                JointKinLimits { v_max: 10.0, a_max: 50.0, j_max: 200.0 },
-                JointKinLimits { v_max: 1.0, a_max: 5.0, j_max: 20.0 },
+                JointKinLimits {
+                    v_max: 10.0,
+                    a_max: 50.0,
+                    j_max: 200.0,
+                },
+                JointKinLimits {
+                    v_max: 1.0,
+                    a_max: 5.0,
+                    j_max: 20.0,
+                },
             ],
         };
         let a = SRobotQ([0.0, 0.0]);

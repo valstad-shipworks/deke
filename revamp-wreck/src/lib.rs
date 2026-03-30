@@ -1,10 +1,8 @@
-use std::marker::PhantomData;
-
+mod dynamic;
+pub use dynamic::DynamicWreckValidator;
 
 use glam::Affine3A;
-use revamp_types::{
-    FKChain, RevampError, RevampResult, SRobotQ, Token, Validator,
-};
+use revamp_types::{FKChain, RevampError, RevampResult, SRobotQ, Validator};
 use uuid::Uuid;
 use wreck::{Collider, ColliderComponent, Transformable};
 
@@ -19,34 +17,38 @@ pub struct CollisionFilter<const N: usize> {
 impl<const N: usize> CollisionFilter<N> {
     #[inline]
     pub fn allows(&self, idx: usize) -> bool {
-        if idx < N { self.links[idx] }
-        else if idx == N { self.ee }
-        else { self.base }
+        if idx < N {
+            self.links[idx]
+        } else if idx == N {
+            self.ee
+        } else {
+            self.base
+        }
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct Attachment<const N: usize, TKN: Token> {
+pub struct Attachment<const N: usize> {
     pub collision: Collider,
-    pub token: TKN,
+    pub token: i16,
     pub uuid: Uuid,
     pub filter: CollisionFilter<N>,
 }
 
-pub struct CollisionBody<const N: usize, TKN: Token> {
+pub struct CollisionBody<const N: usize> {
     pub base: Option<Collider>,
     pub filter: CollisionFilter<N>,
-    pub attachments: Vec<Attachment<N, TKN>>,
-    pub token: TKN,
+    pub attachments: Vec<Attachment<N>>,
+    pub token: i16,
     last_transform: Option<Affine3A>,
 }
 
-impl<const N: usize, TKN: Token> CollisionBody<N, TKN> {
+impl<const N: usize> CollisionBody<N> {
     pub fn new(
         base: Option<Collider>,
         filter: CollisionFilter<N>,
-        attachments: Vec<Attachment<N, TKN>>,
-        token: TKN,
+        attachments: Vec<Attachment<N>>,
+        token: i16,
     ) -> Self {
         Self {
             base,
@@ -58,7 +60,7 @@ impl<const N: usize, TKN: Token> CollisionBody<N, TKN> {
     }
 
     #[inline]
-    fn sub_colliders(&self) -> impl Iterator<Item = (&Collider, &TKN, &CollisionFilter<N>)> {
+    fn sub_colliders(&self) -> impl Iterator<Item = (&Collider, &i16, &CollisionFilter<N>)> {
         self.base
             .iter()
             .map(|c| (c, &self.token, &self.filter))
@@ -90,7 +92,6 @@ impl<const N: usize, TKN: Token> CollisionBody<N, TKN> {
         tf
     }
 
-    #[inline]
     fn apply_precomputed(&mut self, tf: Affine3A, new_tf: Affine3A) {
         if let Some(base) = &mut self.base {
             base.transform(tf);
@@ -102,7 +103,7 @@ impl<const N: usize, TKN: Token> CollisionBody<N, TKN> {
     }
 }
 
-impl<const N: usize, TKN: Token> std::fmt::Debug for CollisionBody<N, TKN> {
+impl<const N: usize> std::fmt::Debug for CollisionBody<N> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CollisionBody")
             .field("token", &self.token)
@@ -111,30 +112,27 @@ impl<const N: usize, TKN: Token> std::fmt::Debug for CollisionBody<N, TKN> {
     }
 }
 
-impl<const N: usize, TKN: Token> Clone for CollisionBody<N, TKN> {
+impl<const N: usize> Clone for CollisionBody<N> {
     fn clone(&self) -> Self {
         Self {
             base: self.base.clone(),
             filter: self.filter,
             attachments: self.attachments.clone(),
-            token: self.token.clone(),
+            token: self.token,
             last_transform: self.last_transform,
         }
     }
 }
 
-pub struct WreckValidator<const N: usize, TKN: Token, FK: FKChain<N>> {
-    base: Option<CollisionBody<N, TKN>>,
-    links: [CollisionBody<N, TKN>; N],
-    ee: CollisionBody<N, TKN>,
+pub struct WreckValidator<const N: usize, FK: FKChain<N>> {
+    base: Option<CollisionBody<N>>,
+    links: [CollisionBody<N>; N],
+    ee: CollisionBody<N>,
     environment: Collider,
     fk: FK,
-    _token: PhantomData<TKN>,
 }
 
-impl<const N: usize, TKN: Token, FK: FKChain<N>> std::fmt::Debug
-    for WreckValidator<N, TKN, FK>
-{
+impl<const N: usize, FK: FKChain<N>> std::fmt::Debug for WreckValidator<N, FK> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WreckValidator")
             .field("base", &self.base)
@@ -144,9 +142,7 @@ impl<const N: usize, TKN: Token, FK: FKChain<N>> std::fmt::Debug
     }
 }
 
-impl<const N: usize, TKN: Token, FK: FKChain<N>> Clone
-    for WreckValidator<N, TKN, FK>
-{
+impl<const N: usize, FK: FKChain<N>> Clone for WreckValidator<N, FK> {
     fn clone(&self) -> Self {
         Self {
             base: self.base.clone(),
@@ -154,7 +150,6 @@ impl<const N: usize, TKN: Token, FK: FKChain<N>> Clone
             ee: self.ee.clone(),
             environment: self.environment.clone(),
             fk: self.fk.clone(),
-            _token: PhantomData,
         }
     }
 }
@@ -173,11 +168,11 @@ fn rigid_delta(new_tf: Affine3A, prev_tf: Affine3A) -> Affine3A {
     }
 }
 
-impl<const N: usize, TKN: Token, FK: FKChain<N>> WreckValidator<N, TKN, FK> {
+impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
     pub fn new(
-        links: [CollisionBody<N, TKN>; N],
-        ee: CollisionBody<N, TKN>,
-        base: Option<CollisionBody<N, TKN>>,
+        links: [CollisionBody<N>; N],
+        ee: CollisionBody<N>,
+        base: Option<CollisionBody<N>>,
         obstacles: Collider,
         fk: FK,
     ) -> Self {
@@ -187,34 +182,27 @@ impl<const N: usize, TKN: Token, FK: FKChain<N>> WreckValidator<N, TKN, FK> {
             ee,
             environment: obstacles,
             fk,
-            _token: PhantomData,
         }
     }
 
-    pub fn links_ref(&self) -> &[CollisionBody<N, TKN>; N] {
+    pub fn links_ref(&self) -> &[CollisionBody<N>; N] {
         &self.links
     }
 
-    pub fn base_ref(&self) -> &Option<CollisionBody<N, TKN>> {
+    pub fn base_ref(&self) -> &Option<CollisionBody<N>> {
         &self.base
     }
 
     pub fn into_parts(
         self,
     ) -> (
-        [CollisionBody<N, TKN>; N],
-        CollisionBody<N, TKN>,
-        Option<CollisionBody<N, TKN>>,
+        [CollisionBody<N>; N],
+        CollisionBody<N>,
+        Option<CollisionBody<N>>,
         Collider,
-        FK
+        FK,
     ) {
-        (
-            self.links,
-            self.ee,
-            self.base,
-            self.environment,
-            self.fk
-        )
+        (self.links, self.ee, self.base, self.environment, self.fk)
     }
 
     pub fn with_environment(&mut self, environment: Collider) {
@@ -232,7 +220,7 @@ impl<const N: usize, TKN: Token, FK: FKChain<N>> WreckValidator<N, TKN, FK> {
     }
 
     /// Adds an attachment to a link (0..N-1) or the end effector (N).
-    pub fn with_attachment(mut self, index: usize, mut attachment: Attachment<N, TKN>) -> Self {
+    pub fn with_attachment(mut self, index: usize, mut attachment: Attachment<N>) -> Self {
         let body = if index < N {
             &mut self.links[index]
         } else {
@@ -256,9 +244,8 @@ impl<const N: usize, TKN: Token, FK: FKChain<N>> WreckValidator<N, TKN, FK> {
         self
     }
 
-    #[inline]
-    fn check_collisions(&mut self, q: &SRobotQ<N>) -> RevampResult<(), TKN> {
-        let transforms = self.fk.fk(q);
+    fn check_collisions(&mut self, q: &SRobotQ<N>) -> RevampResult<()> {
+        let transforms = self.fk.fk(q).map_err(Into::into)?;
 
         for i in 0..N - 1 {
             self.links[i].apply_transform(transforms[i]);
@@ -268,28 +255,24 @@ impl<const N: usize, TKN: Token, FK: FKChain<N>> WreckValidator<N, TKN, FK> {
         let last_tf = transforms[N - 1];
         let delta = self.links[N - 1].compute_delta(last_tf);
         self.links[N - 1].apply_precomputed(delta, last_tf);
-        self.ee.apply_precomputed(delta, last_tf);
         self.check_link(N - 1)?;
+        self.ee.apply_precomputed(delta, last_tf);
         self.check_ee()?;
 
         Ok(())
     }
 
     #[inline]
-    fn check_body_env(&self, body: &CollisionBody<N, TKN>) -> RevampResult<(), TKN> {
+    fn check_body_env(&self, body: &CollisionBody<N>) -> RevampResult<()> {
         for (collider, token, filter) in body.sub_colliders() {
             if filter.obstacles && collider.collides_other(&self.environment) {
-                return Err(RevampError::EnvironmentCollision(
-                    token.clone(),
-                    token.clone(),
-                ));
+                return Err(RevampError::EnvironmentCollision(*token, *token));
             }
         }
         Ok(())
     }
 
-    #[inline]
-    fn check_link(&self, i: usize) -> RevampResult<(), TKN> {
+    fn check_link(&self, i: usize) -> RevampResult<()> {
         self.check_body_env(&self.links[i])?;
         for j in 0..i {
             self.check_body_pair(&self.links[j], &self.links[i], j, i)?;
@@ -300,8 +283,7 @@ impl<const N: usize, TKN: Token, FK: FKChain<N>> WreckValidator<N, TKN, FK> {
         Ok(())
     }
 
-    #[inline]
-    fn check_ee(&self) -> RevampResult<(), TKN> {
+    fn check_ee(&self) -> RevampResult<()> {
         self.check_body_env(&self.ee)?;
         for j in 0..N {
             self.check_body_pair(&self.links[j], &self.ee, j, N)?;
@@ -315,18 +297,18 @@ impl<const N: usize, TKN: Token, FK: FKChain<N>> WreckValidator<N, TKN, FK> {
     #[inline]
     fn check_body_pair(
         &self,
-        body_a: &CollisionBody<N, TKN>,
-        body_b: &CollisionBody<N, TKN>,
+        body_a: &CollisionBody<N>,
+        body_b: &CollisionBody<N>,
         a_idx: usize,
         b_idx: usize,
-    ) -> RevampResult<(), TKN> {
+    ) -> RevampResult<()> {
         for (ca, ta, fa) in body_a.sub_colliders() {
             if !fa.allows(b_idx) {
                 continue;
             }
             for (cb, tb, fb) in body_b.sub_colliders() {
                 if fb.allows(a_idx) && ca.collides_other(cb) {
-                    return Err(RevampError::SelfCollison(ta.clone(), tb.clone()));
+                    return Err(RevampError::SelfCollison(*ta, *tb));
                 }
             }
         }
@@ -353,18 +335,31 @@ impl std::fmt::Display for SelfCollisionDetail {
         write!(
             f,
             "{}[{}] vs {}[{}]: dist={:.6} r_sum={:.6} overlap={:.6}\n  a=({:.6}, {:.6}, {:.6}) r={:.6}\n  b=({:.6}, {:.6}, {:.6}) r={:.6}",
-            self.body_a, self.sphere_a_idx,
-            self.body_b, self.sphere_b_idx,
-            self.distance, self.radius_a + self.radius_b, self.overlap,
-            self.center_a[0], self.center_a[1], self.center_a[2], self.radius_a,
-            self.center_b[0], self.center_b[1], self.center_b[2], self.radius_b,
+            self.body_a,
+            self.sphere_a_idx,
+            self.body_b,
+            self.sphere_b_idx,
+            self.distance,
+            self.radius_a + self.radius_b,
+            self.overlap,
+            self.center_a[0],
+            self.center_a[1],
+            self.center_a[2],
+            self.radius_a,
+            self.center_b[0],
+            self.center_b[1],
+            self.center_b[2],
+            self.radius_b,
         )
     }
 }
 
-impl<const N: usize, TKN: Token, FK: FKChain<N>> WreckValidator<N, TKN, FK> {
-    pub fn debug_self_collisions(&mut self, q: &SRobotQ<N>) -> Vec<SelfCollisionDetail> {
-        let transforms = self.fk.fk(q);
+impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
+    pub fn debug_self_collisions(
+        &mut self,
+        q: &SRobotQ<N>,
+    ) -> RevampResult<Vec<SelfCollisionDetail>> {
+        let transforms = self.fk.fk(q).map_err(Into::into)?;
         for i in 0..N - 1 {
             self.links[i].apply_transform(transforms[i]);
         }
@@ -385,11 +380,11 @@ impl<const N: usize, TKN: Token, FK: FKChain<N>> WreckValidator<N, TKN, FK> {
             }
         };
 
-        let check_pair = |a: &CollisionBody<N, TKN>,
-                           b: &CollisionBody<N, TKN>,
-                           a_idx: usize,
-                           b_idx: usize,
-                           details: &mut Vec<SelfCollisionDetail>| {
+        let check_pair = |a: &CollisionBody<N>,
+                          b: &CollisionBody<N>,
+                          a_idx: usize,
+                          b_idx: usize,
+                          details: &mut Vec<SelfCollisionDetail>| {
             for (ca, _ta, fa) in a.sub_colliders() {
                 if !fa.allows(b_idx) {
                     continue;
@@ -438,23 +433,20 @@ impl<const N: usize, TKN: Token, FK: FKChain<N>> WreckValidator<N, TKN, FK> {
             check_pair(&self.ee, base, N, N + 1, &mut details);
         }
 
-        details
+        Ok(details)
     }
 }
 
-impl<const N: usize, TKN: Token + 'static, FK: FKChain<N> + 'static>
-    Validator<N, TKN>
-    for WreckValidator<N, TKN, FK>
-{
-    fn validate<E: Into<RevampError<TKN>>, A: TryInto<SRobotQ<N>, Error = E>>(
+impl<const N: usize, FK: FKChain<N> + 'static> Validator<N> for WreckValidator<N, FK> {
+    fn validate<E: Into<RevampError>, A: TryInto<SRobotQ<N>, Error = E>>(
         &mut self,
         q: A,
-    ) -> RevampResult<(), TKN> {
+    ) -> RevampResult<()> {
         let q = q.try_into().map_err(|e| e.into())?;
         self.check_collisions(&q)
     }
 
-    fn validate_motion(&mut self, qs: &[SRobotQ<N>]) -> RevampResult<(), TKN> {
+    fn validate_motion(&mut self, qs: &[SRobotQ<N>]) -> RevampResult<()> {
         for q in qs {
             self.check_collisions(q)?;
         }

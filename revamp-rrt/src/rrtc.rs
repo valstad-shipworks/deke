@@ -1,8 +1,8 @@
-use revamp_types::{RevampError, RevampResult, RobotPath, SRobotQ, Token, Validator};
+use revamp_types::{RevampError, RevampResult, RobotPath, SRobotQ, Validator};
 use tinyrand::Rand;
 
-use crate::tree::RrtTree;
 use crate::RrtDiagnostic;
+use crate::tree::RrtTree;
 
 #[derive(Debug, Clone)]
 pub struct RrtcSettings<const N: usize> {
@@ -93,12 +93,12 @@ fn steer<const N: usize>(
     }
 }
 
-pub(crate) fn validate_edge<const N: usize, TKN: Token>(
+pub(crate) fn validate_edge<const N: usize>(
     from: &SRobotQ<N>,
     to: &SRobotQ<N>,
     resolution: f64,
-    validator: &mut impl Validator<N, TKN>,
-) -> RevampResult<(), TKN> {
+    validator: &mut impl Validator<N>,
+) -> RevampResult<()> {
     let dist = from.distance(to) as f64;
     let steps = ((dist / resolution).ceil() as usize).max(1);
     let mut points = Vec::with_capacity(steps);
@@ -145,13 +145,13 @@ fn reconstruct<const N: usize>(
     }
 }
 
-pub(crate) fn solve<const N: usize, TKN: Token>(
+pub(crate) fn solve<const N: usize>(
     start: &SRobotQ<N>,
     goal: &SRobotQ<N>,
-    validator: &mut impl Validator<N, TKN>,
+    validator: &mut impl Validator<N>,
     settings: &RrtcSettings<N>,
     rng: &mut impl Rand,
-) -> (RevampResult<RobotPath, TKN>, RrtDiagnostic) {
+) -> (RevampResult<RobotPath>, RrtDiagnostic) {
     let timer = std::time::Instant::now();
     let coeffs = {
         let mut c = [0.0f64; N];
@@ -272,11 +272,11 @@ pub(crate) fn solve<const N: usize, TKN: Token>(
     )
 }
 
-fn extend_and_connect<const N: usize, TKN: Token>(
+fn extend_and_connect<const N: usize>(
     tree_a: &mut RrtTree<N>,
     tree_b: &mut RrtTree<N>,
     q_rand: &SRobotQ<N>,
-    validator: &mut impl Validator<N, TKN>,
+    validator: &mut impl Validator<N>,
     settings: &RrtcSettings<N>,
     coeffs: &[f64; N],
 ) -> Option<(usize, usize)> {
@@ -284,7 +284,10 @@ fn extend_and_connect<const N: usize, TKN: Token>(
 
     if settings.dynamic_domain && near_dist > tree_a.radius(near_idx) {
         let r = tree_a.radius(near_idx);
-        tree_a.set_radius(near_idx, (r * (1.0 - settings.alpha)).max(settings.min_radius));
+        tree_a.set_radius(
+            near_idx,
+            (r * (1.0 - settings.alpha)).max(settings.min_radius),
+        );
         return None;
     }
 
@@ -294,7 +297,10 @@ fn extend_and_connect<const N: usize, TKN: Token>(
     if validate_edge(&q_near, &q_new, settings.resolution, validator).is_err() {
         if settings.dynamic_domain {
             let r = tree_a.radius(near_idx);
-            tree_a.set_radius(near_idx, (r * (1.0 - settings.alpha)).max(settings.min_radius));
+            tree_a.set_radius(
+                near_idx,
+                (r * (1.0 - settings.alpha)).max(settings.min_radius),
+            );
         }
         return None;
     }
