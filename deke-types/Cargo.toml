@@ -1,0 +1,10 @@
+[package]
+name = "deke-types"
+version = "1.0.0"
+edition = "2024"
+
+[dependencies]
+approx = "0.5.1"
+glam = "0.32.1"
+ndarray = "0.17.2"
+wide = "1.2.0"

@@ -1,0 +1,9 @@
+[package]
+name = "deke-rrt"
+version = "1.0.0"
+edition = "2024"
+
+[dependencies]
+deke-types = { path = "../deke-types" }
+kiddo = "5.2.4"
+tinyrand = "0.5.0"

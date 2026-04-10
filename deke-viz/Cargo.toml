@@ -1,0 +1,36 @@
+[package]
+name = "deke-viz"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+deke-types = { path = "../deke-types" }
+deke-wreck = { path = "../deke-wreck" }
+deke-rrt = { path = "../deke-rrt" }
+deke-cricket = { path = "../deke-cricket" }
+wreck = "0.2.1"
+glam = "0.32.1"
+rerun = "0.31.1"
+vamp = { path = "../../vamp/vamp-rs" }
+ndarray = "0.17.2"
+
+[[bin]]
+name = "viz-path-rrtc"
+path = "src/rrtc_main.rs"
+
+[[bin]]
+name = "viz-path-vamp-rrtc"
+path = "src/vamp_rrtc_main.rs"
+
+[[bin]]
+name = "viz-path-vamp-aorrtc"
+path = "src/vamp_aorrtc_main.rs"
+
+[[bin]]
+name = "viz-path-aorrtc"
+path = "src/aorrtc_main.rs"
+
+[[bin]]
+name = "viz-path-krrtc"
+path = "src/krrtc_main.rs"

@@ -1,5 +1,5 @@
 [workspace]
-members = ["revamp-types", "revamp-wreck", "revamp-rrt", "revamp-macro", "revamp-test"]
+members = ["deke-types", "deke-wreck", "deke-rrt", "deke-cricket", "deke-test", "deke-viz"]
 resolver = "2"
 
 [profile.release]

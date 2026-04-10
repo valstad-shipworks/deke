@@ -1,0 +1,30 @@
+[package]
+name = "deke-test"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+deke-cricket = { path = "../deke-cricket" }
+deke-types = { path = "../deke-types" }
+deke-wreck = { path = "../deke-wreck" }
+deke-rrt = { path = "../deke-rrt" }
+wreck = "0.2.1"
+glam = "0.32.1"
+uuid = { version = "1", features = ["v4"] }
+vamp = { path = "../../vamp/vamp-rs" }
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "validate"
+harness = false
+
+[[bench]]
+name = "plan"
+harness = false
+
+[[bench]]
+name = "fk"
+harness = false
