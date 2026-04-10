@@ -1,3 +1,4 @@
+use approx::{AbsDiffEq, RelativeEq, UlpsEq};
 use ndarray::Array1;
 use wide::{CmpGt, CmpLt, f32x8};
 
@@ -771,6 +772,47 @@ impl<const N: usize> TryFrom<&RobotQ> for SRobotQ<N> {
         let mut arr = [0.0; N];
         arr.copy_from_slice(slice);
         Ok(Self(arr))
+    }
+}
+
+impl<const N: usize> AbsDiffEq for SRobotQ<N> {
+    type Epsilon = f32;
+
+    fn default_epsilon() -> f32 {
+        f32::default_epsilon()
+    }
+
+    fn abs_diff_eq(&self, other: &Self, epsilon: f32) -> bool {
+        self.0
+            .iter()
+            .zip(other.0.iter())
+            .all(|(a, b)| a.abs_diff_eq(b, epsilon))
+    }
+}
+
+impl<const N: usize> RelativeEq for SRobotQ<N> {
+    fn default_max_relative() -> f32 {
+        f32::default_max_relative()
+    }
+
+    fn relative_eq(&self, other: &Self, epsilon: f32, max_relative: f32) -> bool {
+        self.0
+            .iter()
+            .zip(other.0.iter())
+            .all(|(a, b)| a.relative_eq(b, epsilon, max_relative))
+    }
+}
+
+impl<const N: usize> UlpsEq for SRobotQ<N> {
+    fn default_max_ulps() -> u32 {
+        f32::default_max_ulps()
+    }
+
+    fn ulps_eq(&self, other: &Self, epsilon: f32, max_ulps: u32) -> bool {
+        self.0
+            .iter()
+            .zip(other.0.iter())
+            .all(|(a, b)| a.ulps_eq(b, epsilon, max_ulps))
     }
 }
 
