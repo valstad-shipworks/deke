@@ -2,6 +2,10 @@
 name = "deke-rrt"
 version = "1.0.0"
 edition = "2024"
+license = "Apache-2.0"
+authors = ["Bowan Foryt <bowan@valstad.com>"]
+description = "3d Collision deke validator backed by the Wreck library."
+repository = "https://github.com/valstad-shipworks/deke"
 
 [dependencies]
 deke-types = { path = "../deke-types" }
