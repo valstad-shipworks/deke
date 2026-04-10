@@ -2,6 +2,10 @@
 name = "deke-cricket"
 version = "1.0.0"
 edition = "2024"
+license = "Apache-2.0"
+authors = ["Bowan Foryt <bowan@valstad.com>"]
+description = "A procedural macro crate to make robots for the Deke project."
+repository = "https://github.com/valstad-shipworks/deke"
 
 [lib]
 proc-macro = true

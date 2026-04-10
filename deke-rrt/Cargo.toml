@@ -1,10 +1,10 @@
 [package]
 name = "deke-rrt"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 license = "Apache-2.0"
 authors = ["Bowan Foryt <bowan@valstad.com>"]
-description = "3d Collision deke validator backed by the Wreck library."
+description = "An rrt based planner for the Deke project."
 repository = "https://github.com/valstad-shipworks/deke"
 
 [dependencies]
