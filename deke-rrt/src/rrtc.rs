@@ -178,12 +178,15 @@ pub(crate) fn reduce<const N: usize>(
 }
 
 fn subdivide<const N: usize>(path: &mut Vec<SRobotQ<N>>) {
-    let mut new_path = Vec::with_capacity(path.len() * 2 - 1);
-    for i in 0..path.len() - 1 {
-        new_path.push(path[i]);
-        new_path.push((path[i] + path[i + 1]) * 0.5);
+    if path.is_empty() {
+        return;
     }
-    new_path.push(*path.last().unwrap());
+    let mut new_path = Vec::with_capacity(path.len() * 2 - 1);
+    for w in path.windows(2) {
+        new_path.push(w[0]);
+        new_path.push((w[0] + w[1]) * 0.5);
+    }
+    new_path.push(path[path.len() - 1]);
     *path = new_path;
 }
 
@@ -384,17 +387,14 @@ pub(crate) fn solve<const N: usize>(
             }
 
             let cost = path_cost(&waypoints, &dof_coeffs);
-            let path = SRobotPath::new(waypoints).unwrap();
-            return (
-                Ok(path),
-                RrtDiagnostic {
-                    iterations: iteration + 1,
-                    start_tree_size: start_tree.len(),
-                    goal_tree_size: goal_tree.len(),
-                    path_cost: cost,
-                    elapsed_ns: timer.elapsed().as_nanos(),
-                },
-            );
+            let diag = RrtDiagnostic {
+                iterations: iteration + 1,
+                start_tree_size: start_tree.len(),
+                goal_tree_size: goal_tree.len(),
+                path_cost: cost,
+                elapsed_ns: timer.elapsed().as_nanos(),
+            };
+            return (SRobotPath::new(waypoints), diag);
         }
 
         if settings.balance {

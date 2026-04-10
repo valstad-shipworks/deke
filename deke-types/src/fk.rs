@@ -40,6 +40,19 @@ pub trait FKChain<const N: usize>: Clone + Send + Sync {
     fn dof(&self) -> usize {
         N
     }
+    /// Theoretical maximum reach: sum of link lengths (upper bound, ignores joint limits).
+    fn max_reach(&self) -> Result<f32, Self::Error> {
+        let (_, p, p_ee) = self.joint_axes_positions(&SRobotQ::zeros())?;
+        let mut total = 0.0f32;
+        let mut prev = p[0];
+        for i in 1..N {
+            total += (p[i] - prev).length();
+            prev = p[i];
+        }
+        total += (p_ee - prev).length();
+        Ok(total)
+    }
+
     fn fk(&self, q: &SRobotQ<N>) -> Result<[Affine3A; N], Self::Error>;
     fn fk_end(&self, q: &SRobotQ<N>) -> Result<Affine3A, Self::Error>;
     /// Returns joint rotation axes and axis-origin positions in world frame at
@@ -772,6 +785,14 @@ impl<const N: usize, FK: FKChain<N>> TransformedFK<N, FK> {
 
 impl<const N: usize, FK: FKChain<N>> FKChain<N> for TransformedFK<N, FK> {
     type Error = FK::Error;
+
+    fn max_reach(&self) -> Result<f32, Self::Error> {
+        let mut reach = self.inner.max_reach()?;
+        if let Some(suf) = &self.suffix {
+            reach += Vec3A::from(suf.translation).length();
+        }
+        Ok(reach)
+    }
 
     fn fk(&self, q: &SRobotQ<N>) -> Result<[Affine3A; N], Self::Error> {
         let mut frames = self.inner.fk(q)?;

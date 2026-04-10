@@ -1,12 +1,12 @@
 mod dynamic;
-mod inline;
+use std::sync::Arc;
+
 pub use dynamic::DynamicWreckValidator;
-pub use inline::{InlinedRobot, InlinedWreckValidator};
 
 use deke_types::{DekeError, DekeResult, FKChain, SRobotQ, Validator};
 use glam::Affine3A;
 use uuid::Uuid;
-use wreck::{Collider, ColliderComponent, Transformable};
+use wreck::{Collider, Transformable};
 
 #[derive(Debug, Clone, Copy)]
 pub struct CollisionFilter<const N: usize> {
@@ -130,7 +130,7 @@ pub struct WreckValidator<const N: usize, FK: FKChain<N>> {
     base: Option<CollisionBody<N>>,
     links: [CollisionBody<N>; N],
     ee: CollisionBody<N>,
-    environment: Collider,
+    environment: Arc<Collider>,
     fk: FK,
 }
 
@@ -175,14 +175,14 @@ impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
         links: [CollisionBody<N>; N],
         ee: CollisionBody<N>,
         base: Option<CollisionBody<N>>,
-        obstacles: Collider,
+        environment: Arc<Collider>,
         fk: FK,
     ) -> Self {
         Self {
             base,
             links,
             ee,
-            environment: obstacles,
+            environment,
             fk,
         }
     }
@@ -201,27 +201,17 @@ impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
         [CollisionBody<N>; N],
         CollisionBody<N>,
         Option<CollisionBody<N>>,
-        Collider,
+        Arc<Collider>,
         FK,
     ) {
         (self.links, self.ee, self.base, self.environment, self.fk)
     }
 
-    pub fn with_environment(&mut self, environment: Collider) {
+    pub fn with_environment(&mut self, environment: Arc<Collider>) {
         self.environment = environment;
     }
 
-    pub fn with_environment_component(mut self, component: impl ColliderComponent) -> Self {
-        self.environment.add(component);
-        self
-    }
-
-    pub fn with_environment_collider(mut self, collider: Collider) -> Self {
-        self.environment.include(collider);
-        self
-    }
-
-    pub fn environment(&self) -> &Collider {
+    pub fn environment(&self) -> &Arc<Collider> {
         &self.environment
     }
 

@@ -493,10 +493,10 @@ pub(crate) fn solve<const N: usize>(
     }
 
     best_cost = path_cost(&best_waypoints, &dof_coeffs);
-    let final_path = SRobotPath::new(best_waypoints).unwrap();
+    let final_path = SRobotPath::new(best_waypoints);
 
     (
-        Ok(final_path),
+        final_path,
         RrtDiagnostic {
             iterations: total_iterations,
             start_tree_size: 0,

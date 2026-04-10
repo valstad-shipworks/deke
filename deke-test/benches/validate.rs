@@ -1,5 +1,5 @@
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
-use deke_test::{m20id12l, m20id12l_so};
+use deke_test::m20id12l;
 use deke_types::Validator as _;
 
 fn gen_configs(n: usize) -> Vec<[f32; 6]> {
@@ -66,30 +66,6 @@ fn bench_validate(c: &mut Criterion) {
             let q = &configs[i % configs.len()];
             i += 1;
             black_box(vamp_robot.validate(q, &vamp_env, false))
-        });
-    });
-
-    let inlined = m20id12l_so::inlined_validator(wreck::Collider::default());
-
-    c.bench_function("inlined_validate_single", |b| {
-        let mut v = inlined.clone();
-        let mut i = 0;
-        b.iter(|| {
-            let q = &configs[i % configs.len()];
-            i += 1;
-            let _ = black_box(v.validate(deke_types::SRobotQ(*q)));
-        });
-    });
-
-    let inlined_no_limits = inlined.clone().1;
-
-    c.bench_function("inlined_validate_no_limits", |b| {
-        let mut v = inlined_no_limits.clone();
-        let mut i = 0;
-        b.iter(|| {
-            let q = &configs[i % configs.len()];
-            i += 1;
-            let _ = black_box(v.validate(deke_types::SRobotQ(*q)));
         });
     });
 

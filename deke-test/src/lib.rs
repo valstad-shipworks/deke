@@ -6,15 +6,6 @@ deke_cricket::cricket!(
     forced_end_effector_collision = ["base_link", "link_1", "link_2", "link_3", "link_4"],
     ignored_environment_collision = ["base_link"],
 );
-deke_cricket::cricket!(
-    name = "M20ID12L_SO",
-    urdf = "../robot_assets/robots/m20id12l/spherized.urdf",
-    srdf = "../robot_assets/robots/m20id12l/m20id12l.srdf",
-    end_effector = "flange",
-    forced_end_effector_collision = ["base_link", "link_1", "link_2", "link_3", "link_4"],
-    ignored_environment_collision = ["base_link"],
-    sphere_only = true,
-);
 
 #[cfg(test)]
 mod tests {

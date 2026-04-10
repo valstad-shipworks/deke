@@ -216,7 +216,9 @@ fn shortcut<const N: usize>(
             break;
         }
 
-        let total_cost = *cumulative.last().unwrap();
+        let Some(&total_cost) = cumulative.last() else {
+            break;
+        };
         if total_cost < 1e-10 {
             break;
         }
@@ -225,7 +227,7 @@ fn shortcut<const N: usize>(
         let r1 = rand_f64(rng) * total_cost;
         let i = cumulative
             .partition_point(|&c| c < r1)
-            .min(segment_costs.len() - 1);
+            .min(segment_costs.len().saturating_sub(1));
 
         // Pick second index at least 2 away
         let remaining = path.len() - i - 2;
@@ -392,17 +394,14 @@ pub(crate) fn solve<const N: usize>(
             }
 
             let cost = kinematic_path_cost(&waypoints, &settings.kin_limits);
-            let path = SRobotPath::new(waypoints).unwrap();
-            return (
-                Ok(path),
-                RrtDiagnostic {
-                    iterations: iteration + 1,
-                    start_tree_size: start_tree.len(),
-                    goal_tree_size: goal_tree.len(),
-                    path_cost: cost,
-                    elapsed_ns: timer.elapsed().as_nanos(),
-                },
-            );
+            let diag = RrtDiagnostic {
+                iterations: iteration + 1,
+                start_tree_size: start_tree.len(),
+                goal_tree_size: goal_tree.len(),
+                path_cost: cost,
+                elapsed_ns: timer.elapsed().as_nanos(),
+            };
+            return (SRobotPath::new(waypoints), diag);
         }
 
         if settings.balance {

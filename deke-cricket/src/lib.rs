@@ -15,7 +15,6 @@ struct CricketConfig {
     forced_end_effector_collision: Vec<String>,
     ignored_environment_collision: Vec<String>,
     sphere_padding: f32,
-    sphere_only: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -104,7 +103,6 @@ impl Parse for MacroInput {
         let mut forced_end_effector_collision = Vec::new();
         let mut ignored_environment_collision = Vec::new();
         let mut sphere_padding = 0.0f32;
-        let mut sphere_only = false;
 
         while !input.is_empty() {
             let key: syn::Ident = input.parse()?;
@@ -137,10 +135,6 @@ impl Parse for MacroInput {
                     let val: syn::LitFloat = input.parse()?;
                     sphere_padding = val.base10_parse()?;
                 }
-                "sphere_only" => {
-                    let val: syn::LitBool = input.parse()?;
-                    sphere_only = val.value;
-                }
                 other => {
                     return Err(syn::Error::new(
                         key.span(),
@@ -163,7 +157,6 @@ impl Parse for MacroInput {
             forced_end_effector_collision,
             ignored_environment_collision,
             sphere_padding,
-            sphere_only,
         };
 
         Ok(MacroInput { config })
@@ -932,309 +925,6 @@ pub fn cricket(input: TokenStream) -> TokenStream {
     let joint_name_strs: Vec<String> = joints.iter().map(|j| j.name.clone()).collect();
     let link_name_strs: Vec<&str> = joint_child_names.iter().map(|s| s.as_str()).collect();
 
-    let inlined_tokens = if config.sphere_only {
-        for joint in &joints {
-            let child_link_idx = link_map[&joint.child];
-            let link = &links[child_link_idx];
-            for shape in &link.shapes {
-                if !matches!(shape, ShapeData::Sphere { .. }) {
-                    panic!(
-                        "sphere_only is true but link '{}' has non-sphere collision shapes",
-                        link.name
-                    );
-                }
-            }
-        }
-        if !ee_is_joint_child {
-            if let Some(&ee_idx) = ee_link_idx {
-                for shape in &links[ee_idx].shapes {
-                    if !matches!(shape, ShapeData::Sphere { .. }) {
-                        panic!(
-                            "sphere_only is true but end effector '{}' has non-sphere shapes",
-                            links[ee_idx].name
-                        );
-                    }
-                }
-            }
-        }
-        if let Some(&base_idx) = link_map.get(base_link_name.as_str()) {
-            for shape in &links[base_idx].shapes {
-                if !matches!(shape, ShapeData::Sphere { .. }) {
-                    panic!(
-                        "sphere_only is true but base link '{}' has non-sphere shapes",
-                        links[base_idx].name
-                    );
-                }
-            }
-        }
-
-        let mut total_spheres = 0usize;
-        for joint in &joints {
-            let child_link_idx = link_map[&joint.child];
-            total_spheres += links[child_link_idx].shapes.len();
-        }
-        if !ee_is_joint_child {
-            if let Some(&ee_idx) = ee_link_idx {
-                total_spheres += links[ee_idx].shapes.len();
-            }
-        }
-        if let Some(&base_idx) = link_map.get(base_link_name.as_str()) {
-            total_spheres += links[base_idx].shapes.len();
-        }
-        let total_spheres_lit = proc_macro2::Literal::usize_unsuffixed(total_spheres);
-
-        let mut spheres_stmts = Vec::new();
-        for (joint_idx, joint) in joints.iter().enumerate() {
-            let child_link_idx = link_map[&joint.child];
-            let link = &links[child_link_idx];
-            if link.shapes.is_empty() {
-                continue;
-            }
-            let arr_name = format_ident!("LINK_{}_SPHERES", joint_idx);
-            let idx_lit = proc_macro2::Literal::usize_unsuffixed(joint_idx);
-            spheres_stmts.push(quote! {
-                for s in #arr_name.iter() {
-                    let c = transforms[#idx_lit].transform_point3a(glam::Vec3A::from(s.center));
-                    soa.push(wreck::Sphere::new(glam::Vec3::from(c), s.radius));
-                }
-            });
-        }
-        if !ee_is_joint_child {
-            if let Some(&ee_idx) = ee_link_idx {
-                if !links[ee_idx].shapes.is_empty() {
-                    let last_idx = proc_macro2::Literal::usize_unsuffixed(n_joints - 1);
-                    spheres_stmts.push(quote! {
-                        for s in EE_SPHERES.iter() {
-                            let c = transforms[#last_idx].transform_point3a(glam::Vec3A::from(s.center));
-                            soa.push(wreck::Sphere::new(glam::Vec3::from(c), s.radius));
-                        }
-                    });
-                }
-            }
-        }
-        if let Some(&base_idx) = link_map.get(base_link_name.as_str()) {
-            if !links[base_idx].shapes.is_empty() {
-                spheres_stmts.push(quote! {
-                    for s in BASE_LINK_SPHERES.iter() {
-                        soa.push(*s);
-                    }
-                });
-            }
-        }
-
-        let mut debug_soa_builds = Vec::new();
-        for (joint_idx, joint) in joints.iter().enumerate() {
-            let child_link_idx = link_map[&joint.child];
-            let link = &links[child_link_idx];
-            let idx_lit = proc_macro2::Literal::usize_unsuffixed(joint_idx);
-            if !link.shapes.is_empty() {
-                let arr_name = format_ident!("LINK_{}_SPHERES", joint_idx);
-                debug_soa_builds.push(quote! {
-                    {
-                        let mut s = wreck::soa::SpheresSoA::new();
-                        for sp in #arr_name.iter() {
-                            let c = transforms[#idx_lit].transform_point3a(glam::Vec3A::from(sp.center));
-                            s.push(wreck::Sphere::new(glam::Vec3::from(c), sp.radius));
-                        }
-                        s
-                    }
-                });
-            } else {
-                debug_soa_builds.push(quote! { wreck::soa::SpheresSoA::new() });
-            }
-        }
-
-        let robot_name_str = &config.name;
-        let n_minus_1 = proc_macro2::Literal::usize_unsuffixed(n_joints - 1);
-
-        quote! {
-            use deke_types::FKChain as _;
-
-            const TOTAL_SPHERE_COUNT: usize = #total_spheres_lit;
-
-            #[derive(Clone)]
-            struct Inlined {
-                fk: deke_types::URDFChain<#n_lit>,
-                links: [deke_wreck::CollisionBody<#n_lit>; #n_lit],
-                ee: deke_wreck::CollisionBody<#n_lit>,
-                base: Option<deke_wreck::CollisionBody<#n_lit>>,
-            }
-
-            impl deke_wreck::InlinedRobot<#n_lit> for Inlined {
-                fn name(&self) -> &str {
-                    #robot_name_str
-                }
-
-                fn clone_box(&self) -> Box<dyn deke_wreck::InlinedRobot<#n_lit>> {
-                    Box::new(self.clone())
-                }
-
-                fn validate(
-                    &mut self,
-                    q: deke_types::SRobotQ<#n_lit>,
-                    env: &wreck::Collider,
-                    ee_attachments: &[wreck::Collider],
-                ) -> deke_types::DekeResult<()> {
-                    let transforms = self.fk.fk(&q).map_err(|e| -> deke_types::DekeError { e.into() })?;
-
-                    for i in 0..#n_minus_1 {
-                        self.links[i].apply_transform(transforms[i]);
-                        if let Some(ref ci) = self.links[i].base {
-                            if self.links[i].filter.obstacles && ci.collides_other(env) {
-                                return Err(deke_types::DekeError::EnvironmentCollision(
-                                    self.links[i].token, self.links[i].token,
-                                ));
-                            }
-                            for j in 0..i {
-                                if !self.links[j].filter.links[i] || !self.links[i].filter.links[j] {
-                                    continue;
-                                }
-                                if let Some(ref cj) = self.links[j].base {
-                                    if ci.collides_other(cj) {
-                                        return Err(deke_types::DekeError::SelfCollision(
-                                            self.links[j].token, self.links[i].token,
-                                        ));
-                                    }
-                                }
-                            }
-                            if let Some(ref base_body) = self.base {
-                                if self.links[i].filter.base && base_body.filter.links[i] {
-                                    if let Some(ref cb) = base_body.base {
-                                        if ci.collides_other(cb) {
-                                            return Err(deke_types::DekeError::SelfCollision(
-                                                self.links[i].token, base_body.token,
-                                            ));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    let last_tf = transforms[#n_minus_1];
-                    let delta = self.links[#n_minus_1].compute_delta(last_tf);
-                    self.links[#n_minus_1].apply_precomputed(delta, last_tf);
-                    if let Some(ref cn) = self.links[#n_minus_1].base {
-                        if self.links[#n_minus_1].filter.obstacles && cn.collides_other(env) {
-                            return Err(deke_types::DekeError::EnvironmentCollision(
-                                self.links[#n_minus_1].token, self.links[#n_minus_1].token,
-                            ));
-                        }
-                        for j in 0..#n_minus_1 {
-                            if !self.links[j].filter.links[#n_minus_1] || !self.links[#n_minus_1].filter.links[j] {
-                                continue;
-                            }
-                            if let Some(ref cj) = self.links[j].base {
-                                if cn.collides_other(cj) {
-                                    return Err(deke_types::DekeError::SelfCollision(
-                                        self.links[j].token, self.links[#n_minus_1].token,
-                                    ));
-                                }
-                            }
-                        }
-                        if let Some(ref base_body) = self.base {
-                            if self.links[#n_minus_1].filter.base && base_body.filter.links[#n_minus_1] {
-                                if let Some(ref cb) = base_body.base {
-                                    if cn.collides_other(cb) {
-                                        return Err(deke_types::DekeError::SelfCollision(
-                                            self.links[#n_minus_1].token, base_body.token,
-                                        ));
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    self.ee.apply_precomputed(delta, last_tf);
-                    if let Some(ref ce) = self.ee.base {
-                        if self.ee.filter.obstacles && ce.collides_other(env) {
-                            return Err(deke_types::DekeError::EnvironmentCollision(
-                                self.ee.token, self.ee.token,
-                            ));
-                        }
-                        for j in 0..#n_lit {
-                            if !self.links[j].filter.ee || !self.ee.filter.links[j] {
-                                continue;
-                            }
-                            if let Some(ref cj) = self.links[j].base {
-                                if ce.collides_other(cj) {
-                                    return Err(deke_types::DekeError::SelfCollision(
-                                        self.links[j].token, self.ee.token,
-                                    ));
-                                }
-                            }
-                        }
-                        if let Some(ref base_body) = self.base {
-                            if self.ee.filter.base && base_body.filter.ee {
-                                if let Some(ref cb) = base_body.base {
-                                    if ce.collides_other(cb) {
-                                        return Err(deke_types::DekeError::SelfCollision(
-                                            self.ee.token, base_body.token,
-                                        ));
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    for att in ee_attachments {
-                        if att.collides_other(env) {
-                            return Err(deke_types::DekeError::EnvironmentCollision(-2, -2));
-                        }
-                    }
-
-                    Ok(())
-                }
-
-                fn spheres(&self, q: deke_types::SRobotQ<#n_lit>) -> wreck::soa::SpheresSoA {
-                    let transforms = self.fk.fk(&q).unwrap();
-                    let mut soa = wreck::soa::SpheresSoA::with_capacity(TOTAL_SPHERE_COUNT);
-                    #(#spheres_stmts)*
-                    soa
-                }
-
-                fn eefk(&self, q: deke_types::SRobotQ<#n_lit>) -> glam::Affine3A {
-                    self.fk.fk_end(&q).unwrap()
-                }
-
-                fn debug_self_collisions(&self, q: deke_types::SRobotQ<#n_lit>) -> Vec<(usize, usize)> {
-                    let transforms = self.fk.fk(&q).unwrap();
-                    let link_soas = [#(#debug_soa_builds),*];
-                    let mut pairs = Vec::new();
-                    for i in 0..#n_lit {
-                        for j in 0..i {
-                            if link_soas[j].any_collides_soa(&link_soas[i]) {
-                                pairs.push((j, i));
-                            }
-                        }
-                    }
-                    pairs
-                }
-            }
-
-            pub type InlinedValidator = deke_types::ValidatorAnd<
-                deke_types::JointValidator<#n_lit>,
-                deke_wreck::InlinedWreckValidator<#n_lit>,
-            >;
-
-            pub fn inlined_validator(environment: wreck::Collider) -> InlinedValidator {
-                let fk = deke_types::URDFChain::<#n_lit>::new(URDF_JOINTS);
-                let links = [#(#link_collider_builds),*];
-                let ee = #ee_collider_build;
-                let base = #base_collider_build;
-                let robot = Inlined { fk, links, ee, base };
-                let inlined = deke_wreck::InlinedWreckValidator::new(Box::new(robot), environment);
-                let joints = deke_types::JointValidator::new(
-                    deke_types::SRobotQ(JOINT_LOWER),
-                    deke_types::SRobotQ(JOINT_UPPER),
-                );
-                deke_types::ValidatorAnd(joints, inlined)
-            }
-        }
-    } else {
-        quote! {}
-    };
-
     let output = quote! {
         pub mod #mod_name {
             #(#all_const_defs)*
@@ -1267,6 +957,7 @@ pub fn cricket(input: TokenStream) -> TokenStream {
             >;
 
             pub fn validator(environment: wreck::Collider) -> Validator {
+                let environment = std::sync::Arc::new(environment);
                 let fk = deke_types::URDFChain::<#n_lit>::new(URDF_JOINTS);
 
                 let links = [#(#link_collider_builds),*];
@@ -1293,8 +984,6 @@ pub fn cricket(input: TokenStream) -> TokenStream {
             pub fn krrtc(settings: deke_rrt::KrrtcSettings<#n_lit>) -> deke_rrt::KrrtcPlanner<#n_lit> {
                 deke_rrt::KrrtcPlanner::new(settings)
             }
-
-            #inlined_tokens
         }
     };
 
