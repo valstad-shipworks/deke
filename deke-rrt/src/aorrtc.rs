@@ -1,4 +1,4 @@
-use deke_types::{DekeResult, RobotPath, SRobotQ, Validator};
+use deke_types::{DekeResult, SRobotPath, SRobotQ, Validator};
 use tinyrand::Rand;
 
 use crate::RrtDiagnostic;
@@ -247,7 +247,7 @@ pub(crate) fn solve<const N: usize>(
     validator: &mut impl Validator<N>,
     settings: &AorrtcSettings<N>,
     rng: &mut impl Rand,
-) -> (DekeResult<RobotPath>, RrtDiagnostic) {
+) -> (DekeResult<SRobotPath<N>>, RrtDiagnostic) {
     let timer = std::time::Instant::now();
     let dof_coeffs = {
         let mut c = [0.0f64; N];
@@ -265,21 +265,18 @@ pub(crate) fn solve<const N: usize>(
 
     let (initial_result, initial_diag) = rrtc_solve(start, goal, validator, &settings.rrtc, rng);
 
-    let mut best_path = match initial_result {
+    let initial_path = match initial_result {
         Ok(path) => path,
         Err(e) => return (Err(e), initial_diag),
     };
 
-    let mut best_waypoints: Vec<SRobotQ<N>> = best_path
-        .iter()
-        .map(|q| SRobotQ::force_from_robotq(q))
-        .collect();
+    let mut best_waypoints: Vec<SRobotQ<N>> = initial_path.iter().copied().collect();
     let mut best_cost = path_cost(&best_waypoints, &dof_coeffs);
 
     let c_min = weighted_distance(start, goal, &dof_coeffs);
     if best_cost <= c_min + 1e-8 {
         return (
-            Ok(best_path),
+            Ok(initial_path),
             RrtDiagnostic {
                 iterations: initial_diag.iterations,
                 start_tree_size: initial_diag.start_tree_size,
@@ -372,7 +369,8 @@ pub(crate) fn solve<const N: usize>(
             }
 
             let mut best_parent = near_idx;
-            let mut new_cost = tree_a.cost(near_idx) + weighted_distance(&q_near, &q_new, &dof_coeffs);
+            let mut new_cost =
+                tree_a.cost(near_idx) + weighted_distance(&q_near, &q_new, &dof_coeffs);
 
             if settings.cost_bound_resamples > 0 {
                 let g_hat_new = weighted_distance(&q_new, root_q, &dof_coeffs);
@@ -388,9 +386,7 @@ pub(crate) fn solve<const N: usize>(
                         break;
                     }
                     let q_cand = *tree_a.node(cand_idx);
-                    if validate_edge(&q_cand, &q_new, settings.rrtc.resolution, validator)
-                        .is_ok()
-                    {
+                    if validate_edge(&q_cand, &q_new, settings.rrtc.resolution, validator).is_ok() {
                         best_parent = cand_idx;
                         new_cost = cand_cost;
                     } else {
@@ -431,7 +427,8 @@ pub(crate) fn solve<const N: usize>(
                     break;
                 }
 
-                let step_cost = tree_b.cost(cur_idx) + weighted_distance(&q_cur, &q_step, &dof_coeffs);
+                let step_cost =
+                    tree_b.cost(cur_idx) + weighted_distance(&q_cur, &q_step, &dof_coeffs);
                 let reached = weighted_distance(&q_step, &q_new, &dof_coeffs) < 1e-6;
                 let added_q = if reached { q_new } else { q_step };
                 cur_idx = tree_b.add(added_q, cur_idx, settings.rrtc.radius, step_cost);
@@ -496,10 +493,10 @@ pub(crate) fn solve<const N: usize>(
     }
 
     best_cost = path_cost(&best_waypoints, &dof_coeffs);
-    best_path = best_waypoints.iter().map(|q| (*q).into()).collect();
+    let final_path = SRobotPath::new(best_waypoints).unwrap();
 
     (
-        Ok(best_path),
+        Ok(final_path),
         RrtDiagnostic {
             iterations: total_iterations,
             start_tree_size: 0,

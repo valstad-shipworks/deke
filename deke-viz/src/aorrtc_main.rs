@@ -120,19 +120,19 @@ fn main() {
 
     println!("path has {} waypoints:", path.len());
     for (i, q) in path.iter().enumerate() {
-        let sq = deke_types::SRobotQ::<{ DOF }>::try_from(q.as_slice().unwrap()).unwrap();
-        let tcp = fk.fk(&sq).unwrap()[DOF - 1].translation;
+        let tcp = fk.fk(q).unwrap()[DOF - 1].translation;
         println!(
             "  [{i}] joints={:?}  tcp=({:.3}, {:.3}, {:.3})",
-            q.as_slice().unwrap(),
+            q.0,
             tcp.x,
             tcp.y,
             tcp.z
         );
     }
 
+    let robot_path = path.to_robot_path();
     let slow_velocity = JOINT_VELOCITY.map(|v| v * 0.1);
-    let seg_times = deke_viz::segment_times(&path, &slow_velocity);
+    let seg_times = deke_viz::segment_times(&robot_path, &slow_velocity);
     let total_time: f64 = seg_times.iter().sum();
     println!(
         "estimated playback time: {:.2}s ({} segments)",
@@ -141,11 +141,11 @@ fn main() {
     );
 
     println!("logging tcp trace...");
-    deke_viz::log_path_tcp::<{ DOF }>(&rec, "path/tcp_trace", &path, &fk)
+    deke_viz::log_path_tcp::<{ DOF }>(&rec, "path/tcp_trace", &robot_path, &fk)
         .expect("failed to log tcp path");
 
     println!("logging waypoints...");
-    deke_viz::log_waypoints::<{ DOF }>(&rec, "path/waypoints", &path, &fk)
+    deke_viz::log_waypoints::<{ DOF }>(&rec, "path/waypoints", &robot_path, &fk)
         .expect("failed to log waypoints");
 
     println!("logging realtime playback...");

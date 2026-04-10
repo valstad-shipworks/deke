@@ -142,7 +142,10 @@ impl Parse for MacroInput {
                     sphere_only = val.value;
                 }
                 other => {
-                    return Err(syn::Error::new(key.span(), format!("unknown argument `{}`", other)));
+                    return Err(syn::Error::new(
+                        key.span(),
+                        format!("unknown argument `{}`", other),
+                    ));
                 }
             }
 
@@ -1088,7 +1091,7 @@ pub fn cricket(input: TokenStream) -> TokenStream {
                                 }
                                 if let Some(ref cj) = self.links[j].base {
                                     if ci.collides_other(cj) {
-                                        return Err(deke_types::DekeError::SelfCollison(
+                                        return Err(deke_types::DekeError::SelfCollision(
                                             self.links[j].token, self.links[i].token,
                                         ));
                                     }
@@ -1098,7 +1101,7 @@ pub fn cricket(input: TokenStream) -> TokenStream {
                                 if self.links[i].filter.base && base_body.filter.links[i] {
                                     if let Some(ref cb) = base_body.base {
                                         if ci.collides_other(cb) {
-                                            return Err(deke_types::DekeError::SelfCollison(
+                                            return Err(deke_types::DekeError::SelfCollision(
                                                 self.links[i].token, base_body.token,
                                             ));
                                         }
@@ -1123,7 +1126,7 @@ pub fn cricket(input: TokenStream) -> TokenStream {
                             }
                             if let Some(ref cj) = self.links[j].base {
                                 if cn.collides_other(cj) {
-                                    return Err(deke_types::DekeError::SelfCollison(
+                                    return Err(deke_types::DekeError::SelfCollision(
                                         self.links[j].token, self.links[#n_minus_1].token,
                                     ));
                                 }
@@ -1133,7 +1136,7 @@ pub fn cricket(input: TokenStream) -> TokenStream {
                             if self.links[#n_minus_1].filter.base && base_body.filter.links[#n_minus_1] {
                                 if let Some(ref cb) = base_body.base {
                                     if cn.collides_other(cb) {
-                                        return Err(deke_types::DekeError::SelfCollison(
+                                        return Err(deke_types::DekeError::SelfCollision(
                                             self.links[#n_minus_1].token, base_body.token,
                                         ));
                                     }
@@ -1155,7 +1158,7 @@ pub fn cricket(input: TokenStream) -> TokenStream {
                             }
                             if let Some(ref cj) = self.links[j].base {
                                 if ce.collides_other(cj) {
-                                    return Err(deke_types::DekeError::SelfCollison(
+                                    return Err(deke_types::DekeError::SelfCollision(
                                         self.links[j].token, self.ee.token,
                                     ));
                                 }
@@ -1165,7 +1168,7 @@ pub fn cricket(input: TokenStream) -> TokenStream {
                             if self.ee.filter.base && base_body.filter.ee {
                                 if let Some(ref cb) = base_body.base {
                                     if ce.collides_other(cb) {
-                                        return Err(deke_types::DekeError::SelfCollison(
+                                        return Err(deke_types::DekeError::SelfCollision(
                                             self.ee.token, base_body.token,
                                         ));
                                     }

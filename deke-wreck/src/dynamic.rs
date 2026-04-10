@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 
-use deke_types::{BoxFK, FKChain, DekeError, DekeResult, SRobotQ, Validator};
+use deke_types::{BoxFK, DekeError, DekeResult, FKChain, SRobotQ, Validator};
 
 use crate::WreckValidator;
 
@@ -169,5 +169,7 @@ macro_rules! impl_dynamic_wreck {
 impl_dynamic_wreck!(1 J1, 2 J2, 3 J3, 4 J4, 5 J5, 6 J6, 7 J7, 8 J8);
 
 impl DynamicWreckValidator {
-    pub fn from_validator(v: impl Into<Self>) -> Self { v.into() }
+    pub fn from_validator(v: impl Into<Self>) -> Self {
+        v.into()
+    }
 }

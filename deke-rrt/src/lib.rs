@@ -1,6 +1,6 @@
 use std::fmt;
 
-use deke_types::{Planner, DekeError, DekeResult, RobotPath, SRobotQ, Validator};
+use deke_types::{DekeError, DekeResult, Planner, SRobotPath, SRobotQ, Validator};
 use tinyrand::{Seeded, StdRand};
 
 mod aorrtc;
@@ -72,7 +72,7 @@ impl<const N: usize> Planner<N> for RrtcPlanner<N> {
         start: A,
         goal: B,
         validators: &mut impl Validator<N>,
-    ) -> (DekeResult<RobotPath>, Self::Diagnostic) {
+    ) -> (DekeResult<SRobotPath<N>>, Self::Diagnostic) {
         let start = match start.try_into().map_err(|e| e.into()) {
             Ok(s) => s,
             Err(e) => return (Err(e), RrtDiagnostic::empty()),
@@ -109,7 +109,7 @@ impl<const N: usize> Planner<N> for AorrtcPlanner<N> {
         start: A,
         goal: B,
         validators: &mut impl Validator<N>,
-    ) -> (DekeResult<RobotPath>, Self::Diagnostic) {
+    ) -> (DekeResult<SRobotPath<N>>, Self::Diagnostic) {
         let start = match start.try_into().map_err(|e| e.into()) {
             Ok(s) => s,
             Err(e) => return (Err(e), RrtDiagnostic::empty()),
@@ -146,7 +146,7 @@ impl<const N: usize> Planner<N> for KrrtcPlanner<N> {
         start: A,
         goal: B,
         validators: &mut impl Validator<N>,
-    ) -> (DekeResult<RobotPath>, Self::Diagnostic) {
+    ) -> (DekeResult<SRobotPath<N>>, Self::Diagnostic) {
         let start = match start.try_into().map_err(|e| e.into()) {
             Ok(s) => s,
             Err(e) => return (Err(e), RrtDiagnostic::empty()),

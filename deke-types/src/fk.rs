@@ -37,8 +37,126 @@ fn fast_sin_cos(x: f32) -> (f32, f32) {
 
 pub trait FKChain<const N: usize>: Clone + Send + Sync {
     type Error: Into<DekeError>;
+    fn dof(&self) -> usize {
+        N
+    }
     fn fk(&self, q: &SRobotQ<N>) -> Result<[Affine3A; N], Self::Error>;
     fn fk_end(&self, q: &SRobotQ<N>) -> Result<Affine3A, Self::Error>;
+    /// Returns joint rotation axes and axis-origin positions in world frame at
+    /// configuration `q`, plus the end-effector position.
+    fn joint_axes_positions(
+        &self,
+        q: &SRobotQ<N>,
+    ) -> Result<([Vec3A; N], [Vec3A; N], Vec3A), Self::Error>;
+
+    /// Geometric Jacobian (6×N) at configuration `q`.
+    /// Rows 0–2: linear velocity, rows 3–5: angular velocity.
+    fn jacobian(&self, q: &SRobotQ<N>) -> Result<[[f32; N]; 6], Self::Error> {
+        let (z, p, p_ee) = self.joint_axes_positions(q)?;
+        let mut j = [[0.0f32; N]; 6];
+        for i in 0..N {
+            let dp = p_ee - p[i];
+            let c = z[i].cross(dp);
+            j[0][i] = c.x;
+            j[1][i] = c.y;
+            j[2][i] = c.z;
+            j[3][i] = z[i].x;
+            j[4][i] = z[i].y;
+            j[5][i] = z[i].z;
+        }
+        Ok(j)
+    }
+
+    /// First time-derivative of the geometric Jacobian.
+    fn jacobian_dot(
+        &self,
+        q: &SRobotQ<N>,
+        qdot: &SRobotQ<N>,
+    ) -> Result<[[f32; N]; 6], Self::Error> {
+        let (z, p, p_ee) = self.joint_axes_positions(q)?;
+
+        let mut omega = Vec3A::ZERO;
+        let mut z_dot = [Vec3A::ZERO; N];
+        let mut p_dot = [Vec3A::ZERO; N];
+        let mut pdot_acc = Vec3A::ZERO;
+
+        for i in 0..N {
+            p_dot[i] = pdot_acc;
+            z_dot[i] = omega.cross(z[i]);
+            omega += qdot.0[i] * z[i];
+            let next_p = if i + 1 < N { p[i + 1] } else { p_ee };
+            pdot_acc += omega.cross(next_p - p[i]);
+        }
+        let p_ee_dot = pdot_acc;
+
+        let mut jd = [[0.0f32; N]; 6];
+        for i in 0..N {
+            let dp = p_ee - p[i];
+            let dp_dot = p_ee_dot - p_dot[i];
+            let c1 = z_dot[i].cross(dp);
+            let c2 = z[i].cross(dp_dot);
+            jd[0][i] = c1.x + c2.x;
+            jd[1][i] = c1.y + c2.y;
+            jd[2][i] = c1.z + c2.z;
+            jd[3][i] = z_dot[i].x;
+            jd[4][i] = z_dot[i].y;
+            jd[5][i] = z_dot[i].z;
+        }
+        Ok(jd)
+    }
+
+    /// Second time-derivative of the geometric Jacobian.
+    fn jacobian_ddot(
+        &self,
+        q: &SRobotQ<N>,
+        qdot: &SRobotQ<N>,
+        qddot: &SRobotQ<N>,
+    ) -> Result<[[f32; N]; 6], Self::Error> {
+        let (z, p, p_ee) = self.joint_axes_positions(q)?;
+
+        let mut omega = Vec3A::ZERO;
+        let mut omega_dot = Vec3A::ZERO;
+        let mut z_dot = [Vec3A::ZERO; N];
+        let mut z_ddot = [Vec3A::ZERO; N];
+        let mut p_dot = [Vec3A::ZERO; N];
+        let mut p_ddot = [Vec3A::ZERO; N];
+        let mut pdot_acc = Vec3A::ZERO;
+        let mut pddot_acc = Vec3A::ZERO;
+
+        for i in 0..N {
+            p_dot[i] = pdot_acc;
+            p_ddot[i] = pddot_acc;
+            let zd = omega.cross(z[i]);
+            z_dot[i] = zd;
+            z_ddot[i] = omega_dot.cross(z[i]) + omega.cross(zd);
+            omega_dot += qddot.0[i] * z[i] + qdot.0[i] * zd;
+            omega += qdot.0[i] * z[i];
+            let next_p = if i + 1 < N { p[i + 1] } else { p_ee };
+            let delta = next_p - p[i];
+            let delta_dot = omega.cross(delta);
+            pdot_acc += delta_dot;
+            pddot_acc += omega_dot.cross(delta) + omega.cross(delta_dot);
+        }
+        let p_ee_dot = pdot_acc;
+        let p_ee_ddot = pddot_acc;
+
+        let mut jdd = [[0.0f32; N]; 6];
+        for i in 0..N {
+            let dp = p_ee - p[i];
+            let dp_dot = p_ee_dot - p_dot[i];
+            let dp_ddot = p_ee_ddot - p_ddot[i];
+            let c1 = z_ddot[i].cross(dp);
+            let c2 = z_dot[i].cross(dp_dot);
+            let c3 = z[i].cross(dp_ddot);
+            jdd[0][i] = c1.x + 2.0 * c2.x + c3.x;
+            jdd[1][i] = c1.y + 2.0 * c2.y + c3.y;
+            jdd[2][i] = c1.z + 2.0 * c2.z + c3.z;
+            jdd[3][i] = z_ddot[i].x;
+            jdd[4][i] = z_ddot[i].y;
+            jdd[5][i] = z_ddot[i].z;
+        }
+        Ok(jdd)
+    }
 }
 
 #[inline(always)]
@@ -203,6 +321,22 @@ impl<const N: usize> FKChain<N> for DHChain<N> {
             translation: t,
         })
     }
+
+    fn joint_axes_positions(
+        &self,
+        q: &SRobotQ<N>,
+    ) -> Result<([Vec3A; N], [Vec3A; N], Vec3A), Self::Error> {
+        let frames = self.fk(q)?;
+        let mut axes = [Vec3A::Z; N];
+        let mut positions = [Vec3A::ZERO; N];
+
+        for i in 1..N {
+            axes[i] = frames[i - 1].matrix3.z_axis;
+            positions[i] = frames[i - 1].translation;
+        }
+
+        Ok((axes, positions, frames[N - 1].translation))
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -349,6 +483,22 @@ impl<const N: usize> FKChain<N> for HPChain<N> {
             matrix3: acc_m,
             translation: acc_t,
         })
+    }
+
+    fn joint_axes_positions(
+        &self,
+        q: &SRobotQ<N>,
+    ) -> Result<([Vec3A; N], [Vec3A; N], Vec3A), Self::Error> {
+        let frames = self.fk(q)?;
+        let mut axes = [Vec3A::Z; N];
+        let mut positions = [Vec3A::ZERO; N];
+
+        for i in 1..N {
+            axes[i] = frames[i - 1].matrix3.z_axis;
+            positions[i] = frames[i - 1].translation;
+        }
+
+        Ok((axes, positions, frames[N - 1].translation))
     }
 }
 
@@ -544,5 +694,300 @@ impl<const N: usize> FKChain<N> for URDFChain<N> {
             matrix3: Mat3A::from_cols(c0, c1, c2),
             translation: t,
         })
+    }
+
+    fn joint_axes_positions(
+        &self,
+        q: &SRobotQ<N>,
+    ) -> Result<([Vec3A; N], [Vec3A; N], Vec3A), Self::Error> {
+        let frames = self.fk(q)?;
+        let mut axes = [Vec3A::ZERO; N];
+        let mut positions = [Vec3A::ZERO; N];
+
+        for i in 0..N {
+            axes[i] = match self.axis[i] {
+                JointAxis::Z => frames[i].matrix3.z_axis,
+                JointAxis::Y(s) => s * frames[i].matrix3.y_axis,
+                JointAxis::X(s) => s * frames[i].matrix3.x_axis,
+            };
+            positions[i] = frames[i].translation;
+        }
+
+        Ok((axes, positions, frames[N - 1].translation))
+    }
+}
+
+/// Wraps an `FKChain` with an optional prefix (base) and/or suffix (tool) transform.
+///
+/// - `fk` applies only the prefix — intermediate frames stay in world coordinates
+///   without the tool offset.
+/// - `fk_end` and `joint_axes_positions` apply both — the end-effector includes
+///   the tool tip.
+#[derive(Debug, Clone)]
+pub struct TransformedFK<const N: usize, FK: FKChain<N>> {
+    inner: FK,
+    prefix: Option<Affine3A>,
+    suffix: Option<Affine3A>,
+}
+
+impl<const N: usize, FK: FKChain<N>> TransformedFK<N, FK> {
+    pub fn new(inner: FK) -> Self {
+        Self {
+            inner,
+            prefix: None,
+            suffix: None,
+        }
+    }
+
+    pub fn with_prefix(mut self, prefix: Affine3A) -> Self {
+        self.prefix = Some(prefix);
+        self
+    }
+
+    pub fn with_suffix(mut self, suffix: Affine3A) -> Self {
+        self.suffix = Some(suffix);
+        self
+    }
+
+    pub fn set_prefix(&mut self, prefix: Option<Affine3A>) {
+        self.prefix = prefix;
+    }
+
+    pub fn set_suffix(&mut self, suffix: Option<Affine3A>) {
+        self.suffix = suffix;
+    }
+
+    pub fn prefix(&self) -> Option<&Affine3A> {
+        self.prefix.as_ref()
+    }
+
+    pub fn suffix(&self) -> Option<&Affine3A> {
+        self.suffix.as_ref()
+    }
+
+    pub fn inner(&self) -> &FK {
+        &self.inner
+    }
+}
+
+impl<const N: usize, FK: FKChain<N>> FKChain<N> for TransformedFK<N, FK> {
+    type Error = FK::Error;
+
+    fn fk(&self, q: &SRobotQ<N>) -> Result<[Affine3A; N], Self::Error> {
+        let mut frames = self.inner.fk(q)?;
+        if let Some(pre) = &self.prefix {
+            for f in &mut frames {
+                *f = *pre * *f;
+            }
+        }
+        Ok(frames)
+    }
+
+    fn fk_end(&self, q: &SRobotQ<N>) -> Result<Affine3A, Self::Error> {
+        let mut end = self.inner.fk_end(q)?;
+        if let Some(pre) = &self.prefix {
+            end = *pre * end;
+        }
+        if let Some(suf) = &self.suffix {
+            end = end * *suf;
+        }
+        Ok(end)
+    }
+
+    fn joint_axes_positions(
+        &self,
+        q: &SRobotQ<N>,
+    ) -> Result<([Vec3A; N], [Vec3A; N], Vec3A), Self::Error> {
+        let (mut axes, mut positions, inner_p_ee) = self.inner.joint_axes_positions(q)?;
+
+        if let Some(pre) = &self.prefix {
+            let rot = pre.matrix3;
+            let t = Vec3A::from(pre.translation);
+            for i in 0..N {
+                axes[i] = rot * axes[i];
+                positions[i] = rot * positions[i] + t;
+            }
+        }
+
+        let p_ee = if self.prefix.is_some() || self.suffix.is_some() {
+            self.fk_end(q)?.translation
+        } else {
+            inner_p_ee
+        };
+
+        Ok((axes, positions, p_ee))
+    }
+}
+
+/// Wraps an `FKChain<N>` and prepends a prismatic (linear) joint, producing
+/// an `FKChain<M>` where `M = N + 1`.
+///
+/// The prismatic joint always acts first in the kinematic chain — it
+/// translates the entire arm along `axis` (world frame).  The
+/// `q_index_first` flag only controls where the prismatic value is read
+/// from in `SRobotQ<M>`: when `true` it is `q[0]`, when `false` it is
+/// `q[M-1]`.
+///
+/// Jacobian columns for the prismatic joint are `[axis; 0]` (pure linear,
+/// no angular contribution).  Because the prismatic uniformly shifts all
+/// positions, the revolute Jacobian columns are identical to the inner
+/// chain's.
+#[derive(Debug, Clone)]
+pub struct PrismaticFK<const M: usize, const N: usize, FK: FKChain<N>> {
+    inner: FK,
+    axis: Vec3A,
+    q_index_first: bool,
+}
+
+impl<const M: usize, const N: usize, FK: FKChain<N>> PrismaticFK<M, N, FK> {
+    pub fn new(inner: FK, axis: Vec3A, q_index_first: bool) -> Self {
+        assert!(M == N + 1, "M must equal N + 1");
+        Self {
+            inner,
+            axis,
+            q_index_first,
+        }
+    }
+
+    pub fn inner(&self) -> &FK {
+        &self.inner
+    }
+
+    pub fn axis(&self) -> Vec3A {
+        self.axis
+    }
+
+    pub fn q_index_first(&self) -> bool {
+        self.q_index_first
+    }
+
+    fn split_q(&self, q: &SRobotQ<M>) -> (f32, SRobotQ<N>) {
+        let mut inner = [0.0f32; N];
+        if self.q_index_first {
+            inner.copy_from_slice(&q.0[1..M]);
+            (q.0[0], SRobotQ(inner))
+        } else {
+            inner.copy_from_slice(&q.0[..N]);
+            (q.0[M - 1], SRobotQ(inner))
+        }
+    }
+
+    fn prismatic_col(&self) -> usize {
+        if self.q_index_first { 0 } else { N }
+    }
+
+    fn revolute_offset(&self) -> usize {
+        if self.q_index_first { 1 } else { 0 }
+    }
+}
+
+impl<const M: usize, const N: usize, FK: FKChain<N>> FKChain<M> for PrismaticFK<M, N, FK> {
+    type Error = FK::Error;
+
+    fn fk(&self, q: &SRobotQ<M>) -> Result<[Affine3A; M], Self::Error> {
+        let (q_p, inner_q) = self.split_q(q);
+        let offset = q_p * self.axis;
+        let inner_frames = self.inner.fk(&inner_q)?;
+        let mut out = [Affine3A::IDENTITY; M];
+
+        out[0] = Affine3A::from_translation(offset.into());
+        for i in 0..N {
+            let mut f = inner_frames[i];
+            f.translation += offset;
+            out[i + 1] = f;
+        }
+
+        Ok(out)
+    }
+
+    fn fk_end(&self, q: &SRobotQ<M>) -> Result<Affine3A, Self::Error> {
+        let (q_p, inner_q) = self.split_q(q);
+        let mut end = self.inner.fk_end(&inner_q)?;
+        end.translation += q_p * self.axis;
+        Ok(end)
+    }
+
+    fn joint_axes_positions(
+        &self,
+        q: &SRobotQ<M>,
+    ) -> Result<([Vec3A; M], [Vec3A; M], Vec3A), Self::Error> {
+        let (q_p, inner_q) = self.split_q(q);
+        let offset = q_p * self.axis;
+        let (inner_axes, inner_pos, inner_p_ee) = self.inner.joint_axes_positions(&inner_q)?;
+
+        let mut axes = [Vec3A::ZERO; M];
+        let mut positions = [Vec3A::ZERO; M];
+
+        axes[0] = self.axis;
+        for i in 0..N {
+            axes[i + 1] = inner_axes[i];
+            positions[i + 1] = inner_pos[i] + offset;
+        }
+
+        Ok((axes, positions, inner_p_ee + offset))
+    }
+
+    fn jacobian(&self, q: &SRobotQ<M>) -> Result<[[f32; M]; 6], Self::Error> {
+        let (_q_p, inner_q) = self.split_q(q);
+        let inner_j = self.inner.jacobian(&inner_q)?;
+        let p_col = self.prismatic_col();
+        let r_off = self.revolute_offset();
+
+        let mut j = [[0.0f32; M]; 6];
+        j[0][p_col] = self.axis.x;
+        j[1][p_col] = self.axis.y;
+        j[2][p_col] = self.axis.z;
+
+        for row in 0..6 {
+            for col in 0..N {
+                j[row][col + r_off] = inner_j[row][col];
+            }
+        }
+
+        Ok(j)
+    }
+
+    fn jacobian_dot(
+        &self,
+        q: &SRobotQ<M>,
+        qdot: &SRobotQ<M>,
+    ) -> Result<[[f32; M]; 6], Self::Error> {
+        let (_q_p, inner_q) = self.split_q(q);
+        let (_qdot_p, inner_qdot) = self.split_q(qdot);
+        let inner_jd = self.inner.jacobian_dot(&inner_q, &inner_qdot)?;
+        let r_off = self.revolute_offset();
+
+        let mut jd = [[0.0f32; M]; 6];
+        for row in 0..6 {
+            for col in 0..N {
+                jd[row][col + r_off] = inner_jd[row][col];
+            }
+        }
+
+        Ok(jd)
+    }
+
+    fn jacobian_ddot(
+        &self,
+        q: &SRobotQ<M>,
+        qdot: &SRobotQ<M>,
+        qddot: &SRobotQ<M>,
+    ) -> Result<[[f32; M]; 6], Self::Error> {
+        let (_q_p, inner_q) = self.split_q(q);
+        let (_qdot_p, inner_qdot) = self.split_q(qdot);
+        let (_qddot_p, inner_qddot) = self.split_q(qddot);
+        let inner_jdd = self
+            .inner
+            .jacobian_ddot(&inner_q, &inner_qdot, &inner_qddot)?;
+        let r_off = self.revolute_offset();
+
+        let mut jdd = [[0.0f32; M]; 6];
+        for row in 0..6 {
+            for col in 0..N {
+                jdd[row][col + r_off] = inner_jdd[row][col];
+            }
+        }
+
+        Ok(jdd)
     }
 }

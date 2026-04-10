@@ -1,6 +1,6 @@
+use deke_types::SRobotQ;
 use kiddo::KdTree;
 use kiddo::SquaredEuclidean;
-use deke_types::SRobotQ;
 
 pub(crate) struct RrtTree<const N: usize> {
     nodes: Vec<SRobotQ<N>>,

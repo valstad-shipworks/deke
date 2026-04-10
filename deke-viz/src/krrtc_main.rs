@@ -8,14 +8,18 @@ deke_cricket::cricket!(
 );
 
 fn main() {
-    use r2000ic270f::*;
     use deke_types::{FKChain as _, Planner as _, SRobotQ};
     use deke_viz::{LinkMesh, RobotMeshes, affine_from_xyz_rpy};
+    use r2000ic270f::*;
 
-    let asset_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../robot_assets/robots/r2000ic270f/assets");
+    let asset_dir = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../robot_assets/robots/r2000ic270f/assets"
+    );
 
     let load_stl = |name: &str| -> Vec<u8> {
-        std::fs::read(format!("{asset_dir}/{name}.stl")).expect(&format!("failed to read {name}.stl"))
+        std::fs::read(format!("{asset_dir}/{name}.stl"))
+            .expect(&format!("failed to read {name}.stl"))
     };
 
     let meshes: RobotMeshes<{ DOF }> = RobotMeshes {
@@ -86,14 +90,14 @@ fn main() {
     };
     println!("kinematic limits (per joint):");
     for (i, jl) in kin_limits.joints.iter().enumerate() {
-        println!("  [{}] v_max={:.2} a_max={:.2} j_max={:.2}", i, jl.v_max, jl.a_max, jl.j_max);
+        println!(
+            "  [{}] v_max={:.2} a_max={:.2} j_max={:.2}",
+            i, jl.v_max, jl.a_max, jl.j_max
+        );
     }
 
-    let settings = deke_rrt::KrrtcSettings::new(
-        SRobotQ(JOINT_LOWER),
-        SRobotQ(JOINT_UPPER),
-        kin_limits,
-    );
+    let settings =
+        deke_rrt::KrrtcSettings::new(SRobotQ(JOINT_LOWER), SRobotQ(JOINT_UPPER), kin_limits);
     let planner = krrtc(settings);
 
     println!("planning...");
@@ -112,22 +116,32 @@ fn main() {
 
     println!("path has {} waypoints:", path.len());
     for (i, q) in path.iter().enumerate() {
-        let sq = deke_types::SRobotQ::<{ DOF }>::try_from(q.as_slice().unwrap()).unwrap();
-        let tcp = fk.fk(&sq).unwrap()[DOF - 1].translation;
-        println!("  [{i}] joints={:?}  tcp=({:.3}, {:.3}, {:.3})", q.as_slice().unwrap(), tcp.x, tcp.y, tcp.z);
+        let tcp = fk.fk(q).unwrap()[DOF - 1].translation;
+        println!(
+            "  [{i}] joints={:?}  tcp=({:.3}, {:.3}, {:.3})",
+            q.0,
+            tcp.x,
+            tcp.y,
+            tcp.z
+        );
     }
 
+    let robot_path = path.to_robot_path();
     let slow_velocity = JOINT_VELOCITY.map(|v| v * 0.1);
-    let seg_times = deke_viz::segment_times(&path, &slow_velocity);
+    let seg_times = deke_viz::segment_times(&robot_path, &slow_velocity);
     let total_time: f64 = seg_times.iter().sum();
-    println!("estimated playback time: {:.2}s ({} segments)", total_time, seg_times.len());
+    println!(
+        "estimated playback time: {:.2}s ({} segments)",
+        total_time,
+        seg_times.len()
+    );
 
     println!("logging tcp trace...");
-    deke_viz::log_path_tcp::<{ DOF }>(&rec, "path/tcp_trace", &path, &fk)
+    deke_viz::log_path_tcp::<{ DOF }>(&rec, "path/tcp_trace", &robot_path, &fk)
         .expect("failed to log tcp path");
 
     println!("logging waypoints...");
-    deke_viz::log_waypoints::<{ DOF }>(&rec, "path/waypoints", &path, &fk)
+    deke_viz::log_waypoints::<{ DOF }>(&rec, "path/waypoints", &robot_path, &fk)
         .expect("failed to log waypoints");
 
     println!("logging realtime playback...");

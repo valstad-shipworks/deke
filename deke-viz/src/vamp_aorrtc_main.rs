@@ -8,14 +8,18 @@ deke_cricket::cricket!(
 );
 
 fn main() {
-    use r2000ic270f::*;
     use deke_types::FKChain as _;
     use deke_viz::{LinkMesh, RobotMeshes, affine_from_xyz_rpy};
+    use r2000ic270f::*;
 
-    let asset_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../robot_assets/robots/r2000ic270f/assets");
+    let asset_dir = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../robot_assets/robots/r2000ic270f/assets"
+    );
 
     let load_stl = |name: &str| -> Vec<u8> {
-        std::fs::read(format!("{asset_dir}/{name}.stl")).expect(&format!("failed to read {name}.stl"))
+        std::fs::read(format!("{asset_dir}/{name}.stl"))
+            .expect(&format!("failed to read {name}.stl"))
     };
 
     let meshes: RobotMeshes<{ DOF }> = RobotMeshes {
@@ -151,36 +155,50 @@ fn main() {
         }
     };
 
-    let waypoints: Vec<deke_types::RobotQ> = vamp_path
+    let waypoints: Vec<deke_types::SRobotQ<{ DOF }>> = vamp_path
         .iter()
-        .map(|cfg| ndarray::Array1::from_vec(cfg.to_vec()))
+        .map(|cfg| {
+            let mut arr = [0.0f32; DOF];
+            arr.copy_from_slice(&cfg[..DOF]);
+            deke_types::SRobotQ(arr)
+        })
         .collect();
-    let path = deke_types::RobotPath::new(waypoints).expect("invalid path");
+    let path = deke_types::SRobotPath::new(waypoints).expect("invalid path");
 
     let wreck_validator = validator(wreck_env);
     let fk = deke_types::URDFChain::new(URDF_JOINTS);
 
     println!("path has {} waypoints:", path.len());
-    for (i, q) in path.iter().enumerate() {
-        let sq = deke_types::SRobotQ::<{ DOF }>::try_from(q.as_slice().unwrap()).unwrap();
-        let tcp = fk.fk(&sq).unwrap()[DOF - 1].translation;
-        println!("  [{i}] joints={:?}  tcp=({:.3}, {:.3}, {:.3})", q.as_slice().unwrap(), tcp.x, tcp.y, tcp.z);
+    for (i, sq) in path.iter().enumerate() {
+        let tcp = fk.fk(sq).unwrap()[DOF - 1].translation;
+        println!(
+            "  [{i}] joints={:?}  tcp=({:.3}, {:.3}, {:.3})",
+            sq.0,
+            tcp.x,
+            tcp.y,
+            tcp.z
+        );
     }
 
     let slow_velocity = JOINT_VELOCITY.map(|v| v * 0.1);
-    let seg_times = deke_viz::segment_times(&path, &slow_velocity);
+    let rp = path.to_robot_path();
+    let seg_times = deke_viz::segment_times(&rp, &slow_velocity);
     let total_time: f64 = seg_times.iter().sum();
-    println!("estimated playback time: {:.2}s ({} segments)", total_time, seg_times.len());
+    println!(
+        "estimated playback time: {:.2}s ({} segments)",
+        total_time,
+        seg_times.len()
+    );
 
     deke_viz::log_collider(&rec, "obstacle", wreck_validator.1.environment())
         .expect("failed to log obstacle");
 
     println!("logging tcp trace...");
-    deke_viz::log_path_tcp::<{ DOF }>(&rec, "path/tcp_trace", &path, &fk)
+    deke_viz::log_path_tcp::<{ DOF }>(&rec, "path/tcp_trace", &rp, &fk)
         .expect("failed to log tcp path");
 
     println!("logging waypoints...");
-    deke_viz::log_waypoints::<{ DOF }>(&rec, "path/waypoints", &path, &fk)
+    deke_viz::log_waypoints::<{ DOF }>(&rec, "path/waypoints", &rp, &fk)
         .expect("failed to log waypoints");
 
     println!("logging realtime playback...");

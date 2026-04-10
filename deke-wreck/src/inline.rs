@@ -1,11 +1,16 @@
-use glam::Affine3A;
 use deke_types::{DekeError, DekeResult, SRobotQ, Validator};
+use glam::Affine3A;
 use wreck::{Collider, ColliderComponent, soa::SpheresSoA};
 
 pub trait InlinedRobot<const N: usize>: Send + Sync + 'static {
     fn name(&self) -> &str;
     fn clone_box(&self) -> Box<dyn InlinedRobot<N>>;
-    fn validate(&mut self, q: SRobotQ<N>, env: &Collider, ee_attachments: &[Collider]) -> DekeResult<()>;
+    fn validate(
+        &mut self,
+        q: SRobotQ<N>,
+        env: &Collider,
+        ee_attachments: &[Collider],
+    ) -> DekeResult<()>;
     fn spheres(&self, q: SRobotQ<N>) -> SpheresSoA;
     fn debug_self_collisions(&self, q: SRobotQ<N>) -> Vec<(usize, usize)>;
     fn eefk(&self, q: SRobotQ<N>) -> Affine3A;
@@ -17,7 +22,7 @@ pub trait InlinedRobot<const N: usize>: Send + Sync + 'static {
 pub struct InlinedWreckValidator<const N: usize> {
     robot: Box<dyn InlinedRobot<N>>,
     ee_attachments: Vec<Collider>,
-    environment: Collider
+    environment: Collider,
 }
 
 impl<const N: usize> std::fmt::Debug for InlinedWreckValidator<N> {
@@ -42,7 +47,11 @@ impl<const N: usize> Clone for InlinedWreckValidator<N> {
 
 impl<const N: usize> InlinedWreckValidator<N> {
     pub fn new(robot: Box<dyn InlinedRobot<N>>, env: Collider) -> Self {
-        Self { robot, environment: env, ee_attachments: Vec::new() }
+        Self {
+            robot,
+            environment: env,
+            ee_attachments: Vec::new(),
+        }
     }
 
     pub fn spheres(&self, q: SRobotQ<N>) -> SpheresSoA {
@@ -90,7 +99,8 @@ impl<const N: usize> Validator<N> for InlinedWreckValidator<N> {
         q: A,
     ) -> DekeResult<()> {
         let q = q.try_into().map_err(|e| e.into())?;
-        self.robot.validate(q, &self.environment, &self.ee_attachments)
+        self.robot
+            .validate(q, &self.environment, &self.ee_attachments)
     }
 
     fn validate_motion(&mut self, qs: &[SRobotQ<N>]) -> DekeResult<()> {

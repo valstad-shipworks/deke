@@ -1,7 +1,7 @@
-use glam::Affine3A;
+use glam::{Affine3A, Vec3A};
 
 use crate::{DHChain, DHJoint, HPChain, HPJoint, URDFChain, URDFJoint};
-use crate::{FKChain, DekeError, DekeResult, SRobotQ};
+use crate::{DekeError, DekeResult, FKChain, SRobotQ};
 
 macro_rules! dynamic_fk {
     ($name:ident, $chain:ident, $joint:ident) => {
@@ -109,6 +109,16 @@ macro_rules! dynamic_fk {
                         }),
                     }
                 }
+
+                fn joint_axes_positions(&self, q: &SRobotQ<$n>) -> Result<([Vec3A; $n], [Vec3A; $n], Vec3A), Self::Error> {
+                    match self {
+                        Self::$variant(chain) => FKChain::<$n>::joint_axes_positions(chain, q).map_err(Into::into),
+                        _ => Err(DekeError::ShapeMismatch {
+                            expected: self.dof(),
+                            found: $n,
+                        }),
+                    }
+                }
             }
 
             impl From<$chain<$n>> for $name {
@@ -125,20 +135,30 @@ dynamic_fk!(DynamicHPChain, HPChain, HPJoint);
 dynamic_fk!(DynamicURDFChain, URDFChain, URDFJoint);
 
 impl DynamicDHChain {
-    pub fn from_chain(chain: impl Into<Self>) -> Self { chain.into() }
+    pub fn from_chain(chain: impl Into<Self>) -> Self {
+        chain.into()
+    }
 }
 
 impl DynamicHPChain {
-    pub fn from_chain(chain: impl Into<Self>) -> Self { chain.into() }
+    pub fn from_chain(chain: impl Into<Self>) -> Self {
+        chain.into()
+    }
 }
 
 impl DynamicURDFChain {
-    pub fn from_chain(chain: impl Into<Self>) -> Self { chain.into() }
+    pub fn from_chain(chain: impl Into<Self>) -> Self {
+        chain.into()
+    }
 }
 
 trait ErasedFK<const N: usize>: Send + Sync {
     fn fk(&self, q: &SRobotQ<N>) -> Result<[Affine3A; N], DekeError>;
     fn fk_end(&self, q: &SRobotQ<N>) -> Result<Affine3A, DekeError>;
+    fn joint_axes_positions(
+        &self,
+        q: &SRobotQ<N>,
+    ) -> Result<([Vec3A; N], [Vec3A; N], Vec3A), DekeError>;
     fn clone_box(&self) -> Box<dyn ErasedFK<N>>;
 }
 
@@ -149,6 +169,13 @@ impl<const N: usize, FK: FKChain<N> + 'static> ErasedFK<N> for FK {
 
     fn fk_end(&self, q: &SRobotQ<N>) -> Result<Affine3A, DekeError> {
         FKChain::fk_end(self, q).map_err(Into::into)
+    }
+
+    fn joint_axes_positions(
+        &self,
+        q: &SRobotQ<N>,
+    ) -> Result<([Vec3A; N], [Vec3A; N], Vec3A), DekeError> {
+        FKChain::joint_axes_positions(self, q).map_err(Into::into)
     }
 
     fn clone_box(&self) -> Box<dyn ErasedFK<N>> {
@@ -179,5 +206,12 @@ impl<const N: usize> FKChain<N> for BoxFK<N> {
 
     fn fk_end(&self, q: &SRobotQ<N>) -> Result<Affine3A, DekeError> {
         self.0.fk_end(q)
+    }
+
+    fn joint_axes_positions(
+        &self,
+        q: &SRobotQ<N>,
+    ) -> Result<([Vec3A; N], [Vec3A; N], Vec3A), DekeError> {
+        self.0.joint_axes_positions(q)
     }
 }

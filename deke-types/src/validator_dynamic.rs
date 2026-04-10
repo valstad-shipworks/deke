@@ -1,4 +1,4 @@
-use crate::{JointValidator, DekeError, DekeResult, SRobotQ, Validator};
+use crate::{DekeError, DekeResult, JointValidator, SRobotQ, Validator};
 
 macro_rules! dynamic_joint_new {
     ($lower:ident, $upper:ident, $($variant:ident $n:literal),+) => {
@@ -27,10 +27,17 @@ pub enum DynamicJointValidator {
 impl DynamicJointValidator {
     pub fn try_new(lower: Vec<f32>, upper: Vec<f32>) -> DekeResult<Self> {
         if lower.len() != upper.len() {
-            return Err(DekeError::ShapeMismatch { expected: lower.len(), found: upper.len() });
+            return Err(DekeError::ShapeMismatch {
+                expected: lower.len(),
+                found: upper.len(),
+            });
         }
-        dynamic_joint_new!(lower, upper, J1 1, J2 2, J3 3, J4 4, J5 5, J6 6, J7 7, J8 8)
-            .ok_or(DekeError::ShapeMismatch { expected: 8, found: lower.len() })
+        dynamic_joint_new!(lower, upper, J1 1, J2 2, J3 3, J4 4, J5 5, J6 6, J7 7, J8 8).ok_or(
+            DekeError::ShapeMismatch {
+                expected: 8,
+                found: lower.len(),
+            },
+        )
     }
 
     pub fn dof(&self) -> usize {
@@ -155,5 +162,7 @@ macro_rules! impl_dynamic_joint {
 impl_dynamic_joint!(1 J1, 2 J2, 3 J3, 4 J4, 5 J5, 6 J6, 7 J7, 8 J8);
 
 impl DynamicJointValidator {
-    pub fn from_validator(v: impl Into<Self>) -> Self { v.into() }
+    pub fn from_validator(v: impl Into<Self>) -> Self {
+        v.into()
+    }
 }

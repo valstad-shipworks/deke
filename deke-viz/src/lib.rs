@@ -126,7 +126,11 @@ pub struct RobotMeshes<const N: usize> {
 
 impl<const N: usize> RobotMeshes<N> {
     /// Log the static base mesh (it never moves).
-    pub fn log_base_static(&self, rec: &RecordingStream, entity_path: &str) -> RecordingStreamResult<()> {
+    pub fn log_base_static(
+        &self,
+        rec: &RecordingStream,
+        entity_path: &str,
+    ) -> RecordingStreamResult<()> {
         if let Some(base) = &self.base {
             let tf = base.visual_origin;
             log_mesh_at(rec, entity_path, &base.stl_data, tf)?;
@@ -157,7 +161,10 @@ impl<const N: usize> RobotMeshes<N> {
         for (i, link) in self.links.iter().enumerate() {
             rec.log_static(
                 format!("{entity_path}/link_{i}"),
-                &rerun::Asset3D::from_file_contents(link.stl_data.clone(), Some(rerun::MediaType::STL)),
+                &rerun::Asset3D::from_file_contents(
+                    link.stl_data.clone(),
+                    Some(rerun::MediaType::STL),
+                ),
             )?;
         }
         Ok(())
@@ -173,9 +180,10 @@ pub fn log_path_tcp<const N: usize>(
     fk: &impl deke_types::FKChain<N>,
 ) -> RecordingStreamResult<()> {
     let points: Vec<[f32; 3]> = path
-        .iter()
-        .filter_map(|q| {
-            let sq: deke_types::SRobotQ<N> = q.as_slice().unwrap().try_into().ok()?;
+        .rows()
+        .into_iter()
+        .filter_map(|row| {
+            let sq = deke_types::SRobotQ::<N>::try_from(row.as_slice()?).ok()?;
             let transforms = fk.fk(&sq).ok()?;
             let t = transforms[N - 1].translation;
             Some([t.x, t.y, t.z])
@@ -192,9 +200,10 @@ pub fn log_waypoints<const N: usize>(
     fk: &impl deke_types::FKChain<N>,
 ) -> RecordingStreamResult<()> {
     let points: Vec<[f32; 3]> = path
-        .iter()
-        .filter_map(|q| {
-            let sq: deke_types::SRobotQ<N> = q.as_slice().unwrap().try_into().ok()?;
+        .rows()
+        .into_iter()
+        .filter_map(|row| {
+            let sq = deke_types::SRobotQ::<N>::try_from(row.as_slice()?).ok()?;
             let transforms = fk.fk(&sq).ok()?;
             let t = transforms[N - 1].translation;
             Some([t.x, t.y, t.z])
@@ -240,8 +249,11 @@ pub fn log_path_spheres<const N: usize>(
     path: &deke_types::RobotPath,
     validator: &deke_wreck::InlinedWreckValidator<N>,
 ) -> RecordingStreamResult<()> {
-    for (i, q) in path.iter().enumerate() {
-        let Ok(sq) = deke_types::SRobotQ::<N>::try_from(q.as_slice().unwrap()) else {
+    for (i, row) in path.rows().into_iter().enumerate() {
+        let Some(slice) = row.as_slice() else {
+            continue;
+        };
+        let Ok(sq) = deke_types::SRobotQ::<N>::try_from(slice) else {
             continue;
         };
         rec.set_time_sequence("step", i as i64);
@@ -253,10 +265,10 @@ pub fn log_path_spheres<const N: usize>(
 /// Compute the time each segment takes given per-joint max velocities (rad/s).
 /// Each segment's duration is the slowest joint: `max_j(|dq_j| / v_max_j)`.
 pub fn segment_times(path: &deke_types::RobotPath, joint_velocities: &[f32]) -> Vec<f64> {
-    path.segments()
-        .map(|(a, b)| {
-            let a = a.as_slice().unwrap();
-            let b = b.as_slice().unwrap();
+    (0..path.nrows().saturating_sub(1))
+        .map(|i| {
+            let a = path.row(i);
+            let b = path.row(i + 1);
             a.iter()
                 .zip(b.iter())
                 .zip(joint_velocities.iter())
@@ -267,16 +279,19 @@ pub fn segment_times(path: &deke_types::RobotPath, joint_velocities: &[f32]) -> 
 }
 
 /// Log meshes and chain line along a path in real-time.
+///
+/// Expects an `SRobotPath` so the path can be densified and iterated as typed waypoints.
 pub fn log_path_realtime<const N: usize>(
     rec: &RecordingStream,
     entity_path: &str,
-    path: &deke_types::RobotPath,
+    path: &deke_types::SRobotPath<N>,
     fk: &impl deke_types::FKChain<N>,
     meshes: Option<&RobotMeshes<N>>,
     joint_velocities: &[f32; N],
 ) -> RecordingStreamResult<()> {
     let dense = path.densify(0.02);
-    let times = segment_times(&dense, joint_velocities);
+    let dense_rp = dense.to_robot_path();
+    let times = segment_times(&dense_rp, joint_velocities);
 
     if let Some(m) = meshes {
         m.log_link_assets_static(rec, &format!("{entity_path}/mesh"))?;
@@ -286,11 +301,7 @@ pub fn log_path_realtime<const N: usize>(
     let mut t = 0.0_f64;
     let wall_start = std::time::Instant::now();
 
-    for (i, q) in dense.iter().enumerate() {
-        let Ok(sq) = deke_types::SRobotQ::<N>::try_from(q.as_slice().unwrap()) else {
-            continue;
-        };
-
+    for (i, sq) in dense.iter().enumerate() {
         let wall_target = std::time::Duration::from_secs_f64(t);
         let elapsed = wall_start.elapsed();
         if wall_target > elapsed {
@@ -299,7 +310,7 @@ pub fn log_path_realtime<const N: usize>(
 
         rec.set_duration_secs("time", t);
 
-        if let Ok(fk_transforms) = fk.fk(&sq) {
+        if let Ok(fk_transforms) = fk.fk(sq) {
             if let Some(m) = meshes {
                 m.log_links(rec, &format!("{entity_path}/mesh"), &fk_transforms)?;
             }
@@ -360,7 +371,11 @@ fn log_mesh_at(
     )
 }
 
-fn log_transform(rec: &RecordingStream, entity_path: &str, tf: Affine3A) -> RecordingStreamResult<()> {
+fn log_transform(
+    rec: &RecordingStream,
+    entity_path: &str,
+    tf: Affine3A,
+) -> RecordingStreamResult<()> {
     let t = tf.translation;
     let quat = glam::Quat::from_mat3a(&tf.matrix3);
     rec.log(

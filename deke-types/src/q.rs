@@ -833,3 +833,14 @@ impl<const N: usize> TryFrom<RobotQ> for SRobotQ<N> {
         Ok(Self(arr))
     }
 }
+
+impl<const N: usize> From<&SRobotQ<N>> for RobotQ {
+    #[inline]
+    fn from(sq: &SRobotQ<N>) -> RobotQ {
+        sq.to_robotq()
+    }
+}
+
+pub fn robotq<T: Into<f64>>(vals: impl IntoIterator<Item = T>) -> RobotQ {
+    vals.into_iter().map(|v| v.into() as f32).collect()
+}

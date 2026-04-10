@@ -1,4 +1,4 @@
-use deke_types::{DekeError, DekeResult, RobotPath, SRobotQ, Validator};
+use deke_types::{DekeError, DekeResult, SRobotPath, SRobotQ, Validator};
 use tinyrand::Rand;
 
 use crate::RrtDiagnostic;
@@ -298,15 +298,14 @@ pub(crate) fn solve<const N: usize>(
     validator: &mut impl Validator<N>,
     settings: &KrrtcSettings<N>,
     rng: &mut impl Rand,
-) -> (DekeResult<RobotPath>, RrtDiagnostic) {
+) -> (DekeResult<SRobotPath<N>>, RrtDiagnostic) {
     let timer = std::time::Instant::now();
     let coeffs = settings.kin_limits.velocity_coeffs();
 
     let direct_cost = time_optimal_cost(start, goal, &settings.kin_limits);
     if direct_cost < 1e-10 {
-        let path: RobotPath = vec![(*start).into()].into_iter().collect();
         return (
-            Ok(path),
+            Ok(SRobotPath::from_two(*start, *start)),
             RrtDiagnostic {
                 iterations: 0,
                 start_tree_size: 1,
@@ -318,9 +317,8 @@ pub(crate) fn solve<const N: usize>(
     }
 
     if validate_edge(start, goal, settings.resolution, validator).is_ok() {
-        let path: RobotPath = vec![(*start).into(), (*goal).into()].into_iter().collect();
         return (
-            Ok(path),
+            Ok(SRobotPath::from_two(*start, *goal)),
             RrtDiagnostic {
                 iterations: 0,
                 start_tree_size: 1,
@@ -394,7 +392,7 @@ pub(crate) fn solve<const N: usize>(
             }
 
             let cost = kinematic_path_cost(&waypoints, &settings.kin_limits);
-            let path: RobotPath = waypoints.into_iter().map(|q| q.into()).collect();
+            let path = SRobotPath::new(waypoints).unwrap();
             return (
                 Ok(path),
                 RrtDiagnostic {

@@ -253,9 +253,8 @@ mod tests {
 
             if r_ok && v_ok {
                 let r_path = r_result.unwrap();
-                let r_start: [f32; 6] = deke_types::SRobotQ::force_from_robotq(&r_path[0]).into();
-                let r_goal: [f32; 6] =
-                    deke_types::SRobotQ::force_from_robotq(&r_path[r_path.len() - 1]).into();
+                let r_start: [f32; 6] = r_path[0].into();
+                let r_goal: [f32; 6] = r_path[r_path.len() - 1].into();
 
                 assert!(
                     r_start
@@ -285,16 +284,15 @@ mod tests {
 
                 let dense = r_path.densify(0.02);
                 let mut check_v = v.clone();
-                for (wi, wq) in dense.iter().enumerate() {
-                    let sq = deke_types::SRobotQ::<6>::force_from_robotq(wq);
-                    let rv_ok = check_v.validate(sq);
+                for (wi, sq) in dense.iter().enumerate() {
+                    let rv_ok = check_v.validate(*sq);
                     assert!(
                         rv_ok.is_ok(),
                         "prob {i}: deke path waypoint {wi}/{} collides (deke): {:?}",
                         dense.len(),
                         rv_ok.unwrap_err()
                     );
-                    let arr: [f32; 6] = sq.into();
+                    let arr: [f32; 6] = (*sq).into();
                     assert!(
                         vamp_robot.validate(&arr, &vamp_env, true),
                         "prob {i}: deke path waypoint {wi}/{} rejected by vamp: {:?}",
@@ -469,9 +467,8 @@ mod tests {
             solved += 1;
 
             let path = result.unwrap();
-            let r_start: [f32; 6] = deke_types::SRobotQ::force_from_robotq(&path[0]).into();
-            let r_goal: [f32; 6] =
-                deke_types::SRobotQ::force_from_robotq(&path[path.len() - 1]).into();
+            let r_start: [f32; 6] = path[0].into();
+            let r_goal: [f32; 6] = path[path.len() - 1].into();
 
             assert!(
                 r_start
@@ -597,9 +594,8 @@ mod tests {
                 let r_path = result.unwrap();
                 let v_path = &vamp_result.as_ref().unwrap().path;
 
-                let r_start: [f32; 6] = deke_types::SRobotQ::force_from_robotq(&r_path[0]).into();
-                let r_goal: [f32; 6] =
-                    deke_types::SRobotQ::force_from_robotq(&r_path[r_path.len() - 1]).into();
+                let r_start: [f32; 6] = r_path[0].into();
+                let r_goal: [f32; 6] = r_path[r_path.len() - 1].into();
                 let v_start = v_path.get_config(0).unwrap();
                 let v_goal = v_path.get_config(v_path.len() - 1).unwrap();
 

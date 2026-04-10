@@ -1,37 +1,49 @@
-use crate::q::RobotQ;
-use crate::{DekeError, DekeResult};
+use ndarray::Array2;
 
-/// An ordered sequence of joint configurations representing a robot path.
+use crate::{DekeResult, SRobotQ};
+
+/// Dynamically-sized robot path as a 2D array (rows = waypoints, cols = joints).
+pub type RobotPath = Array2<f32>;
+
+/// Statically-sized robot path backed by `Vec<SRobotQ<N>>`.
+/// 
+/// SRobotPath is guranteed to have at least 2 waypoints, so it always has a defined start and end configuration.
 #[derive(Debug, Clone)]
-pub struct RobotPath {
-    waypoints: Vec<RobotQ>,
+pub struct SRobotPath<const N: usize> {
+    first: SRobotQ<N>,
+    last: SRobotQ<N>,
+    waypoints: Vec<SRobotQ<N>>,
 }
 
-impl RobotPath {
-    pub fn new(waypoints: Vec<RobotQ>) -> DekeResult<Self> {
-        if let Some(first) = waypoints.first() {
-            let n = first.len();
-            for q in waypoints.iter().skip(1) {
-                if q.len() != n {
-                    return Err(DekeError::ShapeMismatch {
-                        expected: n,
-                        found: q.len(),
-                    });
-                }
-            }
+impl<const N: usize> SRobotPath<N> {
+    pub fn new(waypoints: Vec<SRobotQ<N>>) -> DekeResult<Self> {
+        if waypoints.len() < 2 {
+            return Err(crate::DekeError::PathTooShort(waypoints.len()));
         }
-        Ok(Self { waypoints })
+        Ok(Self {
+            first: waypoints[0],
+            last: waypoints[waypoints.len() - 1],
+            waypoints,
+        })
     }
 
-    pub fn empty() -> Self {
+    pub fn new_prechecked(first: SRobotQ<N>, last: SRobotQ<N>, middle: Vec<SRobotQ<N>>) -> Self {
+        let mut waypoints = Vec::with_capacity(middle.len() + 2);
+        waypoints.push(first);
+        waypoints.extend(middle);
+        waypoints.push(last);
         Self {
-            waypoints: Vec::new(),
+            first,
+            last,
+            waypoints,
         }
-    }
+     }
 
-    pub fn with_capacity(cap: usize) -> Self {
+    pub fn from_two(start: SRobotQ<N>, goal: SRobotQ<N>) -> Self {
         Self {
-            waypoints: Vec::with_capacity(cap),
+            first: start,
+            last: goal,
+            waypoints: vec![start, goal],
         }
     }
 
@@ -39,118 +51,113 @@ impl RobotPath {
         self.waypoints.len()
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.waypoints.is_empty()
-    }
-
-    /// Number of joints per waypoint, or 0 if the path is empty.
-    pub fn ndof(&self) -> usize {
-        self.waypoints.first().map_or(0, |q| q.len())
-    }
-
-    pub fn get(&self, index: usize) -> Option<&RobotQ> {
+    pub fn get(&self, index: usize) -> Option<&SRobotQ<N>> {
         self.waypoints.get(index)
     }
 
-    pub fn first(&self) -> Option<&RobotQ> {
-        self.waypoints.first()
+    pub fn first(&self) -> &SRobotQ<N> {
+        &self.first
     }
 
-    pub fn last(&self) -> Option<&RobotQ> {
-        self.waypoints.last()
+    pub fn last(&self) -> &SRobotQ<N> {
+        &self.last
     }
 
-    pub fn iter(&self) -> std::slice::Iter<'_, RobotQ> {
+    pub fn iter(&self) -> std::slice::Iter<'_, SRobotQ<N>> {
         self.waypoints.iter()
     }
 
-    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, RobotQ> {
+    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, SRobotQ<N>> {
         self.waypoints.iter_mut()
     }
 
-    /// Iterator over consecutive pairs of waypoints.
-    pub fn segments(&self) -> impl Iterator<Item = (&RobotQ, &RobotQ)> {
+    pub fn segments(&self) -> impl Iterator<Item = (&SRobotQ<N>, &SRobotQ<N>)> {
         self.waypoints.windows(2).map(|w| (&w[0], &w[1]))
     }
 
-    pub fn push(&mut self, q: RobotQ) -> DekeResult<()> {
-        if let Some(first) = self.waypoints.first() {
-            if q.len() != first.len() {
-                return Err(DekeError::ShapeMismatch {
-                    expected: first.len(),
-                    found: q.len(),
-                });
-            }
-        }
+    pub fn push(&mut self, q: SRobotQ<N>) {
         self.waypoints.push(q);
-        Ok(())
     }
 
-    pub fn pop(&mut self) -> Option<RobotQ> {
-        self.waypoints.pop()
-    }
+    pub fn pop(&mut self) -> Option<SRobotQ<N>> {
+        if self.waypoints.len() > 2 {
+            let popped = self.waypoints.pop();
+            if let Some(p) = popped {
+                if let Some(last) = self.waypoints.last() {
+                    self.last = *last;
+                }
+                Some(p)
+            } else {
+                None
+            }
 
-    pub fn clear(&mut self) {
-        self.waypoints.clear();
+        } else {
+            None
+        }
     }
 
     pub fn truncate(&mut self, len: usize) {
+        if len < 2 {
+            return;
+        }
         self.waypoints.truncate(len);
+        if let Some(last) = self.waypoints.last() {
+            self.last = *last;
+        }
     }
 
     pub fn reverse(&mut self) {
         self.waypoints.reverse();
+        if let Some(first) = self.waypoints.first() {
+            self.first = *first;
+        }
+        if let Some(last) = self.waypoints.last() {
+            self.last = *last;
+        }
     }
 
     pub fn reversed(&self) -> Self {
-        let mut wps = self.waypoints.clone();
+        let mut wps = self.clone();
         wps.reverse();
-        Self { waypoints: wps }
+        wps
     }
 
-    /// Total arc length (sum of Euclidean distances between consecutive waypoints).
     pub fn arc_length(&self) -> f32 {
-        self.segments().map(|(a, b)| q_distance(a, b)).sum()
+        self.segments().map(|(a, b)| a.distance(b)).sum()
     }
 
-    /// Euclidean distance of each segment.
     pub fn segment_lengths(&self) -> Vec<f32> {
-        self.segments().map(|(a, b)| q_distance(a, b)).collect()
+        self.segments().map(|(a, b)| a.distance(b)).collect()
     }
 
-    /// Cumulative arc length at each waypoint, starting at 0.0.
     pub fn cumulative_lengths(&self) -> Vec<f32> {
         let mut cum = Vec::with_capacity(self.len());
         let mut total = 0.0;
         cum.push(0.0);
         for (a, b) in self.segments() {
-            total += q_distance(a, b);
+            total += a.distance(b);
             cum.push(total);
         }
         cum
     }
 
-    /// Maximum Euclidean distance between any two consecutive waypoints.
     pub fn max_segment_length(&self) -> f32 {
         self.segments()
-            .map(|(a, b)| q_distance(a, b))
+            .map(|(a, b)| a.distance(b))
             .fold(0.0, f32::max)
     }
 
-    /// Maximum per-joint deviation (L-inf norm) across any segment.
     pub fn max_joint_step(&self) -> f32 {
         self.segments()
-            .map(|(a, b)| q_linf_distance(a, b))
+            .map(|(a, b)| (*a - *b).linf_norm())
             .fold(0.0, f32::max)
     }
 
-    /// Linearly interpolate along the path by normalized parameter `t` in `[0, 1]`.
-    /// Returns `None` if the path has fewer than 2 waypoints.
-    pub fn sample(&self, t: f32) -> Option<RobotQ> {
+    pub fn sample(&self, t: f32) -> Option<SRobotQ<N>> {
         let n = self.len();
         if n < 2 {
             return if n == 1 {
-                Some(self.waypoints[0].clone())
+                Some(self.waypoints[0])
             } else {
                 None
             };
@@ -159,149 +166,216 @@ impl RobotPath {
         let t = t.clamp(0.0, 1.0);
         let total = self.arc_length();
         if total == 0.0 {
-            return Some(self.waypoints[0].clone());
+            return Some(self.waypoints[0]);
         }
 
         let target = t * total;
         let mut accumulated = 0.0;
 
         for (a, b) in self.segments() {
-            let seg_len = q_distance(a, b);
+            let seg_len = a.distance(b);
             if accumulated + seg_len >= target {
                 let local_t = if seg_len > 0.0 {
                     (target - accumulated) / seg_len
                 } else {
                     0.0
                 };
-                return Some(a + &((b - a) * local_t));
+                return Some(a.interpolate(b, local_t));
             }
             accumulated += seg_len;
         }
 
-        Some(self.waypoints.last().unwrap().clone())
+        Some(*self.waypoints.last().unwrap())
     }
 
-    /// Subdivide every segment so that no segment exceeds `max_dist`.
     pub fn densify(&self, max_dist: f32) -> Self {
         if self.len() < 2 {
             return self.clone();
         }
 
         let mut out = Vec::new();
-        out.push(self.waypoints[0].clone());
+        out.push(self.waypoints[0]);
 
         for (a, b) in self.segments() {
-            let d = q_distance(a, b);
-            let steps = (d / max_dist).ceil() as usize;
-            let steps = steps.max(1);
+            let d = a.distance(b);
+            let steps = (d / max_dist).ceil().max(1.0) as usize;
             for i in 1..=steps {
                 let t = i as f32 / steps as f32;
-                out.push(a + &((b - a) * t));
+                out.push(a.interpolate(b, t));
             }
         }
 
-        Self { waypoints: out }
+        Self::new(out).unwrap()
     }
 
-    /// Remove waypoints that are within `tol` of the line between their neighbors
-    /// (Ramer-Douglas-Peucker in joint space).
     pub fn simplify(&self, tol: f32) -> Self {
         if self.len() <= 2 {
             return self.clone();
         }
 
         let mut keep = vec![true; self.len()];
-        rdp_mark(&self.waypoints, 0, self.len() - 1, tol, &mut keep);
+        srdp_mark(&self.waypoints, 0, self.len() - 1, tol, &mut keep);
 
         let waypoints = self
             .waypoints
             .iter()
             .enumerate()
             .filter(|(i, _)| keep[*i])
-            .map(|(_, q)| q.clone())
+            .map(|(_, q)| *q)
             .collect();
 
-        Self { waypoints }
+        Self::new(waypoints).unwrap()
     }
 
-    /// Apply a function to every waypoint.
-    pub fn map_waypoints(&self, f: impl Fn(&RobotQ) -> RobotQ) -> Self {
-        Self {
-            waypoints: self.waypoints.iter().map(f).collect(),
+    pub fn to_robot_path(&self) -> RobotPath {
+        let n = self.waypoints.len();
+        let mut arr = RobotPath::zeros((n, N));
+        for (i, q) in self.waypoints.iter().enumerate() {
+            arr.row_mut(i).assign(&ndarray::ArrayView1::from(&q.0));
         }
+        arr
     }
 }
 
-impl std::ops::Index<usize> for RobotPath {
-    type Output = RobotQ;
+impl<const N: usize> std::ops::Index<usize> for SRobotPath<N> {
+    type Output = SRobotQ<N>;
     #[inline]
-    fn index(&self, i: usize) -> &RobotQ {
+    fn index(&self, i: usize) -> &SRobotQ<N> {
         &self.waypoints[i]
     }
 }
 
-impl std::ops::IndexMut<usize> for RobotPath {
+impl<const N: usize> std::ops::IndexMut<usize> for SRobotPath<N> {
     #[inline]
-    fn index_mut(&mut self, i: usize) -> &mut RobotQ {
+    fn index_mut(&mut self, i: usize) -> &mut SRobotQ<N> {
         &mut self.waypoints[i]
     }
 }
 
-impl FromIterator<RobotQ> for RobotPath {
-    fn from_iter<I: IntoIterator<Item = RobotQ>>(iter: I) -> Self {
-        Self {
-            waypoints: iter.into_iter().collect(),
-        }
-    }
-}
-
-impl IntoIterator for RobotPath {
-    type Item = RobotQ;
-    type IntoIter = std::vec::IntoIter<RobotQ>;
+impl<const N: usize> IntoIterator for SRobotPath<N> {
+    type Item = SRobotQ<N>;
+    type IntoIter = std::vec::IntoIter<SRobotQ<N>>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.waypoints.into_iter()
     }
 }
 
-impl<'a> IntoIterator for &'a RobotPath {
-    type Item = &'a RobotQ;
-    type IntoIter = std::slice::Iter<'a, RobotQ>;
+impl<'a, const N: usize> IntoIterator for &'a SRobotPath<N> {
+    type Item = &'a SRobotQ<N>;
+    type IntoIter = std::slice::Iter<'a, SRobotQ<N>>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.waypoints.iter()
     }
 }
 
-fn q_distance(a: &RobotQ, b: &RobotQ) -> f32 {
-    let diff = b - a;
-    diff.mapv(|x| x * x).sum().sqrt()
+impl<const N: usize> AsRef<[SRobotQ<N>]> for SRobotPath<N> {
+    fn as_ref(&self) -> &[SRobotQ<N>] {
+        &self.waypoints
+    }
 }
 
-fn q_linf_distance(a: &RobotQ, b: &RobotQ) -> f32 {
-    let diff = b - a;
-    diff.mapv(f32::abs).into_iter().fold(0.0, f32::max)
+impl<const N: usize> TryFrom<Vec<SRobotQ<N>>> for SRobotPath<N> {
+    type Error = crate::DekeError;
+
+    fn try_from(waypoints: Vec<SRobotQ<N>>) -> Result<Self, Self::Error> {
+        Self::new(waypoints)
+    }
 }
 
-fn rdp_mark(pts: &[RobotQ], start: usize, end: usize, tol: f32, keep: &mut [bool]) {
+impl<const N: usize> TryFrom<&[SRobotQ<N>]> for SRobotPath<N> {
+    type Error = crate::DekeError;
+
+    fn try_from(waypoints: &[SRobotQ<N>]) -> Result<Self, Self::Error> {
+        Self::new(waypoints.to_vec())
+    }
+}
+
+impl<const N: usize> TryFrom<&Vec<SRobotQ<N>>> for SRobotPath<N> {
+    type Error = crate::DekeError;
+
+    fn try_from(waypoints: &Vec<SRobotQ<N>>) -> Result<Self, Self::Error> {
+        Self::new(waypoints.clone())
+    }
+}
+
+impl<const N: usize> From<SRobotPath<N>> for RobotPath {
+    fn from(sp: SRobotPath<N>) -> Self {
+        sp.to_robot_path()
+    }
+}
+
+impl<const N: usize> From<&SRobotPath<N>> for RobotPath {
+    fn from(sp: &SRobotPath<N>) -> Self {
+        sp.to_robot_path()
+    }
+}
+
+impl<const N: usize> TryFrom<RobotPath> for SRobotPath<N> {
+    type Error = crate::DekeError;
+
+    fn try_from(arr: RobotPath) -> Result<Self, Self::Error> {
+        if arr.ncols() != N {
+            return Err(crate::DekeError::ShapeMismatch {
+                expected: N,
+                found: arr.ncols(),
+            });
+        }
+        let mut waypoints = Vec::with_capacity(arr.nrows());
+        for row in arr.rows() {
+            let mut q = [0.0f32; N];
+            q.copy_from_slice(row.as_slice().unwrap());
+            waypoints.push(SRobotQ(q));
+        }
+        Self::new(waypoints)
+    }
+}
+
+impl<const N: usize> TryFrom<&RobotPath> for SRobotPath<N> {
+    type Error = crate::DekeError;
+
+    fn try_from(arr: &RobotPath) -> Result<Self, Self::Error> {
+        if arr.ncols() != N {
+            return Err(crate::DekeError::ShapeMismatch {
+                expected: N,
+                found: arr.ncols(),
+            });
+        }
+        let mut waypoints = Vec::with_capacity(arr.nrows());
+        for row in arr.rows() {
+            let mut q = [0.0f32; N];
+            q.copy_from_slice(row.as_slice().unwrap());
+            waypoints.push(SRobotQ(q));
+        }
+        Self::new(waypoints)
+    }
+}
+
+fn srdp_mark<const N: usize>(
+    pts: &[SRobotQ<N>],
+    start: usize,
+    end: usize,
+    tol: f32,
+    keep: &mut [bool],
+) {
     if end <= start + 1 {
         return;
     }
 
-    let seg = &pts[end] - &pts[start];
-    let seg_len_sq: f32 = seg.mapv(|x| x * x).sum();
+    let seg = pts[end] - pts[start];
+    let seg_len_sq = seg.norm_squared();
 
     let mut max_dist = 0.0f32;
     let mut max_idx = start;
 
     for i in (start + 1)..end {
-        let v = &pts[i] - &pts[start];
+        let v = pts[i] - pts[start];
         let dist = if seg_len_sq < 1e-30 {
-            v.mapv(|x| x * x).sum().sqrt()
+            v.norm()
         } else {
             let t = (v.dot(&seg) / seg_len_sq).clamp(0.0, 1.0);
-            let proj = &v - &(&seg * t);
-            proj.mapv(|x| x * x).sum().sqrt()
+            (v - seg * t).norm()
         };
         if dist > max_dist {
             max_dist = dist;
@@ -311,8 +385,8 @@ fn rdp_mark(pts: &[RobotQ], start: usize, end: usize, tol: f32, keep: &mut [bool
 
     if max_dist > tol {
         keep[max_idx] = true;
-        rdp_mark(pts, start, max_idx, tol, keep);
-        rdp_mark(pts, max_idx, end, tol, keep);
+        srdp_mark(pts, start, max_idx, tol, keep);
+        srdp_mark(pts, max_idx, end, tol, keep);
     } else {
         for k in (start + 1)..end {
             keep[k] = false;

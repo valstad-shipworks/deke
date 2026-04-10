@@ -3,8 +3,8 @@ mod inline;
 pub use dynamic::DynamicWreckValidator;
 pub use inline::{InlinedRobot, InlinedWreckValidator};
 
+use deke_types::{DekeError, DekeResult, FKChain, SRobotQ, Validator};
 use glam::Affine3A;
-use deke_types::{FKChain, DekeError, DekeResult, SRobotQ, Validator};
 use uuid::Uuid;
 use wreck::{Collider, ColliderComponent, Transformable};
 
@@ -314,7 +314,7 @@ impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
             }
             for (cb, tb, fb) in body_b.sub_colliders() {
                 if fb.allows(a_idx) && ca.collides_other(cb) {
-                    return Err(DekeError::SelfCollison(*ta, *tb));
+                    return Err(DekeError::SelfCollision(*ta, *tb));
                 }
             }
         }
