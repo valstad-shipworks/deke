@@ -19,16 +19,18 @@ macro_rules! dynamic_fk {
 
         impl $name {
             pub fn try_new(joints: Vec<$joint>) -> DekeResult<Self> {
-                Ok(match joints.len() {
-                    1 => Self::J1($chain::new(joints.try_into().ok().unwrap())),
-                    2 => Self::J2($chain::new(joints.try_into().ok().unwrap())),
-                    3 => Self::J3($chain::new(joints.try_into().ok().unwrap())),
-                    4 => Self::J4($chain::new(joints.try_into().ok().unwrap())),
-                    5 => Self::J5($chain::new(joints.try_into().ok().unwrap())),
-                    6 => Self::J6($chain::new(joints.try_into().ok().unwrap())),
-                    7 => Self::J7($chain::new(joints.try_into().ok().unwrap())),
-                    8 => Self::J8($chain::new(joints.try_into().ok().unwrap())),
-                    n => return Err(DekeError::ShapeMismatch { expected: 8, found: n }),
+                let n = joints.len();
+                let err = || DekeError::ShapeMismatch { expected: n, found: n };
+                Ok(match n {
+                    1 => Self::J1($chain::new(joints.try_into().map_err(|_| err())?)),
+                    2 => Self::J2($chain::new(joints.try_into().map_err(|_| err())?)),
+                    3 => Self::J3($chain::new(joints.try_into().map_err(|_| err())?)),
+                    4 => Self::J4($chain::new(joints.try_into().map_err(|_| err())?)),
+                    5 => Self::J5($chain::new(joints.try_into().map_err(|_| err())?)),
+                    6 => Self::J6($chain::new(joints.try_into().map_err(|_| err())?)),
+                    7 => Self::J7($chain::new(joints.try_into().map_err(|_| err())?)),
+                    8 => Self::J8($chain::new(joints.try_into().map_err(|_| err())?)),
+                    _ => return Err(DekeError::ShapeMismatch { expected: 8, found: n }),
                 })
             }
 

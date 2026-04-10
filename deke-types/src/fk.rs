@@ -841,7 +841,7 @@ pub struct PrismaticFK<const M: usize, const N: usize, FK: FKChain<N>> {
 
 impl<const M: usize, const N: usize, FK: FKChain<N>> PrismaticFK<M, N, FK> {
     pub fn new(inner: FK, axis: Vec3A, q_index_first: bool) -> Self {
-        assert!(M == N + 1, "M must equal N + 1");
+        const { assert!(M == N + 1, "M must equal N + 1") };
         Self {
             inner,
             axis,

@@ -185,7 +185,7 @@ impl<const N: usize> SRobotPath<N> {
             accumulated += seg_len;
         }
 
-        Some(*self.waypoints.last().unwrap())
+        Some(self.last)
     }
 
     pub fn densify(&self, max_dist: f32) -> Self {
@@ -205,7 +205,11 @@ impl<const N: usize> SRobotPath<N> {
             }
         }
 
-        Self::new(out).unwrap()
+        Self {
+            first: self.first,
+            last: self.last,
+            waypoints: out,
+        }
     }
 
     pub fn simplify(&self, tol: f32) -> Self {
@@ -224,7 +228,11 @@ impl<const N: usize> SRobotPath<N> {
             .map(|(_, q)| *q)
             .collect();
 
-        Self::new(waypoints).unwrap()
+        Self {
+            first: self.first,
+            last: self.last,
+            waypoints,
+        }
     }
 
     pub fn to_robot_path(&self) -> RobotPath {
@@ -325,7 +333,9 @@ impl<const N: usize> TryFrom<RobotPath> for SRobotPath<N> {
         let mut waypoints = Vec::with_capacity(arr.nrows());
         for row in arr.rows() {
             let mut q = [0.0f32; N];
-            q.copy_from_slice(row.as_slice().unwrap());
+            for (j, &v) in row.iter().enumerate() {
+                q[j] = v;
+            }
             waypoints.push(SRobotQ(q));
         }
         Self::new(waypoints)
@@ -345,7 +355,9 @@ impl<const N: usize> TryFrom<&RobotPath> for SRobotPath<N> {
         let mut waypoints = Vec::with_capacity(arr.nrows());
         for row in arr.rows() {
             let mut q = [0.0f32; N];
-            q.copy_from_slice(row.as_slice().unwrap());
+            for (j, &v) in row.iter().enumerate() {
+                q[j] = v;
+            }
             waypoints.push(SRobotQ(q));
         }
         Self::new(waypoints)

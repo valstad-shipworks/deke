@@ -3,11 +3,12 @@ use crate::{DekeError, DekeResult, JointValidator, SRobotQ, Validator};
 macro_rules! dynamic_joint_new {
     ($lower:ident, $upper:ident, $($variant:ident $n:literal),+) => {
         match $lower.len() {
-            $($n => Some(DynamicJointValidator::$variant(JointValidator::new(
-                SRobotQ(<[f32; $n]>::try_from($lower.as_slice()).unwrap()),
-                SRobotQ(<[f32; $n]>::try_from($upper.as_slice()).unwrap()),
-            )))),+,
-            _ => None,
+            $($n => {
+                let lo: [f32; $n] = $lower.as_slice().try_into().map_err(|_| DekeError::ShapeMismatch { expected: $n, found: $lower.len() })?;
+                let hi: [f32; $n] = $upper.as_slice().try_into().map_err(|_| DekeError::ShapeMismatch { expected: $n, found: $upper.len() })?;
+                Ok(DynamicJointValidator::$variant(JointValidator::new(SRobotQ(lo), SRobotQ(hi))))
+            }),+,
+            _ => Err(DekeError::ShapeMismatch { expected: 8, found: $lower.len() }),
         }
     };
 }
@@ -32,12 +33,7 @@ impl DynamicJointValidator {
                 found: upper.len(),
             });
         }
-        dynamic_joint_new!(lower, upper, J1 1, J2 2, J3 3, J4 4, J5 5, J6 6, J7 7, J8 8).ok_or(
-            DekeError::ShapeMismatch {
-                expected: 8,
-                found: lower.len(),
-            },
-        )
+        dynamic_joint_new!(lower, upper, J1 1, J2 2, J3 3, J4 4, J5 5, J6 6, J7 7, J8 8)
     }
 
     pub fn dof(&self) -> usize {
