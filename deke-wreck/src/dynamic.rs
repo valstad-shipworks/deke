@@ -59,6 +59,32 @@ impl DynamicWreckValidator {
         }
     }
 
+    pub fn set_self_collisions(&mut self, enabled: bool) {
+        match self {
+            Self::J1(v) => v.set_self_collisions(enabled),
+            Self::J2(v) => v.set_self_collisions(enabled),
+            Self::J3(v) => v.set_self_collisions(enabled),
+            Self::J4(v) => v.set_self_collisions(enabled),
+            Self::J5(v) => v.set_self_collisions(enabled),
+            Self::J6(v) => v.set_self_collisions(enabled),
+            Self::J7(v) => v.set_self_collisions(enabled),
+            Self::J8(v) => v.set_self_collisions(enabled),
+        }
+    }
+
+    pub fn self_collisions(&self) -> bool {
+        match self {
+            Self::J1(v) => v.self_collisions(),
+            Self::J2(v) => v.self_collisions(),
+            Self::J3(v) => v.self_collisions(),
+            Self::J4(v) => v.self_collisions(),
+            Self::J5(v) => v.self_collisions(),
+            Self::J6(v) => v.self_collisions(),
+            Self::J7(v) => v.self_collisions(),
+            Self::J8(v) => v.self_collisions(),
+        }
+    }
+
     pub fn validate_dyn(&mut self, q: &[f32]) -> DekeResult<()> {
         match self {
             Self::J1(v) => {
@@ -158,8 +184,11 @@ macro_rules! impl_dynamic_wreck {
 
             impl<FK: FKChain<$n> + 'static> From<WreckValidator<$n, FK>> for DynamicWreckValidator {
                 fn from(v: WreckValidator<$n, FK>) -> Self {
+                    let sc = v.self_collisions();
                     let (links, ee, base, env, fk) = v.into_parts();
-                    Self::$variant(Box::new(WreckValidator::new(links, ee, base, env, BoxFK::new(fk))))
+                    let mut w = WreckValidator::new(links, ee, base, env, BoxFK::new(fk));
+                    w.set_self_collisions(sc);
+                    Self::$variant(Box::new(w))
                 }
             }
         )+

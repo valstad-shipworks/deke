@@ -132,6 +132,7 @@ pub struct WreckValidator<const N: usize, FK: FKChain<N>> {
     ee: CollisionBody<N>,
     environment: Arc<Collider>,
     fk: FK,
+    self_collisions: bool,
 }
 
 impl<const N: usize, FK: FKChain<N>> std::fmt::Debug for WreckValidator<N, FK> {
@@ -152,6 +153,7 @@ impl<const N: usize, FK: FKChain<N>> Clone for WreckValidator<N, FK> {
             ee: self.ee.clone(),
             environment: self.environment.clone(),
             fk: self.fk.clone(),
+            self_collisions: self.self_collisions,
         }
     }
 }
@@ -184,7 +186,16 @@ impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
             ee,
             environment,
             fk,
+            self_collisions: true,
         }
+    }
+
+    pub fn set_self_collisions(&mut self, enabled: bool) {
+        self.self_collisions = enabled;
+    }
+
+    pub fn self_collisions(&self) -> bool {
+        self.self_collisions
     }
 
     pub fn links_ref(&self) -> &[CollisionBody<N>; N] {
@@ -216,7 +227,7 @@ impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
     }
 
     /// Adds an attachment to a link (0..N-1) or the end effector (N).
-    pub fn with_attachment(mut self, index: usize, mut attachment: Attachment<N>) -> Self {
+    pub fn add_attachment(&mut self, index: usize, mut attachment: Attachment<N>) {
         let body = if index < N {
             &mut self.links[index]
         } else {
@@ -224,11 +235,10 @@ impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
         };
         body.bring_to_current(&mut attachment.collision);
         body.attachments.push(attachment);
-        self
     }
 
     /// Removes an attachment by uuid from a link (0..N-1) or the end effector (N).
-    pub fn without_attachment(mut self, index: usize, uuid: &Uuid) -> Self {
+    pub fn remove_attachment(&mut self, index: usize, uuid: &Uuid) {
         let body = if index < N {
             &mut self.links[index]
         } else {
@@ -237,7 +247,6 @@ impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
         if let Some(pos) = body.attachments.iter().position(|a| &a.uuid == uuid) {
             body.attachments.remove(pos);
         }
-        self
     }
 
     fn check_collisions(&mut self, q: &SRobotQ<N>) -> DekeResult<()> {
@@ -270,22 +279,26 @@ impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
 
     fn check_link(&self, i: usize) -> DekeResult<()> {
         self.check_body_env(&self.links[i])?;
-        for j in 0..i {
-            self.check_body_pair(&self.links[j], &self.links[i], j, i)?;
-        }
-        if let Some(base) = &self.base {
-            self.check_body_pair(&self.links[i], base, i, N + 1)?;
+        if self.self_collisions {
+            for j in 0..i {
+                self.check_body_pair(&self.links[j], &self.links[i], j, i)?;
+            }
+            if let Some(base) = &self.base {
+                self.check_body_pair(&self.links[i], base, i, N + 1)?;
+            }
         }
         Ok(())
     }
 
     fn check_ee(&self) -> DekeResult<()> {
         self.check_body_env(&self.ee)?;
-        for j in 0..N {
-            self.check_body_pair(&self.links[j], &self.ee, j, N)?;
-        }
-        if let Some(base) = &self.base {
-            self.check_body_pair(&self.ee, base, N, N + 1)?;
+        if self.self_collisions {
+            for j in 0..N {
+                self.check_body_pair(&self.links[j], &self.ee, j, N)?;
+            }
+            if let Some(base) = &self.base {
+                self.check_body_pair(&self.ee, base, N, N + 1)?;
+            }
         }
         Ok(())
     }
