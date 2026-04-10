@@ -8,7 +8,7 @@ description = "3d Collision deke validator backed by the Wreck library."
 repository = "https://github.com/valstad-shipworks/deke"
 
 [dependencies]
-deke-types = { path = "../deke-types" }
+deke-types = { version = "1.0.0", path = "../deke-types" }
 wreck = "0.2.1"
 glam = "0.32.1"
 uuid = { version = "1", features = ["v4"] }
