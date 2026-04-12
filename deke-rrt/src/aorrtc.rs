@@ -493,7 +493,7 @@ pub(crate) fn solve<const N: usize>(
     }
 
     best_cost = path_cost(&best_waypoints, &dof_coeffs);
-    let final_path = SRobotPath::new(best_waypoints);
+    let final_path = SRobotPath::try_new(best_waypoints);
 
     (
         final_path,

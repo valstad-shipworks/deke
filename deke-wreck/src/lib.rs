@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 pub use dynamic::DynamicWreckValidator;
 
-use deke_types::{DekeError, DekeResult, FKChain, SRobotQ, Validator};
+use deke_types::{DekeError, DekeResult, FKChain, SRobotQ, SRobotQLike, Validator};
 use glam::Affine3A;
 use uuid::Uuid;
 use wreck::{Collider, Transformable};
@@ -447,11 +447,11 @@ impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
 }
 
 impl<const N: usize, FK: FKChain<N> + 'static> Validator<N> for WreckValidator<N, FK> {
-    fn validate<E: Into<DekeError>, A: TryInto<SRobotQ<N>, Error = E>>(
+    fn validate<E: Into<DekeError>, A: SRobotQLike<N, E>>(
         &mut self,
         q: A,
     ) -> DekeResult<()> {
-        let q = q.try_into().map_err(|e| e.into())?;
+        let q = q.to_srobotq().map_err(Into::into)?;
         self.check_collisions(&q)
     }
 

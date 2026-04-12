@@ -143,7 +143,7 @@ fn main() {
             deke_types::SRobotQ(arr)
         })
         .collect();
-    let path = deke_types::SRobotPath::new(waypoints).expect("invalid path");
+    let path = deke_types::SRobotPath::try_new(waypoints).expect("invalid path");
 
     let wreck_validator = validator(wreck_env);
     let fk = deke_types::URDFChain::new(URDF_JOINTS);

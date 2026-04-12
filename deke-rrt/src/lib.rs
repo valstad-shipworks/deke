@@ -1,6 +1,6 @@
 use std::fmt;
 
-use deke_types::{DekeError, DekeResult, Planner, SRobotPath, SRobotQ, Validator};
+use deke_types::{DekeError, DekeResult, Planner, SRobotPath, SRobotQLike, Validator};
 use tinyrand::{Seeded, StdRand};
 
 mod aorrtc;
@@ -65,19 +65,19 @@ impl<const N: usize> Planner<N> for RrtcPlanner<N> {
 
     fn plan<
         E: Into<DekeError>,
-        A: TryInto<SRobotQ<N>, Error = E>,
-        B: TryInto<SRobotQ<N>, Error = E>,
+        A: SRobotQLike<N, E>,
+        B: SRobotQLike<N, E>,
     >(
         &self,
         start: A,
         goal: B,
         validators: &mut impl Validator<N>,
     ) -> (DekeResult<SRobotPath<N>>, Self::Diagnostic) {
-        let start = match start.try_into().map_err(|e| e.into()) {
+        let start = match start.to_srobotq().map_err(Into::into) {
             Ok(s) => s,
             Err(e) => return (Err(e), RrtDiagnostic::empty()),
         };
-        let goal = match goal.try_into().map_err(|e| e.into()) {
+        let goal = match goal.to_srobotq().map_err(Into::into) {
             Ok(g) => g,
             Err(e) => return (Err(e), RrtDiagnostic::empty()),
         };
@@ -102,19 +102,19 @@ impl<const N: usize> Planner<N> for AorrtcPlanner<N> {
 
     fn plan<
         E: Into<DekeError>,
-        A: TryInto<SRobotQ<N>, Error = E>,
-        B: TryInto<SRobotQ<N>, Error = E>,
+        A: SRobotQLike<N, E>,
+        B: SRobotQLike<N, E>,
     >(
         &self,
         start: A,
         goal: B,
         validators: &mut impl Validator<N>,
     ) -> (DekeResult<SRobotPath<N>>, Self::Diagnostic) {
-        let start = match start.try_into().map_err(|e| e.into()) {
+        let start = match start.to_srobotq().map_err(Into::into) {
             Ok(s) => s,
             Err(e) => return (Err(e), RrtDiagnostic::empty()),
         };
-        let goal = match goal.try_into().map_err(|e| e.into()) {
+        let goal = match goal.to_srobotq().map_err(Into::into) {
             Ok(g) => g,
             Err(e) => return (Err(e), RrtDiagnostic::empty()),
         };
@@ -139,19 +139,19 @@ impl<const N: usize> Planner<N> for KrrtcPlanner<N> {
 
     fn plan<
         E: Into<DekeError>,
-        A: TryInto<SRobotQ<N>, Error = E>,
-        B: TryInto<SRobotQ<N>, Error = E>,
+        A: SRobotQLike<N, E>,
+        B: SRobotQLike<N, E>,
     >(
         &self,
         start: A,
         goal: B,
         validators: &mut impl Validator<N>,
     ) -> (DekeResult<SRobotPath<N>>, Self::Diagnostic) {
-        let start = match start.try_into().map_err(|e| e.into()) {
+        let start = match start.to_srobotq().map_err(Into::into) {
             Ok(s) => s,
             Err(e) => return (Err(e), RrtDiagnostic::empty()),
         };
-        let goal = match goal.try_into().map_err(|e| e.into()) {
+        let goal = match goal.to_srobotq().map_err(Into::into) {
             Ok(g) => g,
             Err(e) => return (Err(e), RrtDiagnostic::empty()),
         };

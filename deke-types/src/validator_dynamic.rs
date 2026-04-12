@@ -1,4 +1,4 @@
-use crate::{DekeError, DekeResult, JointValidator, SRobotQ, Validator};
+use crate::{DekeError, DekeResult, JointValidator, SRobotQ, SRobotQLike, Validator};
 
 macro_rules! dynamic_joint_new {
     ($lower:ident, $upper:ident, $($variant:ident $n:literal),+) => {
@@ -122,7 +122,7 @@ macro_rules! impl_dynamic_joint {
     ($($n:literal $variant:ident),+) => {
         $(
             impl Validator<$n> for DynamicJointValidator {
-                fn validate<E: Into<DekeError>, A: TryInto<SRobotQ<$n>, Error = E>>(
+                fn validate<E: Into<DekeError>, A: SRobotQLike<$n, E>>(
                     &mut self,
                     q: A,
                 ) -> DekeResult<()> {

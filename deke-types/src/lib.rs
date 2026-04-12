@@ -18,7 +18,7 @@ pub use fk::{
 };
 pub use fk_dynamic::{BoxFK, DynamicDHChain, DynamicHPChain, DynamicURDFChain};
 pub use path::{RobotPath, SRobotPath};
-pub use q::{RobotQ, SRobotQ, robotq};
+pub use q::{RobotQ, SRobotQ, robotq, SRobotQLike};
 pub use validator::{JointValidator, Validator, ValidatorAnd, ValidatorNot, ValidatorOr};
 pub use validator_dynamic::DynamicJointValidator;
 
@@ -55,8 +55,8 @@ pub trait Planner<const N: usize>: Sized + Clone + Debug + Send + Sync + 'static
 
     fn plan<
         E: Into<DekeError>,
-        A: TryInto<SRobotQ<N>, Error = E>,
-        B: TryInto<SRobotQ<N>, Error = E>,
+        A: SRobotQLike<N, E>,
+        B: SRobotQLike<N, E>,
     >(
         &self,
         start: A,

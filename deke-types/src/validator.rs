@@ -1,9 +1,9 @@
 use std::{fmt::Debug, sync::Arc};
 
-use crate::{DekeError, DekeResult, SRobotQ};
+use crate::{DekeError, DekeResult, SRobotQ, SRobotQLike};
 
 pub trait Validator<const N: usize>: Sized + Clone + Debug + Send + Sync + 'static {
-    fn validate<E: Into<DekeError>, A: TryInto<SRobotQ<N>, Error = E>>(
+    fn validate<E: Into<DekeError>, A: SRobotQLike<N, E>>(
         &mut self,
         q: A,
     ) -> DekeResult<()>;
@@ -25,11 +25,11 @@ where
     B: Validator<N>,
 {
     #[inline]
-    fn validate<E: Into<DekeError>, Q: TryInto<SRobotQ<N>, Error = E>>(
+    fn validate<E: Into<DekeError>, Q: SRobotQLike<N, E>>(
         &mut self,
         q: Q,
     ) -> DekeResult<()> {
-        let q = q.try_into().map_err(|e| e.into())?;
+        let q = q.to_srobotq().map_err(Into::into)?;
         self.0.validate(q)?;
         self.1.validate(q)
     }
@@ -47,11 +47,11 @@ where
     B: Validator<N>,
 {
     #[inline]
-    fn validate<E: Into<DekeError>, Q: TryInto<SRobotQ<N>, Error = E>>(
+    fn validate<E: Into<DekeError>, Q: SRobotQLike<N, E>>(
         &mut self,
         q: Q,
     ) -> DekeResult<()> {
-        let q = q.try_into().map_err(|e| e.into())?;
+        let q = q.to_srobotq().map_err(Into::into)?;
         match self.0.validate(q) {
             Ok(()) => Ok(()),
             Err(_) => self.1.validate(q),
@@ -72,11 +72,11 @@ where
     A: Validator<N>,
 {
     #[inline]
-    fn validate<E: Into<DekeError>, Q: TryInto<SRobotQ<N>, Error = E>>(
+    fn validate<E: Into<DekeError>, Q: SRobotQLike<N, E>>(
         &mut self,
         q: Q,
     ) -> DekeResult<()> {
-        let q = q.try_into().map_err(|e| e.into())?;
+        let q = q.to_srobotq().map_err(Into::into)?;
         match self.0.validate(q) {
             Ok(()) => Err(DekeError::SuperError),
             Err(_) => Ok(()),
@@ -139,11 +139,11 @@ impl<const N: usize> JointValidator<N> {
 
 impl<const N: usize> Validator<N> for JointValidator<N> {
     #[inline]
-    fn validate<E: Into<DekeError>, Q: TryInto<SRobotQ<N>, Error = E>>(
+    fn validate<E: Into<DekeError>, Q: SRobotQLike<N, E>>(
         &mut self,
         q: Q,
     ) -> DekeResult<()> {
-        let q = q.try_into().map_err(|e| e.into())?;
+        let q = q.to_srobotq().map_err(Into::into)?;
         if q.any_lt(&self.lower) || q.any_gt(&self.upper) {
             return Err(DekeError::ExceedJointLimits);
         }

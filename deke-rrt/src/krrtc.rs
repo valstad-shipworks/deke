@@ -401,7 +401,7 @@ pub(crate) fn solve<const N: usize>(
                 path_cost: cost,
                 elapsed_ns: timer.elapsed().as_nanos(),
             };
-            return (SRobotPath::new(waypoints), diag);
+            return (SRobotPath::try_new(waypoints), diag);
         }
 
         if settings.balance {

@@ -1,6 +1,6 @@
 [package]
 name = "deke-types"
-version = "1.1.1"
+version = "1.1.3"
 edition = "2024"
 license = "Apache-2.0"
 authors = ["Bowan Foryt <bowan@valstad.com>"]
@@ -11,5 +11,6 @@ repository = "https://github.com/valstad-shipworks/deke"
 approx = "0.5.1"
 glam = "0.32.1"
 ndarray = {version = "0.17.2", features = ["approx"]}
+num-traits = "0.2.19"
 thiserror = "2.0.18"
 wide = "1.2.0"

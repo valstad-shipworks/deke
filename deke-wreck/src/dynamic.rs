@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 
-use deke_types::{BoxFK, DekeError, DekeResult, FKChain, SRobotQ, Validator};
+use deke_types::{BoxFK, DekeError, DekeResult, FKChain, SRobotQ, SRobotQLike, Validator};
 
 use crate::WreckValidator;
 
@@ -158,7 +158,7 @@ macro_rules! impl_dynamic_wreck {
     ($($n:literal $variant:ident),+) => {
         $(
             impl Validator<$n> for DynamicWreckValidator {
-                fn validate<E: Into<DekeError>, A: TryInto<SRobotQ<$n>, Error = E>>(
+                fn validate<E: Into<DekeError>, A: SRobotQLike<$n, E>>(
                     &mut self,
                     q: A,
                 ) -> DekeResult<()> {
