@@ -9,7 +9,7 @@ deke-types = { path = "../deke-types" }
 deke-wreck = { path = "../deke-wreck" }
 deke-rrt = { path = "../deke-rrt" }
 deke-cricket = { path = "../deke-cricket" }
-wreck = "0.2.1"
+wreck = "0.3.2"
 glam = "0.32.1"
 rerun = "0.31.1"
 vamp = { path = "../../vamp/vamp-rs" }

@@ -9,7 +9,7 @@ deke-cricket = { path = "../deke-cricket" }
 deke-types = { path = "../deke-types" }
 deke-wreck = { path = "../deke-wreck" }
 deke-rrt = { path = "../deke-rrt" }
-wreck = "0.2.1"
+wreck = "0.3.2"
 glam = "0.32.1"
 uuid = { version = "1", features = ["v4"] }
 vamp = { path = "../../vamp/vamp-rs" }
