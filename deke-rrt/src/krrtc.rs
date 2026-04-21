@@ -80,9 +80,10 @@ fn kinematic_steer<const N: usize>(
 ///
 /// Every candidate modification is collision-validated on both affected edges
 /// and only accepted if the local time-optimal cost decreases.
-fn round_corners<const N: usize>(
+fn round_corners<const N: usize, V: Validator<N>>(
     path: &mut Vec<SRobotQ<N>>,
-    validator: &mut impl Validator<N>,
+    validator: &mut V,
+    ctx: &V::Context<'_>,
     limits: &KinematicLimits<N>,
     resolution: f64,
     iterations: usize,
@@ -128,10 +129,10 @@ fn round_corners<const N: usize>(
         for &alpha in &[0.5f32, 0.4, 0.3, 0.2, 0.1, 0.05] {
             let candidate = curr + pull_dir * alpha;
 
-            if validate_edge(&prev, &candidate, resolution, validator).is_err() {
+            if validate_edge(&prev, &candidate, resolution, validator, ctx).is_err() {
                 continue;
             }
-            if validate_edge(&candidate, &next, resolution, validator).is_err() {
+            if validate_edge(&candidate, &next, resolution, validator, ctx).is_err() {
                 continue;
             }
 
@@ -158,13 +159,13 @@ fn round_corners<const N: usize>(
             let p1 = prev + (curr - prev) * (1.0 - frac);
             let p2 = curr + (next - curr) * frac;
 
-            if validate_edge(&prev, &p1, resolution, validator).is_err() {
+            if validate_edge(&prev, &p1, resolution, validator, ctx).is_err() {
                 continue;
             }
-            if validate_edge(&p1, &p2, resolution, validator).is_err() {
+            if validate_edge(&p1, &p2, resolution, validator, ctx).is_err() {
                 continue;
             }
-            if validate_edge(&p2, &next, resolution, validator).is_err() {
+            if validate_edge(&p2, &next, resolution, validator, ctx).is_err() {
                 continue;
             }
 
@@ -188,9 +189,10 @@ fn round_corners<const N: usize>(
 /// Random shortcutting: pick two random waypoints, if the direct edge is
 /// collision-free, remove everything between them. Biases toward pairs
 /// with high time-optimal cost to maximize improvement per shortcut.
-fn shortcut<const N: usize>(
+fn shortcut<const N: usize, V: Validator<N>>(
     path: &mut Vec<SRobotQ<N>>,
-    validator: &mut impl Validator<N>,
+    validator: &mut V,
+    ctx: &V::Context<'_>,
     limits: &KinematicLimits<N>,
     resolution: f64,
     iterations: usize,
@@ -237,7 +239,7 @@ fn shortcut<const N: usize>(
         let j = i + 2 + (rand_f64(rng) * remaining as f64) as usize;
         let j = j.min(path.len() - 1);
 
-        if validate_edge(&path[i], &path[j], resolution, validator).is_ok() {
+        if validate_edge(&path[i], &path[j], resolution, validator, ctx).is_ok() {
             let old_cost: f64 = (i..j).map(|k| segment_costs[k]).sum();
             let new_cost = time_optimal_cost(&path[i], &path[j], limits);
 
@@ -294,10 +296,11 @@ fn reconstruct<const N: usize>(
     }
 }
 
-pub(crate) fn solve<const N: usize>(
+pub(crate) fn solve<const N: usize, V: Validator<N>>(
     start: &SRobotQ<N>,
     goal: &SRobotQ<N>,
-    validator: &mut impl Validator<N>,
+    validator: &mut V,
+    ctx: &V::Context<'_>,
     settings: &KrrtcSettings<N>,
     rng: &mut impl Rand,
 ) -> (DekeResult<SRobotPath<N>>, RrtDiagnostic) {
@@ -318,7 +321,7 @@ pub(crate) fn solve<const N: usize>(
         );
     }
 
-    if validate_edge(start, goal, settings.resolution, validator).is_ok() {
+    if validate_edge(start, goal, settings.resolution, validator, ctx).is_ok() {
         return (
             Ok(SRobotPath::from_two(*start, *goal)),
             RrtDiagnostic {
@@ -352,6 +355,7 @@ pub(crate) fn solve<const N: usize>(
                 &mut goal_tree,
                 &q_rand,
                 validator,
+                ctx,
                 settings,
             )
         } else {
@@ -360,6 +364,7 @@ pub(crate) fn solve<const N: usize>(
                 &mut start_tree,
                 &q_rand,
                 validator,
+                ctx,
                 settings,
             )
         };
@@ -376,6 +381,7 @@ pub(crate) fn solve<const N: usize>(
                 shortcut(
                     &mut waypoints,
                     validator,
+                    ctx,
                     &settings.kin_limits,
                     settings.resolution,
                     settings.shortcut_iterations,
@@ -387,6 +393,7 @@ pub(crate) fn solve<const N: usize>(
                 round_corners(
                     &mut waypoints,
                     validator,
+                    ctx,
                     &settings.kin_limits,
                     settings.resolution,
                     settings.smoothing_iterations,
@@ -430,11 +437,12 @@ pub(crate) fn solve<const N: usize>(
     )
 }
 
-fn extend_and_connect<const N: usize>(
+fn extend_and_connect<const N: usize, V: Validator<N>>(
     tree_a: &mut RrtTree<N>,
     tree_b: &mut RrtTree<N>,
     q_rand: &SRobotQ<N>,
-    validator: &mut impl Validator<N>,
+    validator: &mut V,
+    ctx: &V::Context<'_>,
     settings: &KrrtcSettings<N>,
 ) -> Option<(usize, usize)> {
     let (near_idx, near_dist) = tree_a.nearest(q_rand);
@@ -451,7 +459,7 @@ fn extend_and_connect<const N: usize>(
     let q_near = *tree_a.node(near_idx);
     let q_new = kinematic_steer(&q_near, q_rand, settings.range, &settings.kin_limits);
 
-    if validate_edge(&q_near, &q_new, settings.resolution, validator).is_err() {
+    if validate_edge(&q_near, &q_new, settings.resolution, validator, ctx).is_err() {
         if settings.dynamic_domain {
             let r = tree_a.radius(near_idx);
             tree_a.set_radius(
@@ -481,7 +489,7 @@ fn extend_and_connect<const N: usize>(
 
         let q_step = kinematic_steer(&q_connect, &q_new, settings.range, &settings.kin_limits);
 
-        if validate_edge(&q_connect, &q_step, settings.resolution, validator).is_err() {
+        if validate_edge(&q_connect, &q_step, settings.resolution, validator, ctx).is_err() {
             return None;
         }
 

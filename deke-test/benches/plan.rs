@@ -44,7 +44,8 @@ fn make_obstacle_env() -> (wreck::Collider, vamp::Environment) {
 
 fn bench_plan_rrtc(c: &mut Criterion) {
     let (wreck_env, vamp_env) = make_obstacle_env();
-    let validator = m20id12l::validator(wreck_env);
+    let validator = m20id12l::validator();
+    let ctx = ((), deke_wreck::WreckValidatorContext::new(&wreck_env));
     let vamp_robot = vamp::Robot::M20ID12L;
 
     let mut rrtc_settings = deke_rrt::RrtcSettings::new(
@@ -53,14 +54,14 @@ fn bench_plan_rrtc(c: &mut Criterion) {
     );
     rrtc_settings.range = 2.0;
     rrtc_settings.resolution = 1.0 / 32.0;
-    let planner = m20id12l::rrtc(rrtc_settings);
+    let planner = m20id12l::rrtc();
     let vamp_settings = vamp::RRTCSettings::default();
 
     c.bench_function("deke_rrtc", |b| {
         b.iter(|| {
             for &(start, goal) in &PROBLEMS {
                 let mut v = validator.clone();
-                let (result, diag) = planner.plan(SRobotQ(start), SRobotQ(goal), &mut v);
+                let (result, diag) = planner.plan(&rrtc_settings, SRobotQ(start), SRobotQ(goal), &mut v, &ctx);
                 black_box((&result, &diag));
             }
         });
@@ -79,7 +80,9 @@ fn bench_plan_rrtc(c: &mut Criterion) {
 }
 
 fn bench_plan_empty_env(c: &mut Criterion) {
-    let validator = m20id12l::validator(wreck::Collider::default());
+    let env = wreck::Collider::default();
+    let validator = m20id12l::validator();
+    let ctx = ((), deke_wreck::WreckValidatorContext::new(&env));
     let vamp_robot = vamp::Robot::M20ID12L;
     let vamp_env = vamp::Environment::new();
 
@@ -89,14 +92,14 @@ fn bench_plan_empty_env(c: &mut Criterion) {
     );
     rrtc_settings.range = 2.0;
     rrtc_settings.resolution = 1.0 / 32.0;
-    let planner = m20id12l::rrtc(rrtc_settings);
+    let planner = m20id12l::rrtc();
     let vamp_settings = vamp::RRTCSettings::default();
 
     c.bench_function("deke_rrtc_empty", |b| {
         b.iter(|| {
             for &(start, goal) in &PROBLEMS {
                 let mut v = validator.clone();
-                let (result, diag) = planner.plan(SRobotQ(start), SRobotQ(goal), &mut v);
+                let (result, diag) = planner.plan(&rrtc_settings, SRobotQ(start), SRobotQ(goal), &mut v, &ctx);
                 black_box((&result, &diag));
             }
         });
@@ -116,7 +119,8 @@ fn bench_plan_empty_env(c: &mut Criterion) {
 
 fn bench_plan_aorrtc(c: &mut Criterion) {
     let (wreck_env, vamp_env) = make_obstacle_env();
-    let validator = m20id12l::validator(wreck_env);
+    let validator = m20id12l::validator();
+    let ctx = ((), deke_wreck::WreckValidatorContext::new(&wreck_env));
     let vamp_robot = vamp::Robot::M20ID12L;
 
     let mut aorrtc_settings = deke_rrt::AorrtcSettings::new(
@@ -125,14 +129,14 @@ fn bench_plan_aorrtc(c: &mut Criterion) {
     );
     aorrtc_settings.rrtc.range = 2.0;
     aorrtc_settings.rrtc.resolution = 1.0 / 32.0;
-    let planner = m20id12l::aorrtc(aorrtc_settings);
+    let planner = m20id12l::aorrtc();
     let vamp_settings = vamp::AORRTCSettings::default();
 
     c.bench_function("deke_aorrtc", |b| {
         b.iter(|| {
             for &(start, goal) in &PROBLEMS {
                 let mut v = validator.clone();
-                let (result, diag) = planner.plan(SRobotQ(start), SRobotQ(goal), &mut v);
+                let (result, diag) = planner.plan(&aorrtc_settings, SRobotQ(start), SRobotQ(goal), &mut v, &ctx);
                 black_box((&result, &diag));
             }
         });
@@ -191,20 +195,21 @@ fn m20id12l_kin_limits() -> deke_rrt::KinematicLimits<6> {
 
 fn bench_plan_krrtc(c: &mut Criterion) {
     let (wreck_env, _) = make_obstacle_env();
-    let validator = m20id12l::validator(wreck_env);
+    let validator = m20id12l::validator();
+    let ctx = ((), deke_wreck::WreckValidatorContext::new(&wreck_env));
 
     let settings = deke_rrt::KrrtcSettings::new(
         SRobotQ(m20id12l::JOINT_LOWER),
         SRobotQ(m20id12l::JOINT_UPPER),
         m20id12l_kin_limits(),
     );
-    let planner = m20id12l::krrtc(settings);
+    let planner = m20id12l::krrtc();
 
     c.bench_function("deke_krrtc", |b| {
         b.iter(|| {
             for &(start, goal) in &PROBLEMS {
                 let mut v = validator.clone();
-                let (result, diag) = planner.plan(SRobotQ(start), SRobotQ(goal), &mut v);
+                let (result, diag) = planner.plan(&settings, SRobotQ(start), SRobotQ(goal), &mut v, &ctx);
                 black_box((&result, &diag));
             }
         });
@@ -212,20 +217,22 @@ fn bench_plan_krrtc(c: &mut Criterion) {
 }
 
 fn bench_plan_krrtc_empty(c: &mut Criterion) {
-    let validator = m20id12l::validator(wreck::Collider::default());
+    let env = wreck::Collider::default();
+    let validator = m20id12l::validator();
+    let ctx = ((), deke_wreck::WreckValidatorContext::new(&env));
 
     let settings = deke_rrt::KrrtcSettings::new(
         SRobotQ(m20id12l::JOINT_LOWER),
         SRobotQ(m20id12l::JOINT_UPPER),
         m20id12l_kin_limits(),
     );
-    let planner = m20id12l::krrtc(settings);
+    let planner = m20id12l::krrtc();
 
     c.bench_function("deke_krrtc_empty", |b| {
         b.iter(|| {
             for &(start, goal) in &PROBLEMS {
                 let mut v = validator.clone();
-                let (result, diag) = planner.plan(SRobotQ(start), SRobotQ(goal), &mut v);
+                let (result, diag) = planner.plan(&settings, SRobotQ(start), SRobotQ(goal), &mut v, &ctx);
                 black_box((&result, &diag));
             }
         });
@@ -233,7 +240,9 @@ fn bench_plan_krrtc_empty(c: &mut Criterion) {
 }
 
 fn bench_plan_aorrtc_empty(c: &mut Criterion) {
-    let validator = m20id12l::validator(wreck::Collider::default());
+    let env = wreck::Collider::default();
+    let validator = m20id12l::validator();
+    let ctx = ((), deke_wreck::WreckValidatorContext::new(&env));
     let vamp_robot = vamp::Robot::M20ID12L;
     let vamp_env = vamp::Environment::new();
 
@@ -243,14 +252,14 @@ fn bench_plan_aorrtc_empty(c: &mut Criterion) {
     );
     aorrtc_settings.rrtc.range = 2.0;
     aorrtc_settings.rrtc.resolution = 1.0 / 32.0;
-    let planner = m20id12l::aorrtc(aorrtc_settings);
+    let planner = m20id12l::aorrtc();
     let vamp_settings = vamp::AORRTCSettings::default();
 
     c.bench_function("deke_aorrtc_empty", |b| {
         b.iter(|| {
             for &(start, goal) in &PROBLEMS {
                 let mut v = validator.clone();
-                let (result, diag) = planner.plan(SRobotQ(start), SRobotQ(goal), &mut v);
+                let (result, diag) = planner.plan(&aorrtc_settings, SRobotQ(start), SRobotQ(goal), &mut v, &ctx);
                 black_box((&result, &diag));
             }
         });

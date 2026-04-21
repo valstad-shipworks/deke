@@ -2,12 +2,103 @@ use std::{fmt::Debug, sync::Arc};
 
 use crate::{DekeError, DekeResult, SRobotQ, SRobotQLike};
 
+
+pub trait ValidatorContext: Sized {}
+
+#[doc(hidden)]
+pub trait Leaf: ValidatorContext {}
+
+impl ValidatorContext for () {}
+
+#[macro_export]
+macro_rules! validator_context_type_impl {
+    ($($ident:ident),*) => {
+        $(
+            impl $crate::ValidatorContext for $ident {}
+            impl $crate::Leaf for $ident {}
+        )*
+    };
+}
+
+impl<A: ValidatorContext, B: ValidatorContext> ValidatorContext for (A, B) {}
+
+pub trait FromFlattened<Flattened>: ValidatorContext {
+    fn nest(flattened: Flattened) -> Self;
+}
+
+macro_rules! validator_context_tuple_impl {
+    ($tup:tt) => {
+        validator_context_tuple_impl!(@rewrite $tup [emit_impl]);
+    };
+
+    (@rewrite ($l:tt, $r:tt) [$($cb:tt)*]) => {
+        validator_context_tuple_impl!(@rewrite $l [pair_right $r [$($cb)*]]);
+    };
+    (@rewrite $ident:ident [$($cb:tt)*]) => {
+        validator_context_tuple_impl!(@invoke [$($cb)*] [$ident] $ident);
+        validator_context_tuple_impl!(@invoke [$($cb)*] [] ());
+    };
+
+    (@invoke [pair_right $r:tt [$($cb:tt)*]] [$($kept_l:ident)*] $rew_l:tt) => {
+        validator_context_tuple_impl!(@rewrite $r [pair_combine [$($kept_l)*] $rew_l [$($cb)*]]);
+    };
+    (@invoke [pair_combine [$($kept_l:ident)*] $rew_l:tt [$($cb:tt)*]] [$($kept_r:ident)*] $rew_r:tt) => {
+        validator_context_tuple_impl!(@invoke [$($cb)*] [$($kept_l)* $($kept_r)*] ($rew_l, $rew_r));
+    };
+    (@invoke [emit_impl] [$($kept:ident)*] $shape:tt) => {
+        #[allow(non_snake_case)]
+        impl<$($kept: Leaf),*> FromFlattened<($($kept,)*)> for $shape {
+            #[inline]
+            fn nest(flattened: ($($kept,)*)) -> Self {
+                let ($($kept,)*) = flattened;
+                $shape
+            }
+        }
+    };
+}
+
+validator_context_tuple_impl! { (A, (B, C)) }
+validator_context_tuple_impl! { ((A, B), C) }
+
+validator_context_tuple_impl! { (A, (B, (C, D))) }
+validator_context_tuple_impl! { (A, ((B, C), D)) }
+validator_context_tuple_impl! { ((A, B), (C, D)) }
+validator_context_tuple_impl! { ((A, (B, C)), D) }
+validator_context_tuple_impl! { (((A, B), C), D) }
+
+validator_context_tuple_impl! { (A, (B, (C, (D, E)))) }
+validator_context_tuple_impl! { (A, (B, ((C, D), E))) }
+validator_context_tuple_impl! { (A, ((B, C), (D, E))) }
+validator_context_tuple_impl! { (A, ((B, (C, D)), E)) }
+validator_context_tuple_impl! { (A, (((B, C), D), E)) }
+validator_context_tuple_impl! { ((A, B), (C, (D, E))) }
+validator_context_tuple_impl! { ((A, B), ((C, D), E)) }
+validator_context_tuple_impl! { ((A, (B, C)), (D, E)) }
+validator_context_tuple_impl! { (((A, B), C), (D, E)) }
+validator_context_tuple_impl! { ((A, (B, (C, D))), E) }
+validator_context_tuple_impl! { ((A, ((B, C), D)), E) }
+validator_context_tuple_impl! { (((A, B), (C, D)), E) }
+validator_context_tuple_impl! { (((A, (B, C)), D), E) }
+validator_context_tuple_impl! { ((((A, B), C), D), E) }
+
+validator_context_tuple_impl! { ((A, B), ((C, D), (E, F))) }
+validator_context_tuple_impl! { (((A, B), (C, D)), (E, F)) }
+validator_context_tuple_impl! { ((A, (B, C)), ((D, E), F)) }
+validator_context_tuple_impl! { (((A, B), C), ((D, E), F)) }
+
 pub trait Validator<const N: usize>: Sized + Clone + Debug + Send + Sync + 'static {
-    fn validate<E: Into<DekeError>, A: SRobotQLike<N, E>>(
+    type Context<'ctx>: ValidatorContext;
+
+    fn validate<'ctx, E: Into<DekeError>, A: SRobotQLike<N, E>>(
         &mut self,
         q: A,
+        ctx: &Self::Context<'ctx>,
     ) -> DekeResult<()>;
-    fn validate_motion(&mut self, qs: &[SRobotQ<N>]) -> DekeResult<()>;
+    fn validate_motion<'ctx>(
+        &mut self,
+        qs: &[SRobotQ<N>],
+        ctx: &Self::Context<'ctx>,
+    ) -> DekeResult<()>;
 }
 
 #[derive(Debug, Clone)]
@@ -24,20 +115,27 @@ where
     A: Validator<N>,
     B: Validator<N>,
 {
+    type Context<'ctx> = (A::Context<'ctx>, B::Context<'ctx>);
+
     #[inline]
-    fn validate<E: Into<DekeError>, Q: SRobotQLike<N, E>>(
+    fn validate<'ctx, E: Into<DekeError>, Q: SRobotQLike<N, E>>(
         &mut self,
         q: Q,
+        ctx: &Self::Context<'ctx>,
     ) -> DekeResult<()> {
         let q = q.to_srobotq().map_err(Into::into)?;
-        self.0.validate(q)?;
-        self.1.validate(q)
+        self.0.validate(q, &ctx.0)?;
+        self.1.validate(q, &ctx.1)
     }
 
     #[inline]
-    fn validate_motion(&mut self, qs: &[SRobotQ<N>]) -> DekeResult<()> {
-        self.0.validate_motion(qs)?;
-        self.1.validate_motion(qs)
+    fn validate_motion<'ctx>(
+        &mut self,
+        qs: &[SRobotQ<N>],
+        ctx: &Self::Context<'ctx>,
+    ) -> DekeResult<()> {
+        self.0.validate_motion(qs, &ctx.0)?;
+        self.1.validate_motion(qs, &ctx.1)
     }
 }
 
@@ -46,23 +144,30 @@ where
     A: Validator<N>,
     B: Validator<N>,
 {
+    type Context<'ctx> = (A::Context<'ctx>, B::Context<'ctx>);
+
     #[inline]
-    fn validate<E: Into<DekeError>, Q: SRobotQLike<N, E>>(
+    fn validate<'ctx, E: Into<DekeError>, Q: SRobotQLike<N, E>>(
         &mut self,
         q: Q,
+        ctx: &Self::Context<'ctx>,
     ) -> DekeResult<()> {
         let q = q.to_srobotq().map_err(Into::into)?;
-        match self.0.validate(q) {
+        match self.0.validate(q, &ctx.0) {
             Ok(()) => Ok(()),
-            Err(_) => self.1.validate(q),
+            Err(_) => self.1.validate(q, &ctx.1),
         }
     }
 
     #[inline]
-    fn validate_motion(&mut self, qs: &[SRobotQ<N>]) -> DekeResult<()> {
-        match self.0.validate_motion(qs) {
+    fn validate_motion<'ctx>(
+        &mut self,
+        qs: &[SRobotQ<N>],
+        ctx: &Self::Context<'ctx>,
+    ) -> DekeResult<()> {
+        match self.0.validate_motion(qs, &ctx.0) {
             Ok(()) => Ok(()),
-            Err(_) => self.1.validate_motion(qs),
+            Err(_) => self.1.validate_motion(qs, &ctx.1),
         }
     }
 }
@@ -71,21 +176,28 @@ impl<const N: usize, A> Validator<N> for ValidatorNot<A>
 where
     A: Validator<N>,
 {
+    type Context<'ctx> = A::Context<'ctx>;
+
     #[inline]
-    fn validate<E: Into<DekeError>, Q: SRobotQLike<N, E>>(
+    fn validate<'ctx, E: Into<DekeError>, Q: SRobotQLike<N, E>>(
         &mut self,
         q: Q,
+        ctx: &Self::Context<'ctx>,
     ) -> DekeResult<()> {
         let q = q.to_srobotq().map_err(Into::into)?;
-        match self.0.validate(q) {
+        match self.0.validate(q, ctx) {
             Ok(()) => Err(DekeError::SuperError),
             Err(_) => Ok(()),
         }
     }
 
     #[inline]
-    fn validate_motion(&mut self, qs: &[SRobotQ<N>]) -> DekeResult<()> {
-        match self.0.validate_motion(qs) {
+    fn validate_motion<'ctx>(
+        &mut self,
+        qs: &[SRobotQ<N>],
+        ctx: &Self::Context<'ctx>,
+    ) -> DekeResult<()> {
+        match self.0.validate_motion(qs, ctx) {
             Ok(()) => Err(DekeError::SuperError),
             Err(_) => Ok(()),
         }
@@ -138,10 +250,13 @@ impl<const N: usize> JointValidator<N> {
 }
 
 impl<const N: usize> Validator<N> for JointValidator<N> {
+    type Context<'ctx> = ();
+
     #[inline]
-    fn validate<E: Into<DekeError>, Q: SRobotQLike<N, E>>(
+    fn validate<'ctx, E: Into<DekeError>, Q: SRobotQLike<N, E>>(
         &mut self,
         q: Q,
+        _ctx: &Self::Context<'ctx>,
     ) -> DekeResult<()> {
         let q = q.to_srobotq().map_err(Into::into)?;
         if q.any_lt(&self.lower) || q.any_gt(&self.upper) {
@@ -158,9 +273,13 @@ impl<const N: usize> Validator<N> for JointValidator<N> {
     }
 
     #[inline]
-    fn validate_motion(&mut self, qs: &[SRobotQ<N>]) -> DekeResult<()> {
+    fn validate_motion<'ctx>(
+        &mut self,
+        qs: &[SRobotQ<N>],
+        _ctx: &Self::Context<'ctx>,
+    ) -> DekeResult<()> {
         for q in qs {
-            self.validate(*q)?;
+            self.validate(*q, _ctx)?;
         }
         Ok(())
     }

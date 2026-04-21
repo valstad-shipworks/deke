@@ -71,11 +71,11 @@ fn main() {
 
     let mut env = wreck::Collider::default();
     env.add(wreck::Sphere::new(glam::Vec3::new(1.5, 0.0, 1.75), 0.5));
-    let mut validator = validator(env);
+    let mut validator = validator();
 
     println!("environment: 1 sphere at (1.5, 0.0, 1.75) r=0.5");
 
-    deke_viz::log_collider(&rec, "obstacle", validator.1.environment())
+    deke_viz::log_collider(&rec, "obstacle", &env)
         .expect("failed to log obstacle");
 
     let kin_limits = deke_rrt::KinematicLimits {
@@ -98,10 +98,12 @@ fn main() {
 
     let settings =
         deke_rrt::KrrtcSettings::new(SRobotQ(JOINT_LOWER), SRobotQ(JOINT_UPPER), kin_limits);
-    let planner = krrtc(settings);
+    let planner = krrtc();
+
+    let ctx = ((), deke_wreck::WreckValidatorContext::new(&env));
 
     println!("planning...");
-    let (result, diag) = planner.plan(start, goal, &mut validator);
+    let (result, diag) = planner.plan(&settings, start, goal, &mut validator, &ctx);
     println!("{diag}");
 
     let path = match result {

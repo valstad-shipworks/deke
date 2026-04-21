@@ -10,6 +10,7 @@ mod fk;
 mod fk_dynamic;
 mod path;
 mod q;
+mod traj;
 mod validator;
 mod validator_dynamic;
 
@@ -19,7 +20,8 @@ pub use fk::{
 pub use fk_dynamic::{BoxFK, DynamicDHChain, DynamicHPChain, DynamicURDFChain};
 pub use path::{RobotPath, SRobotPath};
 pub use q::{RobotQ, SRobotQ, robotq, SRobotQLike};
-pub use validator::{JointValidator, Validator, ValidatorAnd, ValidatorNot, ValidatorOr};
+pub use traj::{RobotTraj, SRobotTraj};
+pub use validator::{JointValidator, Validator, ValidatorAnd, ValidatorNot, ValidatorOr, ValidatorContext, Leaf, FromFlattened};
 pub use validator_dynamic::DynamicJointValidator;
 
 #[derive(Debug, Clone, thiserror::Error)]
@@ -52,15 +54,33 @@ pub type DekeResult<T> = Result<T, DekeError>;
 
 pub trait Planner<const N: usize>: Sized + Clone + Debug + Send + Sync + 'static {
     type Diagnostic: Display + Send + Sync;
+    type Config;
 
     fn plan<
         E: Into<DekeError>,
         A: SRobotQLike<N, E>,
         B: SRobotQLike<N, E>,
+        V: Validator<N>,
     >(
         &self,
+        config: &Self::Config,
         start: A,
         goal: B,
-        validators: &mut impl Validator<N>,
+        validator: &mut V,
+        ctx: &V::Context<'_>,
     ) -> (DekeResult<SRobotPath<N>>, Self::Diagnostic);
+}
+
+pub trait Retimer<const N: usize>: Sized + Clone + Debug + Send + Sync + 'static {
+    type Diagnostic: Display + Send + Sync;
+    type Constraints;
+
+    fn retime<V: Validator<N>>(
+        &self,
+        constraints: &Self::Constraints,
+        path: &SRobotPath<N>,
+        fk: &impl FKChain<N>,
+        validator: &mut V,
+        ctx: &V::Context<'_>,
+    ) -> (DekeResult<SRobotTraj<N>>, Self::Diagnostic);
 }

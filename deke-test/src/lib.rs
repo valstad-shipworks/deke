@@ -19,26 +19,26 @@ mod tests {
         println!("lower: {:?}", JOINT_LOWER);
         println!("upper: {:?}", JOINT_UPPER);
 
-        let env = wreck::Collider::default();
-        let _v = validator(env);
+        let _v = validator();
 
-        let rrtc_settings = deke_rrt::RrtcSettings::new(
+        let _rrtc_settings = deke_rrt::RrtcSettings::new(
             deke_types::SRobotQ(JOINT_LOWER),
             deke_types::SRobotQ(JOINT_UPPER),
         );
-        let _p = rrtc(rrtc_settings);
+        let _p = rrtc();
 
-        let aorrtc_settings = deke_rrt::AorrtcSettings::new(
+        let _aorrtc_settings = deke_rrt::AorrtcSettings::new(
             deke_types::SRobotQ(JOINT_LOWER),
             deke_types::SRobotQ(JOINT_UPPER),
         );
-        let _p = aorrtc(aorrtc_settings);
+        let _p = aorrtc();
     }
 
     #[test]
     fn validate_matches_vamp() {
         let env = wreck::Collider::default();
-        let mut deke_validator = validator(env);
+        let mut deke_validator = validator();
+        let ctx = ((), deke_wreck::WreckValidatorContext::new(&env));
         let vamp_env = vamp::Environment::new();
         let vamp_robot = vamp::Robot::M20ID12L;
 
@@ -58,7 +58,7 @@ mod tests {
                 q[j] = ((rng >> 33) as f32 / (1u64 << 31) as f32) * 8.0 - 4.0;
             }
 
-            let deke_result = deke_validator.validate_motion(&[deke_types::SRobotQ(q)]);
+            let deke_result = deke_validator.validate_motion(&[deke_types::SRobotQ(q)], &ctx);
             let deke_ok = deke_result.is_ok();
             let vamp_ok = vamp_robot.validate(&q, &vamp_env, true);
 
@@ -122,8 +122,9 @@ mod tests {
         ];
 
         let env = wreck::Collider::default();
-        let mut deke_validator = validator(env);
-        let deke_result = deke_validator.validate(deke_types::SRobotQ(q));
+        let mut deke_validator = validator();
+        let ctx = ((), deke_wreck::WreckValidatorContext::new(&env));
+        let deke_result = deke_validator.validate(deke_types::SRobotQ(q), &ctx);
         assert!(
             deke_result.is_ok(),
             "deke rejected position: {:?}",
@@ -184,15 +185,16 @@ mod tests {
                 deke_types::SRobotQ(vamp_lower),
                 deke_types::SRobotQ(vamp_upper),
             ),
-            validator(wreck_env).1,
+            validator().1,
         );
+        let ctx = ((), deke_wreck::WreckValidatorContext::new(&wreck_env));
         let vamp_robot = vamp::Robot::M20ID12L;
 
         let rrtc_settings = deke_rrt::RrtcSettings::new(
             deke_types::SRobotQ(vamp_lower),
             deke_types::SRobotQ(vamp_upper),
         );
-        let planner = rrtc(rrtc_settings);
+        let planner = rrtc();
         let vamp_settings = vamp::RRTCSettings::default();
 
         println!(
@@ -203,9 +205,11 @@ mod tests {
         for (i, &(start, goal)) in PROBLEMS.iter().enumerate() {
             let mut rv = v.clone();
             let (r_result, _) = planner.plan(
+                &rrtc_settings,
                 deke_types::SRobotQ(start),
                 deke_types::SRobotQ(goal),
                 &mut rv,
+                &ctx,
             );
 
             let mut rng = vamp::Rng::halton(vamp_robot);
@@ -276,7 +280,7 @@ mod tests {
                 let dense = r_path.densify(0.02);
                 let mut check_v = v.clone();
                 for (wi, sq) in dense.iter().enumerate() {
-                    let rv_ok = check_v.validate(*sq);
+                    let rv_ok = check_v.validate(*sq, &ctx);
                     assert!(
                         rv_ok.is_ok(),
                         "prob {i}: deke path waypoint {wi}/{} collides (deke): {:?}",
@@ -310,7 +314,8 @@ mod tests {
         ] {
             env.add(wreck::Sphere::new(glam::Vec3::new(x, y, z), r));
         }
-        let v = validator(env);
+        let v = validator();
+        let ctx = ((), deke_wreck::WreckValidatorContext::new(&env));
 
         let mut aorrtc_settings = deke_rrt::AorrtcSettings::new(
             deke_types::SRobotQ(JOINT_LOWER),
@@ -318,14 +323,16 @@ mod tests {
         );
         aorrtc_settings.max_iterations = 100;
         aorrtc_settings.max_samples = 10_000;
-        let planner = aorrtc(aorrtc_settings);
+        let planner = aorrtc();
 
         let t0 = std::time::Instant::now();
         let mut rv = v.clone();
         let (result, diag) = planner.plan(
+            &aorrtc_settings,
             deke_types::SRobotQ(start),
             deke_types::SRobotQ(goal),
             &mut rv,
+            &ctx,
         );
         let elapsed = t0.elapsed();
 
@@ -416,14 +423,15 @@ mod tests {
             env.add(wreck::Sphere::new(glam::Vec3::new(x, y, z), r));
         }
 
-        let v = validator(env);
+        let v = validator();
+        let ctx = ((), deke_wreck::WreckValidatorContext::new(&env));
 
         let settings = deke_rrt::KrrtcSettings::new(
             deke_types::SRobotQ(JOINT_LOWER),
             deke_types::SRobotQ(JOINT_UPPER),
             kin_limits,
         );
-        let planner = krrtc(settings);
+        let planner = krrtc();
 
         println!(
             "\n{:<8} {:>6} {:>10} {:>10}",
@@ -434,9 +442,11 @@ mod tests {
         for (i, &(start, goal)) in PROBLEMS.iter().enumerate() {
             let mut rv = v.clone();
             let (result, diag) = planner.plan(
+                &settings,
                 deke_types::SRobotQ(start),
                 deke_types::SRobotQ(goal),
                 &mut rv,
+                &ctx,
             );
 
             let (wps, cost) = match &result {
@@ -492,7 +502,8 @@ mod tests {
         let wreck_env = wreck::Collider::default();
         let vamp_env = vamp::Environment::new();
 
-        let mut rv_check = validator(wreck_env.clone());
+        let mut rv_check = validator();
+        let ctx = ((), deke_wreck::WreckValidatorContext::new(&wreck_env));
         let vamp_robot = vamp::Robot::M20ID12L;
 
         let mut rng = 0xABCD1234u64;
@@ -506,7 +517,7 @@ mod tests {
                 let t = (rng >> 33) as f32 / (1u64 << 31) as f32;
                 q[j] = JOINT_LOWER[j] + t * (JOINT_UPPER[j] - JOINT_LOWER[j]);
             }
-            if rv_check.validate(deke_types::SRobotQ(q)).is_ok()
+            if rv_check.validate(deke_types::SRobotQ(q), &ctx).is_ok()
                 && vamp_robot.validate(&q, &vamp_env, true)
             {
                 valid_configs.push(q);
@@ -523,12 +534,12 @@ mod tests {
             valid_configs.len()
         );
 
-        let v = validator(wreck_env);
+        let v = validator();
         let rrtc_settings = deke_rrt::RrtcSettings::new(
             deke_types::SRobotQ(JOINT_LOWER),
             deke_types::SRobotQ(JOINT_UPPER),
         );
-        let planner = rrtc(rrtc_settings);
+        let planner = rrtc();
 
         let vamp_settings = vamp::RRTCSettings::default();
 
@@ -541,9 +552,11 @@ mod tests {
             let (start, goal) = (*start, *goal);
             let mut rv = v.clone();
             let (result, diag) = planner.plan(
+                &rrtc_settings,
                 deke_types::SRobotQ(start),
                 deke_types::SRobotQ(goal),
                 &mut rv,
+                &ctx,
             );
 
             let mut rng = vamp::Rng::halton(vamp_robot);

@@ -25,7 +25,8 @@ fn bench_validate(c: &mut Criterion) {
     let configs = gen_configs(1024);
 
     let env = wreck::Collider::default();
-    let validator = m20id12l::validator(env);
+    let validator = m20id12l::validator();
+    let ctx = ((), deke_wreck::WreckValidatorContext::new(&env));
     let vamp_env = vamp::Environment::new();
     let vamp_robot = vamp::Robot::M20ID12L;
 
@@ -35,7 +36,7 @@ fn bench_validate(c: &mut Criterion) {
         b.iter(|| {
             let q = &configs[i % configs.len()];
             i += 1;
-            let _ = black_box(v.validate(deke_types::SRobotQ(*q)));
+            let _ = black_box(v.validate(deke_types::SRobotQ(*q), &ctx));
         });
     });
 
@@ -49,6 +50,7 @@ fn bench_validate(c: &mut Criterion) {
     });
 
     let no_limits = validator.clone().1;
+    let wreck_ctx = deke_wreck::WreckValidatorContext::new(&env);
 
     c.bench_function("deke_validate_no_limits", |b| {
         let mut v = no_limits.clone();
@@ -56,7 +58,7 @@ fn bench_validate(c: &mut Criterion) {
         b.iter(|| {
             let q = &configs[i % configs.len()];
             i += 1;
-            let _ = black_box(v.validate(deke_types::SRobotQ(*q)));
+            let _ = black_box(v.validate(deke_types::SRobotQ(*q), &wreck_ctx));
         });
     });
 
@@ -81,7 +83,7 @@ fn bench_validate(c: &mut Criterion) {
         b.iter(|| {
             let q = &configs[i % configs.len()];
             i += 1;
-            let _ = black_box(v.validate(deke_types::SRobotQ(*q)));
+            let _ = black_box(v.validate(deke_types::SRobotQ(*q), &ctx));
         });
     });
 
@@ -93,7 +95,7 @@ fn bench_validate(c: &mut Criterion) {
         b.iter(|| {
             let q = &configs[i % configs.len()];
             i += 1;
-            let _ = black_box(v.validate(deke_types::SRobotQ(*q)));
+            let _ = black_box(v.validate(deke_types::SRobotQ(*q), &wreck_ctx));
         });
     });
 }

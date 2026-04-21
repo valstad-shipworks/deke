@@ -49,29 +49,31 @@ impl fmt::Display for RrtDiagnostic {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct RrtcPlanner<const N: usize> {
-    pub settings: RrtcSettings<N>,
-}
+#[derive(Debug, Clone, Default)]
+pub struct RrtcPlanner<const N: usize>;
 
 impl<const N: usize> RrtcPlanner<N> {
-    pub fn new(settings: RrtcSettings<N>) -> Self {
-        Self { settings }
+    pub fn new() -> Self {
+        Self
     }
 }
 
 impl<const N: usize> Planner<N> for RrtcPlanner<N> {
     type Diagnostic = RrtDiagnostic;
+    type Config = RrtcSettings<N>;
 
     fn plan<
         E: Into<DekeError>,
         A: SRobotQLike<N, E>,
         B: SRobotQLike<N, E>,
+        V: Validator<N>,
     >(
         &self,
+        config: &Self::Config,
         start: A,
         goal: B,
-        validators: &mut impl Validator<N>,
+        validator: &mut V,
+        ctx: &V::Context<'_>,
     ) -> (DekeResult<SRobotPath<N>>, Self::Diagnostic) {
         let start = match start.to_srobotq().map_err(Into::into) {
             Ok(s) => s,
@@ -81,34 +83,36 @@ impl<const N: usize> Planner<N> for RrtcPlanner<N> {
             Ok(g) => g,
             Err(e) => return (Err(e), RrtDiagnostic::empty()),
         };
-        let mut rng = StdRand::seed(self.settings.seed);
-        rrtc::solve(&start, &goal, validators, &self.settings, &mut rng)
+        let mut rng = StdRand::seed(config.seed);
+        rrtc::solve(&start, &goal, validator, ctx, config, &mut rng)
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct AorrtcPlanner<const N: usize> {
-    pub settings: AorrtcSettings<N>,
-}
+#[derive(Debug, Clone, Default)]
+pub struct AorrtcPlanner<const N: usize>;
 
 impl<const N: usize> AorrtcPlanner<N> {
-    pub fn new(settings: AorrtcSettings<N>) -> Self {
-        Self { settings }
+    pub fn new() -> Self {
+        Self
     }
 }
 
 impl<const N: usize> Planner<N> for AorrtcPlanner<N> {
     type Diagnostic = RrtDiagnostic;
+    type Config = AorrtcSettings<N>;
 
     fn plan<
         E: Into<DekeError>,
         A: SRobotQLike<N, E>,
         B: SRobotQLike<N, E>,
+        V: Validator<N>,
     >(
         &self,
+        config: &Self::Config,
         start: A,
         goal: B,
-        validators: &mut impl Validator<N>,
+        validator: &mut V,
+        ctx: &V::Context<'_>,
     ) -> (DekeResult<SRobotPath<N>>, Self::Diagnostic) {
         let start = match start.to_srobotq().map_err(Into::into) {
             Ok(s) => s,
@@ -118,34 +122,36 @@ impl<const N: usize> Planner<N> for AorrtcPlanner<N> {
             Ok(g) => g,
             Err(e) => return (Err(e), RrtDiagnostic::empty()),
         };
-        let mut rng = StdRand::seed(self.settings.rrtc.seed);
-        aorrtc::solve(&start, &goal, validators, &self.settings, &mut rng)
+        let mut rng = StdRand::seed(config.rrtc.seed);
+        aorrtc::solve(&start, &goal, validator, ctx, config, &mut rng)
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct KrrtcPlanner<const N: usize> {
-    pub settings: KrrtcSettings<N>,
-}
+#[derive(Debug, Clone, Default)]
+pub struct KrrtcPlanner<const N: usize>;
 
 impl<const N: usize> KrrtcPlanner<N> {
-    pub fn new(settings: KrrtcSettings<N>) -> Self {
-        Self { settings }
+    pub fn new() -> Self {
+        Self
     }
 }
 
 impl<const N: usize> Planner<N> for KrrtcPlanner<N> {
     type Diagnostic = RrtDiagnostic;
+    type Config = KrrtcSettings<N>;
 
     fn plan<
         E: Into<DekeError>,
         A: SRobotQLike<N, E>,
         B: SRobotQLike<N, E>,
+        V: Validator<N>,
     >(
         &self,
+        config: &Self::Config,
         start: A,
         goal: B,
-        validators: &mut impl Validator<N>,
+        validator: &mut V,
+        ctx: &V::Context<'_>,
     ) -> (DekeResult<SRobotPath<N>>, Self::Diagnostic) {
         let start = match start.to_srobotq().map_err(Into::into) {
             Ok(s) => s,
@@ -155,7 +161,7 @@ impl<const N: usize> Planner<N> for KrrtcPlanner<N> {
             Ok(g) => g,
             Err(e) => return (Err(e), RrtDiagnostic::empty()),
         };
-        let mut rng = StdRand::seed(self.settings.seed);
-        krrtc::solve(&start, &goal, validators, &self.settings, &mut rng)
+        let mut rng = StdRand::seed(config.seed);
+        krrtc::solve(&start, &goal, validator, ctx, config, &mut rng)
     }
 }

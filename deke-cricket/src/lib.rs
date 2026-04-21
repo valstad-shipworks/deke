@@ -956,8 +956,7 @@ pub fn cricket(input: TokenStream) -> TokenStream {
                 CollisionValidator,
             >;
 
-            pub fn validator(environment: wreck::Collider) -> Validator {
-                let environment = std::sync::Arc::new(environment);
+            pub fn validator() -> Validator {
                 let fk = deke_types::URDFChain::<#n_lit>::new(URDF_JOINTS);
 
                 let links = [#(#link_collider_builds),*];
@@ -968,21 +967,21 @@ pub fn cricket(input: TokenStream) -> TokenStream {
                     deke_types::SRobotQ(JOINT_LOWER),
                     deke_types::SRobotQ(JOINT_UPPER),
                 );
-                let collisions = deke_wreck::WreckValidator::new(links, ee, base, environment, fk);
+                let collisions = deke_wreck::WreckValidator::new(links, ee, base, fk);
 
                 deke_types::ValidatorAnd(joints, collisions)
             }
 
-            pub fn rrtc(settings: deke_rrt::RrtcSettings<#n_lit>) -> deke_rrt::RrtcPlanner<#n_lit> {
-                deke_rrt::RrtcPlanner::new(settings)
+            pub fn rrtc() -> deke_rrt::RrtcPlanner<#n_lit> {
+                deke_rrt::RrtcPlanner::new()
             }
 
-            pub fn aorrtc(settings: deke_rrt::AorrtcSettings<#n_lit>) -> deke_rrt::AorrtcPlanner<#n_lit> {
-                deke_rrt::AorrtcPlanner::new(settings)
+            pub fn aorrtc() -> deke_rrt::AorrtcPlanner<#n_lit> {
+                deke_rrt::AorrtcPlanner::new()
             }
 
-            pub fn krrtc(settings: deke_rrt::KrrtcSettings<#n_lit>) -> deke_rrt::KrrtcPlanner<#n_lit> {
-                deke_rrt::KrrtcPlanner::new(settings)
+            pub fn krrtc() -> deke_rrt::KrrtcPlanner<#n_lit> {
+                deke_rrt::KrrtcPlanner::new()
             }
         }
     };

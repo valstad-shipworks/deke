@@ -1,12 +1,41 @@
 mod dynamic;
-use std::sync::Arc;
 
 pub use dynamic::DynamicWreckValidator;
 
-use deke_types::{DekeError, DekeResult, FKChain, SRobotQ, SRobotQLike, Validator};
+use deke_types::{
+    DekeError, DekeResult, FKChain, SRobotQ, SRobotQLike, Validator, ValidatorContext,
+};
 use glam::Affine3A;
 use uuid::Uuid;
 use wreck::{Collider, Transformable};
+
+pub struct WreckValidatorContext<'a, const N: usize> {
+    pub extra_attachments: &'a [&'a Attachment<N>],
+    pub self_collisions: bool,
+    pub environment: &'a Collider,
+}
+
+impl<'a, const N: usize> WreckValidatorContext<'a, N> {
+    pub fn new(environment: &'a Collider) -> Self {
+        Self {
+            extra_attachments: &[],
+            self_collisions: true,
+            environment,
+        }
+    }
+
+    pub fn with_extras(mut self, extras: &'a [&'a Attachment<N>]) -> Self {
+        self.extra_attachments = extras;
+        self
+    }
+
+    pub fn with_self_collisions(mut self, enabled: bool) -> Self {
+        self.self_collisions = enabled;
+        self
+    }
+}
+
+impl<'a, const N: usize> ValidatorContext for WreckValidatorContext<'a, N> {}
 
 #[derive(Debug, Clone, Copy)]
 pub struct CollisionFilter<const N: usize> {
@@ -130,9 +159,7 @@ pub struct WreckValidator<const N: usize, FK: FKChain<N>> {
     base: Option<CollisionBody<N>>,
     links: [CollisionBody<N>; N],
     ee: CollisionBody<N>,
-    environment: Arc<Collider>,
     fk: FK,
-    self_collisions: bool,
 }
 
 impl<const N: usize, FK: FKChain<N>> std::fmt::Debug for WreckValidator<N, FK> {
@@ -151,9 +178,7 @@ impl<const N: usize, FK: FKChain<N>> Clone for WreckValidator<N, FK> {
             base: self.base.clone(),
             links: self.links.clone(),
             ee: self.ee.clone(),
-            environment: self.environment.clone(),
             fk: self.fk.clone(),
-            self_collisions: self.self_collisions,
         }
     }
 }
@@ -177,25 +202,14 @@ impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
         links: [CollisionBody<N>; N],
         ee: CollisionBody<N>,
         base: Option<CollisionBody<N>>,
-        environment: Arc<Collider>,
         fk: FK,
     ) -> Self {
         Self {
             base,
             links,
             ee,
-            environment,
             fk,
-            self_collisions: true,
         }
-    }
-
-    pub fn set_self_collisions(&mut self, enabled: bool) {
-        self.self_collisions = enabled;
-    }
-
-    pub fn self_collisions(&self) -> bool {
-        self.self_collisions
     }
 
     pub fn links_ref(&self) -> &[CollisionBody<N>; N] {
@@ -212,18 +226,9 @@ impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
         [CollisionBody<N>; N],
         CollisionBody<N>,
         Option<CollisionBody<N>>,
-        Arc<Collider>,
         FK,
     ) {
-        (self.links, self.ee, self.base, self.environment, self.fk)
-    }
-
-    pub fn with_environment(&mut self, environment: Arc<Collider>) {
-        self.environment = environment;
-    }
-
-    pub fn environment(&self) -> &Arc<Collider> {
-        &self.environment
+        (self.links, self.ee, self.base, self.fk)
     }
 
     /// Adds an attachment to a link (0..N-1) or the end effector (N).
@@ -249,37 +254,52 @@ impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
         }
     }
 
-    fn check_collisions(&mut self, q: &SRobotQ<N>) -> DekeResult<()> {
+    fn check_collisions(
+        &mut self,
+        q: &SRobotQ<N>,
+        ctx: &WreckValidatorContext<'_, N>,
+    ) -> DekeResult<()> {
         let transforms = self.fk.fk(q).map_err(Into::into)?;
 
         for i in 0..N - 1 {
             self.links[i].apply_transform(transforms[i]);
-            self.check_link(i)?;
+            self.check_link(i, ctx)?;
         }
 
         let last_tf = transforms[N - 1];
         let delta = self.links[N - 1].compute_delta(last_tf);
         self.links[N - 1].apply_precomputed(delta, last_tf);
-        self.check_link(N - 1)?;
+        self.check_link(N - 1, ctx)?;
         self.ee.apply_precomputed(delta, last_tf);
-        self.check_ee()?;
+        self.check_ee(ctx)?;
 
         Ok(())
     }
 
     #[inline]
-    fn check_body_env(&self, body: &CollisionBody<N>) -> DekeResult<()> {
+    fn check_body_env(
+        &self,
+        body: &CollisionBody<N>,
+        ctx: &WreckValidatorContext<'_, N>,
+    ) -> DekeResult<()> {
         for (collider, token, filter) in body.sub_colliders() {
-            if filter.obstacles && collider.collides_other(&self.environment) {
-                return Err(DekeError::EnvironmentCollision(*token, *token));
+            if filter.obstacles {
+                if collider.collides_other(ctx.environment) {
+                    return Err(DekeError::EnvironmentCollision(*token, *token));
+                }
+                for extra in ctx.extra_attachments {
+                    if collider.collides_other(&extra.collision) {
+                        return Err(DekeError::EnvironmentCollision(*token, extra.token));
+                    }
+                }
             }
         }
         Ok(())
     }
 
-    fn check_link(&self, i: usize) -> DekeResult<()> {
-        self.check_body_env(&self.links[i])?;
-        if self.self_collisions {
+    fn check_link(&self, i: usize, ctx: &WreckValidatorContext<'_, N>) -> DekeResult<()> {
+        self.check_body_env(&self.links[i], ctx)?;
+        if ctx.self_collisions {
             for j in 0..i {
                 self.check_body_pair(&self.links[j], &self.links[i], j, i)?;
             }
@@ -290,9 +310,9 @@ impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
         Ok(())
     }
 
-    fn check_ee(&self) -> DekeResult<()> {
-        self.check_body_env(&self.ee)?;
-        if self.self_collisions {
+    fn check_ee(&self, ctx: &WreckValidatorContext<'_, N>) -> DekeResult<()> {
+        self.check_body_env(&self.ee, ctx)?;
+        if ctx.self_collisions {
             for j in 0..N {
                 self.check_body_pair(&self.links[j], &self.ee, j, N)?;
             }
@@ -447,17 +467,24 @@ impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
 }
 
 impl<const N: usize, FK: FKChain<N> + 'static> Validator<N> for WreckValidator<N, FK> {
-    fn validate<E: Into<DekeError>, A: SRobotQLike<N, E>>(
+    type Context<'ctx> = WreckValidatorContext<'ctx, N>;
+
+    fn validate<'ctx, E: Into<DekeError>, A: SRobotQLike<N, E>>(
         &mut self,
         q: A,
+        ctx: &Self::Context<'ctx>,
     ) -> DekeResult<()> {
         let q = q.to_srobotq().map_err(Into::into)?;
-        self.check_collisions(&q)
+        self.check_collisions(&q, ctx)
     }
 
-    fn validate_motion(&mut self, qs: &[SRobotQ<N>]) -> DekeResult<()> {
+    fn validate_motion<'ctx>(
+        &mut self,
+        qs: &[SRobotQ<N>],
+        ctx: &Self::Context<'ctx>,
+    ) -> DekeResult<()> {
         for q in qs {
-            self.check_collisions(q)?;
+            self.check_collisions(q, ctx)?;
         }
         Ok(())
     }

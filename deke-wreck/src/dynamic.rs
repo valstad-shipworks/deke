@@ -2,7 +2,7 @@ use std::fmt::Debug;
 
 use deke_types::{BoxFK, DekeError, DekeResult, FKChain, SRobotQ, SRobotQLike, Validator};
 
-use crate::WreckValidator;
+use crate::{WreckValidator, WreckValidatorContext};
 
 pub enum DynamicWreckValidator {
     J1(Box<WreckValidator<1, BoxFK<1>>>),
@@ -59,96 +59,96 @@ impl DynamicWreckValidator {
         }
     }
 
-    pub fn set_self_collisions(&mut self, enabled: bool) {
-        match self {
-            Self::J1(v) => v.set_self_collisions(enabled),
-            Self::J2(v) => v.set_self_collisions(enabled),
-            Self::J3(v) => v.set_self_collisions(enabled),
-            Self::J4(v) => v.set_self_collisions(enabled),
-            Self::J5(v) => v.set_self_collisions(enabled),
-            Self::J6(v) => v.set_self_collisions(enabled),
-            Self::J7(v) => v.set_self_collisions(enabled),
-            Self::J8(v) => v.set_self_collisions(enabled),
-        }
-    }
-
-    pub fn self_collisions(&self) -> bool {
-        match self {
-            Self::J1(v) => v.self_collisions(),
-            Self::J2(v) => v.self_collisions(),
-            Self::J3(v) => v.self_collisions(),
-            Self::J4(v) => v.self_collisions(),
-            Self::J5(v) => v.self_collisions(),
-            Self::J6(v) => v.self_collisions(),
-            Self::J7(v) => v.self_collisions(),
-            Self::J8(v) => v.self_collisions(),
-        }
-    }
-
-    pub fn validate_dyn(&mut self, q: &[f32]) -> DekeResult<()> {
+    pub fn validate_dyn(
+        &mut self,
+        q: &[f32],
+        environment: &wreck::Collider,
+        self_collisions: bool,
+    ) -> DekeResult<()> {
         match self {
             Self::J1(v) => {
                 let arr: &[f32; 1] = q.try_into().map_err(|_| DekeError::ShapeMismatch {
                     expected: 1,
                     found: q.len(),
                 })?;
-                v.validate(SRobotQ(*arr))
+                let ctx = WreckValidatorContext::new(environment)
+                    .with_self_collisions(self_collisions);
+                v.validate(SRobotQ(*arr), &ctx)
             }
             Self::J2(v) => {
                 let arr: &[f32; 2] = q.try_into().map_err(|_| DekeError::ShapeMismatch {
                     expected: 2,
                     found: q.len(),
                 })?;
-                v.validate(SRobotQ(*arr))
+                let ctx = WreckValidatorContext::new(environment)
+                    .with_self_collisions(self_collisions);
+                v.validate(SRobotQ(*arr), &ctx)
             }
             Self::J3(v) => {
                 let arr: &[f32; 3] = q.try_into().map_err(|_| DekeError::ShapeMismatch {
                     expected: 3,
                     found: q.len(),
                 })?;
-                v.validate(SRobotQ(*arr))
+                let ctx = WreckValidatorContext::new(environment)
+                    .with_self_collisions(self_collisions);
+                v.validate(SRobotQ(*arr), &ctx)
             }
             Self::J4(v) => {
                 let arr: &[f32; 4] = q.try_into().map_err(|_| DekeError::ShapeMismatch {
                     expected: 4,
                     found: q.len(),
                 })?;
-                v.validate(SRobotQ(*arr))
+                let ctx = WreckValidatorContext::new(environment)
+                    .with_self_collisions(self_collisions);
+                v.validate(SRobotQ(*arr), &ctx)
             }
             Self::J5(v) => {
                 let arr: &[f32; 5] = q.try_into().map_err(|_| DekeError::ShapeMismatch {
                     expected: 5,
                     found: q.len(),
                 })?;
-                v.validate(SRobotQ(*arr))
+                let ctx = WreckValidatorContext::new(environment)
+                    .with_self_collisions(self_collisions);
+                v.validate(SRobotQ(*arr), &ctx)
             }
             Self::J6(v) => {
                 let arr: &[f32; 6] = q.try_into().map_err(|_| DekeError::ShapeMismatch {
                     expected: 6,
                     found: q.len(),
                 })?;
-                v.validate(SRobotQ(*arr))
+                let ctx = WreckValidatorContext::new(environment)
+                    .with_self_collisions(self_collisions);
+                v.validate(SRobotQ(*arr), &ctx)
             }
             Self::J7(v) => {
                 let arr: &[f32; 7] = q.try_into().map_err(|_| DekeError::ShapeMismatch {
                     expected: 7,
                     found: q.len(),
                 })?;
-                v.validate(SRobotQ(*arr))
+                let ctx = WreckValidatorContext::new(environment)
+                    .with_self_collisions(self_collisions);
+                v.validate(SRobotQ(*arr), &ctx)
             }
             Self::J8(v) => {
                 let arr: &[f32; 8] = q.try_into().map_err(|_| DekeError::ShapeMismatch {
                     expected: 8,
                     found: q.len(),
                 })?;
-                v.validate(SRobotQ(*arr))
+                let ctx = WreckValidatorContext::new(environment)
+                    .with_self_collisions(self_collisions);
+                v.validate(SRobotQ(*arr), &ctx)
             }
         }
     }
 
-    pub fn validate_motion_dyn(&mut self, qs: &[&[f32]]) -> DekeResult<()> {
+    pub fn validate_motion_dyn(
+        &mut self,
+        qs: &[&[f32]],
+        environment: &wreck::Collider,
+        self_collisions: bool,
+    ) -> DekeResult<()> {
         for q in qs {
-            self.validate_dyn(q)?;
+            self.validate_dyn(q, environment, self_collisions)?;
         }
         Ok(())
     }
@@ -158,12 +158,15 @@ macro_rules! impl_dynamic_wreck {
     ($($n:literal $variant:ident),+) => {
         $(
             impl Validator<$n> for DynamicWreckValidator {
-                fn validate<E: Into<DekeError>, A: SRobotQLike<$n, E>>(
+                type Context<'ctx> = WreckValidatorContext<'ctx, $n>;
+
+                fn validate<'ctx, E: Into<DekeError>, A: SRobotQLike<$n, E>>(
                     &mut self,
                     q: A,
+                    ctx: &Self::Context<'ctx>,
                 ) -> DekeResult<()> {
                     match self {
-                        Self::$variant(v) => v.validate(q),
+                        Self::$variant(v) => v.validate(q, ctx),
                         _ => Err(DekeError::ShapeMismatch {
                             expected: self.dof(),
                             found: $n,
@@ -171,9 +174,13 @@ macro_rules! impl_dynamic_wreck {
                     }
                 }
 
-                fn validate_motion(&mut self, qs: &[SRobotQ<$n>]) -> DekeResult<()> {
+                fn validate_motion<'ctx>(
+                    &mut self,
+                    qs: &[SRobotQ<$n>],
+                    ctx: &Self::Context<'ctx>,
+                ) -> DekeResult<()> {
                     match self {
-                        Self::$variant(v) => v.validate_motion(qs),
+                        Self::$variant(v) => v.validate_motion(qs, ctx),
                         _ => Err(DekeError::ShapeMismatch {
                             expected: self.dof(),
                             found: $n,
@@ -184,10 +191,8 @@ macro_rules! impl_dynamic_wreck {
 
             impl<FK: FKChain<$n> + 'static> From<WreckValidator<$n, FK>> for DynamicWreckValidator {
                 fn from(v: WreckValidator<$n, FK>) -> Self {
-                    let sc = v.self_collisions();
-                    let (links, ee, base, env, fk) = v.into_parts();
-                    let mut w = WreckValidator::new(links, ee, base, env, BoxFK::new(fk));
-                    w.set_self_collisions(sc);
+                    let (links, ee, base, fk) = v.into_parts();
+                    let w = WreckValidator::new(links, ee, base, BoxFK::new(fk));
                     Self::$variant(Box::new(w))
                 }
             }

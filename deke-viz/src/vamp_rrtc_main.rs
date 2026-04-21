@@ -145,7 +145,7 @@ fn main() {
         .collect();
     let path = deke_types::SRobotPath::try_new(waypoints).expect("invalid path");
 
-    let wreck_validator = validator(wreck_env);
+    let _wreck_validator = validator();
     let fk = deke_types::URDFChain::new(URDF_JOINTS);
 
     println!("path has {} waypoints:", path.len());
@@ -170,7 +170,7 @@ fn main() {
         seg_times.len()
     );
 
-    deke_viz::log_collider(&rec, "obstacle", wreck_validator.1.environment())
+    deke_viz::log_collider(&rec, "obstacle", &wreck_env)
         .expect("failed to log obstacle");
 
     println!("logging tcp trace...");

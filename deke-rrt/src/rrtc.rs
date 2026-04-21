@@ -105,11 +105,12 @@ fn steer<const N: usize>(
     }
 }
 
-pub(crate) fn validate_edge<const N: usize>(
+pub(crate) fn validate_edge<const N: usize, V: Validator<N>>(
     from: &SRobotQ<N>,
     to: &SRobotQ<N>,
     resolution: f64,
-    validator: &mut impl Validator<N>,
+    validator: &mut V,
+    ctx: &V::Context<'_>,
 ) -> DekeResult<()> {
     let dist = from.distance(to) as f64;
     let steps = ((dist / resolution).ceil() as usize).max(1);
@@ -118,12 +119,13 @@ pub(crate) fn validate_edge<const N: usize>(
         let t = i as f32 / steps as f32;
         points.push(*from + (*to - *from) * t);
     }
-    validator.validate_motion(&points)
+    validator.validate_motion(&points, ctx)
 }
 
-pub(crate) fn shortcut<const N: usize>(
+pub(crate) fn shortcut<const N: usize, V: Validator<N>>(
     path: &mut Vec<SRobotQ<N>>,
-    validator: &mut impl Validator<N>,
+    validator: &mut V,
+    ctx: &V::Context<'_>,
     resolution: f64,
 ) {
     if path.len() < 3 {
@@ -134,7 +136,7 @@ pub(crate) fn shortcut<const N: usize>(
     while i < path.len().saturating_sub(2) {
         let mut j = path.len() - 1;
         while j > i + 1 {
-            if validate_edge(&path[i], &path[j], resolution, validator).is_ok() {
+            if validate_edge(&path[i], &path[j], resolution, validator, ctx).is_ok() {
                 path.drain(i + 1..j);
                 break;
             }
@@ -144,9 +146,10 @@ pub(crate) fn shortcut<const N: usize>(
     }
 }
 
-pub(crate) fn reduce<const N: usize>(
+pub(crate) fn reduce<const N: usize, V: Validator<N>>(
     path: &mut Vec<SRobotQ<N>>,
-    validator: &mut impl Validator<N>,
+    validator: &mut V,
+    ctx: &V::Context<'_>,
     resolution: f64,
     coeffs: &[f64; N],
     max_steps: usize,
@@ -169,7 +172,7 @@ pub(crate) fn reduce<const N: usize>(
             }
         }
         let Some(idx) = best_idx else { break };
-        if validate_edge(&path[idx - 1], &path[idx + 1], resolution, validator).is_ok() {
+        if validate_edge(&path[idx - 1], &path[idx + 1], resolution, validator, ctx).is_ok() {
             path.remove(idx);
         } else {
             break;
@@ -190,9 +193,10 @@ fn subdivide<const N: usize>(path: &mut Vec<SRobotQ<N>>) {
     *path = new_path;
 }
 
-pub(crate) fn smooth_bspline<const N: usize>(
+pub(crate) fn smooth_bspline<const N: usize, V: Validator<N>>(
     path: &mut Vec<SRobotQ<N>>,
-    validator: &mut impl Validator<N>,
+    validator: &mut V,
+    ctx: &V::Context<'_>,
     resolution: f64,
     max_steps: usize,
     midpoint_interpolation: f32,
@@ -218,8 +222,8 @@ pub(crate) fn smooth_bspline<const N: usize>(
             let candidate = (temp_1 + temp_2) * 0.5;
 
             if curr.distance(&candidate) as f64 > min_change
-                && validate_edge(&prev, &candidate, resolution, validator).is_ok()
-                && validate_edge(&candidate, &next, resolution, validator).is_ok()
+                && validate_edge(&prev, &candidate, resolution, validator, ctx).is_ok()
+                && validate_edge(&candidate, &next, resolution, validator, ctx).is_ok()
             {
                 path[index] = candidate;
                 updated = true;
@@ -270,10 +274,11 @@ fn reconstruct<const N: usize>(
     }
 }
 
-pub(crate) fn solve<const N: usize>(
+pub(crate) fn solve<const N: usize, V: Validator<N>>(
     start: &SRobotQ<N>,
     goal: &SRobotQ<N>,
-    validator: &mut impl Validator<N>,
+    validator: &mut V,
+    ctx: &V::Context<'_>,
     settings: &RrtcSettings<N>,
     rng: &mut impl Rand,
 ) -> (DekeResult<SRobotPath<N>>, RrtDiagnostic) {
@@ -300,7 +305,7 @@ pub(crate) fn solve<const N: usize>(
         );
     }
 
-    if validate_edge(start, goal, settings.resolution, validator).is_ok() {
+    if validate_edge(start, goal, settings.resolution, validator, ctx).is_ok() {
         return (
             Ok(SRobotPath::from_two(*start, *goal)),
             RrtDiagnostic {
@@ -334,6 +339,7 @@ pub(crate) fn solve<const N: usize>(
                 &mut goal_tree,
                 &q_rand,
                 validator,
+                ctx,
                 settings,
                 &dof_coeffs,
             )
@@ -343,6 +349,7 @@ pub(crate) fn solve<const N: usize>(
                 &mut start_tree,
                 &q_rand,
                 validator,
+                ctx,
                 settings,
                 &dof_coeffs,
             )
@@ -357,13 +364,14 @@ pub(crate) fn solve<const N: usize>(
             let mut waypoints = reconstruct(tree_a, idx_a, tree_b, idx_b, extend_start);
 
             if settings.shortcut {
-                shortcut(&mut waypoints, validator, settings.resolution);
+                shortcut(&mut waypoints, validator, ctx, settings.resolution);
             }
 
             if settings.bspline_steps > 0 {
                 smooth_bspline(
                     &mut waypoints,
                     validator,
+                    ctx,
                     settings.resolution,
                     settings.bspline_steps,
                     settings.bspline_midpoint_interpolation,
@@ -371,7 +379,7 @@ pub(crate) fn solve<const N: usize>(
                 );
 
                 if settings.shortcut {
-                    shortcut(&mut waypoints, validator, settings.resolution);
+                    shortcut(&mut waypoints, validator, ctx, settings.resolution);
                 }
             }
 
@@ -379,6 +387,7 @@ pub(crate) fn solve<const N: usize>(
                 reduce(
                     &mut waypoints,
                     validator,
+                    ctx,
                     settings.resolution,
                     &dof_coeffs,
                     settings.reduce_max_steps,
@@ -423,11 +432,12 @@ pub(crate) fn solve<const N: usize>(
     )
 }
 
-fn extend_and_connect<const N: usize>(
+fn extend_and_connect<const N: usize, V: Validator<N>>(
     tree_a: &mut RrtTree<N>,
     tree_b: &mut RrtTree<N>,
     q_rand: &SRobotQ<N>,
-    validator: &mut impl Validator<N>,
+    validator: &mut V,
+    ctx: &V::Context<'_>,
     settings: &RrtcSettings<N>,
     coeffs: &[f64; N],
 ) -> Option<(usize, usize)> {
@@ -445,7 +455,7 @@ fn extend_and_connect<const N: usize>(
     let q_near = *tree_a.node(near_idx);
     let q_new = steer(&q_near, q_rand, settings.range, coeffs);
 
-    if validate_edge(&q_near, &q_new, settings.resolution, validator).is_err() {
+    if validate_edge(&q_near, &q_new, settings.resolution, validator, ctx).is_err() {
         if settings.dynamic_domain {
             let r = tree_a.radius(near_idx);
             tree_a.set_radius(
@@ -475,7 +485,7 @@ fn extend_and_connect<const N: usize>(
 
         let q_step = steer(&q_connect, &q_new, settings.range, coeffs);
 
-        if validate_edge(&q_connect, &q_step, settings.resolution, validator).is_err() {
+        if validate_edge(&q_connect, &q_step, settings.resolution, validator, ctx).is_err() {
             return None;
         }
 

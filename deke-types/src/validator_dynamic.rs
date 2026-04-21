@@ -56,56 +56,56 @@ impl DynamicJointValidator {
                     expected: 1,
                     found: q.len(),
                 })?;
-                v.validate(SRobotQ(*arr))
+                v.validate(SRobotQ(*arr), &())
             }
             Self::J2(v) => {
                 let arr: &[f32; 2] = q.try_into().map_err(|_| DekeError::ShapeMismatch {
                     expected: 2,
                     found: q.len(),
                 })?;
-                v.validate(SRobotQ(*arr))
+                v.validate(SRobotQ(*arr), &())
             }
             Self::J3(v) => {
                 let arr: &[f32; 3] = q.try_into().map_err(|_| DekeError::ShapeMismatch {
                     expected: 3,
                     found: q.len(),
                 })?;
-                v.validate(SRobotQ(*arr))
+                v.validate(SRobotQ(*arr), &())
             }
             Self::J4(v) => {
                 let arr: &[f32; 4] = q.try_into().map_err(|_| DekeError::ShapeMismatch {
                     expected: 4,
                     found: q.len(),
                 })?;
-                v.validate(SRobotQ(*arr))
+                v.validate(SRobotQ(*arr), &())
             }
             Self::J5(v) => {
                 let arr: &[f32; 5] = q.try_into().map_err(|_| DekeError::ShapeMismatch {
                     expected: 5,
                     found: q.len(),
                 })?;
-                v.validate(SRobotQ(*arr))
+                v.validate(SRobotQ(*arr), &())
             }
             Self::J6(v) => {
                 let arr: &[f32; 6] = q.try_into().map_err(|_| DekeError::ShapeMismatch {
                     expected: 6,
                     found: q.len(),
                 })?;
-                v.validate(SRobotQ(*arr))
+                v.validate(SRobotQ(*arr), &())
             }
             Self::J7(v) => {
                 let arr: &[f32; 7] = q.try_into().map_err(|_| DekeError::ShapeMismatch {
                     expected: 7,
                     found: q.len(),
                 })?;
-                v.validate(SRobotQ(*arr))
+                v.validate(SRobotQ(*arr), &())
             }
             Self::J8(v) => {
                 let arr: &[f32; 8] = q.try_into().map_err(|_| DekeError::ShapeMismatch {
                     expected: 8,
                     found: q.len(),
                 })?;
-                v.validate(SRobotQ(*arr))
+                v.validate(SRobotQ(*arr), &())
             }
         }
     }
@@ -122,12 +122,15 @@ macro_rules! impl_dynamic_joint {
     ($($n:literal $variant:ident),+) => {
         $(
             impl Validator<$n> for DynamicJointValidator {
-                fn validate<E: Into<DekeError>, A: SRobotQLike<$n, E>>(
+                type Context<'ctx> = ();
+
+                fn validate<'ctx, E: Into<DekeError>, A: SRobotQLike<$n, E>>(
                     &mut self,
                     q: A,
+                    ctx: &Self::Context<'ctx>,
                 ) -> DekeResult<()> {
                     match self {
-                        Self::$variant(v) => v.validate(q),
+                        Self::$variant(v) => v.validate(q, ctx),
                         _ => Err(DekeError::ShapeMismatch {
                             expected: self.dof(),
                             found: $n,
@@ -135,9 +138,13 @@ macro_rules! impl_dynamic_joint {
                     }
                 }
 
-                fn validate_motion(&mut self, qs: &[SRobotQ<$n>]) -> DekeResult<()> {
+                fn validate_motion<'ctx>(
+                    &mut self,
+                    qs: &[SRobotQ<$n>],
+                    ctx: &Self::Context<'ctx>,
+                ) -> DekeResult<()> {
                     match self {
-                        Self::$variant(v) => v.validate_motion(qs),
+                        Self::$variant(v) => v.validate_motion(qs, ctx),
                         _ => Err(DekeError::ShapeMismatch {
                             expected: self.dof(),
                             found: $n,
