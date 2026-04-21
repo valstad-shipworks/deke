@@ -4,3 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+deke-types = { version = "1.2.0", path = "../deke-types" }
+sleipnir = { git = "https://github.com/oh-yes-0-fps/Sleipnir.git", branch = "rust", default-features = false }
+ndarray = { version = "0.17.2", features = ["approx"] }
+glam = "0.32.1"
+num-traits = "0.2.19"
+thiserror = "2.0.18"
+
+[dev-dependencies]
+approx = "0.5.1"

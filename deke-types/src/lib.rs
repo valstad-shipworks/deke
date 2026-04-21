@@ -40,6 +40,14 @@ pub enum DekeError {
     ExceedJointLimits,
     #[error("Out of iterations")]
     OutOfIterations,
+    #[error("Locked-prefix constraint violated at waypoint {waypoint} joint {joint}")]
+    LockedPrefixViolation { waypoint: u32, joint: u8 },
+    #[error("Boundary conditions not parallel to path tangent (residual {0})")]
+    BoundaryInfeasible(f32),
+    #[error("Path has consecutive zero-length segments")]
+    DuplicateWaypoints,
+    #[error("Retimer failed: {0}")]
+    RetimerFailed(String),
     #[error("Super error")]
     SuperError,
 }

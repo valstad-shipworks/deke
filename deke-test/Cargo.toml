@@ -16,6 +16,8 @@ vamp = { path = "../../vamp/vamp-rs" }
 
 [dev-dependencies]
 criterion = "0.5"
+deke-topp3tcp6 = { path = "../deke-topp3tcp6" }
+plotters = "0.3"
 
 [[bench]]
 name = "validate"
