@@ -1,5 +1,7 @@
 mod dynamic;
 
+use std::cell::RefCell;
+
 pub use dynamic::DynamicWreckValidator;
 
 use deke_types::{
@@ -8,6 +10,92 @@ use deke_types::{
 use glam::Affine3A;
 use uuid::Uuid;
 use wreck::{Collider, Transformable};
+
+#[derive(Default)]
+struct BodyScratch {
+    base: Option<Collider>,
+    attachments: Vec<Collider>,
+}
+
+impl BodyScratch {
+    /// Refreshes `self` from `body`'s pristine colliders, baking in the
+    /// absolute world-frame transform `tf`. Existing allocations are reused
+    /// via `Collider::clone_from`.
+    fn refresh<const N: usize>(&mut self, body: &CollisionBody<N>, tf: Affine3A) {
+        match (&mut self.base, &body.base) {
+            (Some(dst), Some(src)) => {
+                dst.clone_from(src);
+                dst.transform(tf);
+            }
+            (slot @ None, Some(src)) => {
+                let mut c = Collider::default();
+                c.clone_from(src);
+                c.transform(tf);
+                *slot = Some(c);
+            }
+            (slot @ Some(_), None) => *slot = None,
+            (None, None) => {}
+        }
+        self.attachments
+            .resize_with(body.attachments.len(), Collider::default);
+        for (dst, src) in self.attachments.iter_mut().zip(body.attachments.iter()) {
+            dst.clone_from(&src.collision);
+            dst.transform(tf);
+        }
+    }
+}
+
+thread_local! {
+    static SCRATCH_BODIES: RefCell<Vec<BodyScratch>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Iterator over a body's sub-colliders, yielding either the scratch (moved)
+/// copy or the pristine body-frame collider depending on whether a scratch is
+/// provided.
+struct SubColliderIter<'a, const N: usize> {
+    body: &'a CollisionBody<N>,
+    scratch: Option<&'a BodyScratch>,
+    idx: usize,
+}
+
+impl<'a, const N: usize> Iterator for SubColliderIter<'a, N> {
+    type Item = (&'a Collider, i16, &'a CollisionFilter<N>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.idx == 0 {
+            self.idx = 1;
+            let collider = match self.scratch {
+                Some(s) => s.base.as_ref(),
+                None => self.body.base.as_ref(),
+            };
+            if let Some(c) = collider {
+                return Some((c, self.body.token, &self.body.filter));
+            }
+        }
+        let att_idx = self.idx - 1;
+        if att_idx >= self.body.attachments.len() {
+            return None;
+        }
+        self.idx += 1;
+        let att = &self.body.attachments[att_idx];
+        let collider = match self.scratch {
+            Some(s) => &s.attachments[att_idx],
+            None => &att.collision,
+        };
+        Some((collider, att.token, &att.filter))
+    }
+}
+
+fn sub_colliders<'a, const N: usize>(
+    body: &'a CollisionBody<N>,
+    scratch: Option<&'a BodyScratch>,
+) -> SubColliderIter<'a, N> {
+    SubColliderIter {
+        body,
+        scratch,
+        idx: 0,
+    }
+}
 
 pub struct WreckValidatorContext<'a, const N: usize> {
     pub extra_attachments: &'a [&'a Attachment<N>],
@@ -71,7 +159,6 @@ pub struct CollisionBody<const N: usize> {
     pub filter: CollisionFilter<N>,
     pub attachments: Vec<Attachment<N>>,
     pub token: i16,
-    last_transform: Option<Affine3A>,
 }
 
 impl<const N: usize> CollisionBody<N> {
@@ -86,10 +173,10 @@ impl<const N: usize> CollisionBody<N> {
             filter,
             attachments,
             token,
-            last_transform: None,
         }
     }
 
+    /// Iterates sub-colliders in the body's pristine (body-local) frame.
     #[inline]
     pub fn sub_colliders(&self) -> impl Iterator<Item = (&Collider, &i16, &CollisionFilter<N>)> {
         self.base
@@ -100,37 +187,6 @@ impl<const N: usize> CollisionBody<N> {
                     .iter()
                     .map(|att| (&att.collision, &att.token, &att.filter)),
             )
-    }
-
-    pub fn bring_to_current(&mut self, collider: &mut Collider) {
-        if let Some(tf) = self.last_transform {
-            collider.transform(tf);
-        }
-    }
-
-    #[inline]
-    pub fn compute_delta(&self, new_tf: Affine3A) -> Affine3A {
-        match self.last_transform {
-            Some(prev) => rigid_delta(new_tf, prev),
-            None => new_tf,
-        }
-    }
-
-    #[inline]
-    pub fn apply_transform(&mut self, new_tf: Affine3A) -> Affine3A {
-        let tf = self.compute_delta(new_tf);
-        self.apply_precomputed(tf, new_tf);
-        tf
-    }
-
-    pub fn apply_precomputed(&mut self, tf: Affine3A, new_tf: Affine3A) {
-        if let Some(base) = &mut self.base {
-            base.transform(tf);
-        }
-        for att in &mut self.attachments {
-            att.collision.transform(tf);
-        }
-        self.last_transform = Some(new_tf);
     }
 }
 
@@ -150,7 +206,6 @@ impl<const N: usize> Clone for CollisionBody<N> {
             filter: self.filter,
             attachments: self.attachments.clone(),
             token: self.token,
-            last_transform: self.last_transform,
         }
     }
 }
@@ -183,20 +238,6 @@ impl<const N: usize, FK: FKChain<N>> Clone for WreckValidator<N, FK> {
     }
 }
 
-/// Computes the rigid-body delta transform `new_tf * prev_tf.inverse()` as
-/// `Affine3`, exploiting the fact that FK produces pure rotation+translation
-/// (orthogonal matrix → inverse is transpose).
-#[inline]
-fn rigid_delta(new_tf: Affine3A, prev_tf: Affine3A) -> Affine3A {
-    let prev_rt = prev_tf.matrix3.transpose();
-    let delta_m = new_tf.matrix3 * prev_rt;
-    let delta_t = new_tf.translation - delta_m * prev_tf.translation;
-    Affine3A {
-        matrix3: delta_m,
-        translation: delta_t,
-    }
-}
-
 impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
     pub fn new(
         links: [CollisionBody<N>; N],
@@ -220,7 +261,11 @@ impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
         &self.base
     }
 
-    pub fn into_parts(
+    pub fn ee_ref(&self) -> &CollisionBody<N> {
+        &self.ee
+    }
+
+    pub(crate) fn into_parts(
         self,
     ) -> (
         [CollisionBody<N>; N],
@@ -231,118 +276,112 @@ impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
         (self.links, self.ee, self.base, self.fk)
     }
 
-    /// Adds an attachment to a link (0..N-1) or the end effector (N).
-    pub fn add_attachment(&mut self, index: usize, mut attachment: Attachment<N>) {
-        let body = if index < N {
-            &mut self.links[index]
-        } else {
-            &mut self.ee
-        };
-        body.bring_to_current(&mut attachment.collision);
-        body.attachments.push(attachment);
-    }
-
-    /// Removes an attachment by uuid from a link (0..N-1) or the end effector (N).
-    pub fn remove_attachment(&mut self, index: usize, uuid: &Uuid) {
-        let body = if index < N {
-            &mut self.links[index]
-        } else {
-            &mut self.ee
-        };
-        if let Some(pos) = body.attachments.iter().position(|a| &a.uuid == uuid) {
-            body.attachments.remove(pos);
-        }
-    }
-
     fn check_collisions(
-        &mut self,
+        &self,
         q: &SRobotQ<N>,
         ctx: &WreckValidatorContext<'_, N>,
     ) -> DekeResult<()> {
         let transforms = self.fk.fk(q).map_err(Into::into)?;
 
-        for i in 0..N - 1 {
-            self.links[i].apply_transform(transforms[i]);
-            self.check_link(i, ctx)?;
-        }
+        SCRATCH_BODIES.with_borrow_mut(|scratch| {
+            if scratch.len() < N + 1 {
+                scratch.resize_with(N + 1, BodyScratch::default);
+            }
 
-        let last_tf = transforms[N - 1];
-        let delta = self.links[N - 1].compute_delta(last_tf);
-        self.links[N - 1].apply_precomputed(delta, last_tf);
-        self.check_link(N - 1, ctx)?;
-        self.ee.apply_precomputed(delta, last_tf);
-        self.check_ee(ctx)?;
+            for i in 0..N {
+                scratch[i].refresh(&self.links[i], transforms[i]);
+            }
+            scratch[N].refresh(&self.ee, transforms[N - 1]);
 
-        Ok(())
-    }
+            for i in 0..N {
+                check_body_env(&self.links[i], Some(&scratch[i]), ctx)?;
+            }
+            check_body_env(&self.ee, Some(&scratch[N]), ctx)?;
 
-    #[inline]
-    fn check_body_env(
-        &self,
-        body: &CollisionBody<N>,
-        ctx: &WreckValidatorContext<'_, N>,
-    ) -> DekeResult<()> {
-        for (collider, token, filter) in body.sub_colliders() {
-            if filter.obstacles {
-                if collider.collides_other(ctx.environment) {
-                    return Err(DekeError::EnvironmentCollision(*token, *token));
-                }
-                for extra in ctx.extra_attachments {
-                    if collider.collides_other(&extra.collision) {
-                        return Err(DekeError::EnvironmentCollision(*token, extra.token));
+            if ctx.self_collisions {
+                for i in 0..N {
+                    for j in 0..i {
+                        check_body_pair(
+                            &self.links[j],
+                            Some(&scratch[j]),
+                            &self.links[i],
+                            Some(&scratch[i]),
+                            j,
+                            i,
+                        )?;
+                    }
+                    if let Some(base) = &self.base {
+                        check_body_pair(
+                            &self.links[i],
+                            Some(&scratch[i]),
+                            base,
+                            None,
+                            i,
+                            N + 1,
+                        )?;
                     }
                 }
+                for j in 0..N {
+                    check_body_pair(
+                        &self.links[j],
+                        Some(&scratch[j]),
+                        &self.ee,
+                        Some(&scratch[N]),
+                        j,
+                        N,
+                    )?;
+                }
+                if let Some(base) = &self.base {
+                    check_body_pair(&self.ee, Some(&scratch[N]), base, None, N, N + 1)?;
+                }
             }
-        }
-        Ok(())
-    }
 
-    fn check_link(&self, i: usize, ctx: &WreckValidatorContext<'_, N>) -> DekeResult<()> {
-        self.check_body_env(&self.links[i], ctx)?;
-        if ctx.self_collisions {
-            for j in 0..i {
-                self.check_body_pair(&self.links[j], &self.links[i], j, i)?;
-            }
-            if let Some(base) = &self.base {
-                self.check_body_pair(&self.links[i], base, i, N + 1)?;
-            }
-        }
-        Ok(())
+            Ok(())
+        })
     }
+}
 
-    fn check_ee(&self, ctx: &WreckValidatorContext<'_, N>) -> DekeResult<()> {
-        self.check_body_env(&self.ee, ctx)?;
-        if ctx.self_collisions {
-            for j in 0..N {
-                self.check_body_pair(&self.links[j], &self.ee, j, N)?;
+#[inline]
+fn check_body_env<const N: usize>(
+    body: &CollisionBody<N>,
+    scratch: Option<&BodyScratch>,
+    ctx: &WreckValidatorContext<'_, N>,
+) -> DekeResult<()> {
+    for (collider, token, filter) in sub_colliders(body, scratch) {
+        if filter.obstacles {
+            if collider.collides_other(ctx.environment) {
+                return Err(DekeError::EnvironmentCollision(token, token));
             }
-            if let Some(base) = &self.base {
-                self.check_body_pair(&self.ee, base, N, N + 1)?;
-            }
-        }
-        Ok(())
-    }
-
-    #[inline]
-    fn check_body_pair(
-        &self,
-        body_a: &CollisionBody<N>,
-        body_b: &CollisionBody<N>,
-        a_idx: usize,
-        b_idx: usize,
-    ) -> DekeResult<()> {
-        for (ca, ta, fa) in body_a.sub_colliders() {
-            if !fa.allows(b_idx) {
-                continue;
-            }
-            for (cb, tb, fb) in body_b.sub_colliders() {
-                if fb.allows(a_idx) && ca.collides_other(cb) {
-                    return Err(DekeError::SelfCollision(*ta, *tb));
+            for extra in ctx.extra_attachments {
+                if collider.collides_other(&extra.collision) {
+                    return Err(DekeError::EnvironmentCollision(token, extra.token));
                 }
             }
         }
-        Ok(())
     }
+    Ok(())
+}
+
+#[inline]
+fn check_body_pair<const N: usize>(
+    body_a: &CollisionBody<N>,
+    scratch_a: Option<&BodyScratch>,
+    body_b: &CollisionBody<N>,
+    scratch_b: Option<&BodyScratch>,
+    a_idx: usize,
+    b_idx: usize,
+) -> DekeResult<()> {
+    for (ca, ta, fa) in sub_colliders(body_a, scratch_a) {
+        if !fa.allows(b_idx) {
+            continue;
+        }
+        for (cb, tb, fb) in sub_colliders(body_b, scratch_b) {
+            if fb.allows(a_idx) && ca.collides_other(cb) {
+                return Err(DekeError::SelfCollision(ta, tb));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -385,84 +424,156 @@ impl std::fmt::Display for SelfCollisionDetail {
 
 impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
     pub fn debug_self_collisions(
-        &mut self,
+        &self,
         q: &SRobotQ<N>,
     ) -> DekeResult<Vec<SelfCollisionDetail>> {
         let transforms = self.fk.fk(q).map_err(Into::into)?;
-        for i in 0..N - 1 {
-            self.links[i].apply_transform(transforms[i]);
-        }
-        let last_tf = transforms[N - 1];
-        let delta = self.links[N - 1].compute_delta(last_tf);
-        self.links[N - 1].apply_precomputed(delta, last_tf);
-        self.ee.apply_precomputed(delta, last_tf);
 
-        let mut details = Vec::new();
-
-        let body_name = |idx: usize| -> String {
-            if idx < N {
-                format!("link_{}", idx)
-            } else if idx == N {
-                "ee".to_string()
-            } else {
-                "base".to_string()
+        SCRATCH_BODIES.with_borrow_mut(|scratch| {
+            if scratch.len() < N + 1 {
+                scratch.resize_with(N + 1, BodyScratch::default);
             }
-        };
+            for i in 0..N {
+                scratch[i].refresh(&self.links[i], transforms[i]);
+            }
+            scratch[N].refresh(&self.ee, transforms[N - 1]);
 
-        let check_pair = |a: &CollisionBody<N>,
-                          b: &CollisionBody<N>,
-                          a_idx: usize,
-                          b_idx: usize,
-                          details: &mut Vec<SelfCollisionDetail>| {
-            for (ca, _ta, fa) in a.sub_colliders() {
-                if !fa.allows(b_idx) {
-                    continue;
+            let mut details = Vec::new();
+
+            let body_name = |idx: usize| -> String {
+                if idx < N {
+                    format!("link_{}", idx)
+                } else if idx == N {
+                    "ee".to_string()
+                } else {
+                    "base".to_string()
                 }
-                for (cb, _tb, fb) in b.sub_colliders() {
-                    if !fb.allows(a_idx) {
+            };
+
+            let check_pair = |a: &CollisionBody<N>,
+                                  sa_scratch: Option<&BodyScratch>,
+                                  b: &CollisionBody<N>,
+                                  sb_scratch: Option<&BodyScratch>,
+                                  a_idx: usize,
+                                  b_idx: usize,
+                                  details: &mut Vec<SelfCollisionDetail>| {
+                for (ca, _ta, fa) in sub_colliders(a, sa_scratch) {
+                    if !fa.allows(b_idx) {
                         continue;
                     }
-                    for (si, sa) in ca.spheres().iter().enumerate() {
-                        for (sj, sb) in cb.spheres().iter().enumerate() {
-                            let d = sa.center.distance(sb.center);
-                            let r_sum = sa.radius + sb.radius;
-                            if d < r_sum {
-                                details.push(SelfCollisionDetail {
-                                    body_a: body_name(a_idx),
-                                    body_b: body_name(b_idx),
-                                    sphere_a_idx: si,
-                                    sphere_b_idx: sj,
-                                    center_a: sa.center.into(),
-                                    center_b: sb.center.into(),
-                                    radius_a: sa.radius,
-                                    radius_b: sb.radius,
-                                    distance: d,
-                                    overlap: r_sum - d,
-                                });
+                    for (cb, _tb, fb) in sub_colliders(b, sb_scratch) {
+                        if !fb.allows(a_idx) {
+                            continue;
+                        }
+                        for (si, sa) in ca.spheres().iter().enumerate() {
+                            for (sj, sb) in cb.spheres().iter().enumerate() {
+                                let d = sa.center.distance(sb.center);
+                                let r_sum = sa.radius + sb.radius;
+                                if d < r_sum {
+                                    details.push(SelfCollisionDetail {
+                                        body_a: body_name(a_idx),
+                                        body_b: body_name(b_idx),
+                                        sphere_a_idx: si,
+                                        sphere_b_idx: sj,
+                                        center_a: sa.center.into(),
+                                        center_b: sb.center.into(),
+                                        radius_a: sa.radius,
+                                        radius_b: sb.radius,
+                                        distance: d,
+                                        overlap: r_sum - d,
+                                    });
+                                }
                             }
                         }
                     }
                 }
+            };
+
+            for i in 0..N {
+                for j in 0..i {
+                    check_pair(
+                        &self.links[j],
+                        Some(&scratch[j]),
+                        &self.links[i],
+                        Some(&scratch[i]),
+                        j,
+                        i,
+                        &mut details,
+                    );
+                }
+                if let Some(base) = &self.base {
+                    check_pair(
+                        &self.links[i],
+                        Some(&scratch[i]),
+                        base,
+                        None,
+                        i,
+                        N + 1,
+                        &mut details,
+                    );
+                }
+            }
+
+            for j in 0..N {
+                check_pair(
+                    &self.links[j],
+                    Some(&scratch[j]),
+                    &self.ee,
+                    Some(&scratch[N]),
+                    j,
+                    N,
+                    &mut details,
+                );
+            }
+            if let Some(base) = &self.base {
+                check_pair(
+                    &self.ee,
+                    Some(&scratch[N]),
+                    base,
+                    None,
+                    N,
+                    N + 1,
+                    &mut details,
+                );
+            }
+
+            Ok(details)
+        })
+    }
+
+    /// Evaluates FK at `q` and returns a single `Collider` containing every
+    /// sub-collider of the validator (base, each link, the end effector, and
+    /// all of their attachments) transformed into world frame.
+    pub fn debug_bodies(&self, q: &SRobotQ<N>) -> DekeResult<Collider> {
+        let transforms = self.fk.fk(q).map_err(Into::into)?;
+        let mut out = Collider::default();
+
+        let mut push_body = |body: &CollisionBody<N>, tf: Option<Affine3A>| {
+            if let Some(base) = &body.base {
+                let mut c = base.clone();
+                if let Some(tf) = tf {
+                    c.transform(tf);
+                }
+                out.include(c);
+            }
+            for att in &body.attachments {
+                let mut c = att.collision.clone();
+                if let Some(tf) = tf {
+                    c.transform(tf);
+                }
+                out.include(c);
             }
         };
 
-        for i in 0..N {
-            for j in 0..i {
-                check_pair(&self.links[j], &self.links[i], j, i, &mut details);
-            }
-            if let Some(base) = &self.base {
-                check_pair(&self.links[i], base, i, N + 1, &mut details);
-            }
-        }
-
-        for j in 0..N {
-            check_pair(&self.links[j], &self.ee, j, N, &mut details);
-        }
         if let Some(base) = &self.base {
-            check_pair(&self.ee, base, N, N + 1, &mut details);
+            push_body(base, None);
         }
+        for i in 0..N {
+            push_body(&self.links[i], Some(transforms[i]));
+        }
+        push_body(&self.ee, Some(transforms[N - 1]));
 
-        Ok(details)
+        Ok(out)
     }
 }
 
@@ -470,7 +581,7 @@ impl<const N: usize, FK: FKChain<N> + 'static> Validator<N> for WreckValidator<N
     type Context<'ctx> = WreckValidatorContext<'ctx, N>;
 
     fn validate<'ctx, E: Into<DekeError>, A: SRobotQLike<N, E>>(
-        &mut self,
+        &self,
         q: A,
         ctx: &Self::Context<'ctx>,
     ) -> DekeResult<()> {
@@ -479,7 +590,7 @@ impl<const N: usize, FK: FKChain<N> + 'static> Validator<N> for WreckValidator<N
     }
 
     fn validate_motion<'ctx>(
-        &mut self,
+        &self,
         qs: &[SRobotQ<N>],
         ctx: &Self::Context<'ctx>,
     ) -> DekeResult<()> {

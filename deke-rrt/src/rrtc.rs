@@ -109,7 +109,7 @@ pub(crate) fn validate_edge<const N: usize, V: Validator<N>>(
     from: &SRobotQ<N>,
     to: &SRobotQ<N>,
     resolution: f64,
-    validator: &mut V,
+    validator: &V,
     ctx: &V::Context<'_>,
 ) -> DekeResult<()> {
     let dist = from.distance(to) as f64;
@@ -124,7 +124,7 @@ pub(crate) fn validate_edge<const N: usize, V: Validator<N>>(
 
 pub(crate) fn shortcut<const N: usize, V: Validator<N>>(
     path: &mut Vec<SRobotQ<N>>,
-    validator: &mut V,
+    validator: &V,
     ctx: &V::Context<'_>,
     resolution: f64,
 ) {
@@ -148,7 +148,7 @@ pub(crate) fn shortcut<const N: usize, V: Validator<N>>(
 
 pub(crate) fn reduce<const N: usize, V: Validator<N>>(
     path: &mut Vec<SRobotQ<N>>,
-    validator: &mut V,
+    validator: &V,
     ctx: &V::Context<'_>,
     resolution: f64,
     coeffs: &[f64; N],
@@ -195,7 +195,7 @@ fn subdivide<const N: usize>(path: &mut Vec<SRobotQ<N>>) {
 
 pub(crate) fn smooth_bspline<const N: usize, V: Validator<N>>(
     path: &mut Vec<SRobotQ<N>>,
-    validator: &mut V,
+    validator: &V,
     ctx: &V::Context<'_>,
     resolution: f64,
     max_steps: usize,
@@ -277,7 +277,7 @@ fn reconstruct<const N: usize>(
 pub(crate) fn solve<const N: usize, V: Validator<N>>(
     start: &SRobotQ<N>,
     goal: &SRobotQ<N>,
-    validator: &mut V,
+    validator: &V,
     ctx: &V::Context<'_>,
     settings: &RrtcSettings<N>,
     rng: &mut impl Rand,
@@ -436,7 +436,7 @@ fn extend_and_connect<const N: usize, V: Validator<N>>(
     tree_a: &mut RrtTree<N>,
     tree_b: &mut RrtTree<N>,
     q_rand: &SRobotQ<N>,
-    validator: &mut V,
+    validator: &V,
     ctx: &V::Context<'_>,
     settings: &RrtcSettings<N>,
     coeffs: &[f64; N],

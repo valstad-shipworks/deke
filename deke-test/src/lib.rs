@@ -37,7 +37,7 @@ mod tests {
     #[test]
     fn validate_matches_vamp() {
         let env = wreck::Collider::default();
-        let mut deke_validator = validator();
+        let deke_validator = validator();
         let ctx = ((), deke_wreck::WreckValidatorContext::new(&env));
         let vamp_env = vamp::Environment::new();
         let vamp_robot = vamp::Robot::M20ID12L;
@@ -122,7 +122,7 @@ mod tests {
         ];
 
         let env = wreck::Collider::default();
-        let mut deke_validator = validator();
+        let deke_validator = validator();
         let ctx = ((), deke_wreck::WreckValidatorContext::new(&env));
         let deke_result = deke_validator.validate(deke_types::SRobotQ(q), &ctx);
         assert!(
@@ -278,7 +278,7 @@ mod tests {
                 );
 
                 let dense = r_path.densify(0.02);
-                let mut check_v = v.clone();
+                let check_v = v.clone();
                 for (wi, sq) in dense.iter().enumerate() {
                     let rv_ok = check_v.validate(*sq, &ctx);
                     assert!(
@@ -502,7 +502,7 @@ mod tests {
         let wreck_env = wreck::Collider::default();
         let vamp_env = vamp::Environment::new();
 
-        let mut rv_check = validator();
+        let rv_check = validator();
         let ctx = ((), deke_wreck::WreckValidatorContext::new(&wreck_env));
         let vamp_robot = vamp::Robot::M20ID12L;
 

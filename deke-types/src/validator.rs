@@ -86,19 +86,52 @@ validator_context_tuple_impl! { (((A, B), (C, D)), (E, F)) }
 validator_context_tuple_impl! { ((A, (B, C)), ((D, E), F)) }
 validator_context_tuple_impl! { (((A, B), C), ((D, E), F)) }
 
-pub trait Validator<const N: usize>: Sized + Clone + Debug + Send + Sync + 'static {
+#[doc(hidden)]
+mod sealed {
+    pub trait Sealed {}
+}
+
+pub trait ValidatorRet: Sized + sealed::Sealed + Copy {
+    fn as_f64(&self) -> f64;
+}
+
+impl sealed::Sealed for () {}
+impl ValidatorRet for () {
+    #[inline]
+    fn as_f64(&self) -> f64 {
+        f64::INFINITY
+    }
+}
+
+impl sealed::Sealed for f32 {}
+impl ValidatorRet for f32 {
+    #[inline]
+    fn as_f64(&self) -> f64 {
+        *self as f64
+    }
+}
+
+impl sealed::Sealed for f64 {}
+impl ValidatorRet for f64 {
+    #[inline]
+    fn as_f64(&self) -> f64 {
+        *self
+    }
+}
+
+pub trait Validator<const N: usize, R: ValidatorRet = ()>: Sized + Clone + Debug + Send + Sync + 'static {
     type Context<'ctx>: ValidatorContext;
 
     fn validate<'ctx, E: Into<DekeError>, A: SRobotQLike<N, E>>(
-        &mut self,
+        &self,
         q: A,
         ctx: &Self::Context<'ctx>,
-    ) -> DekeResult<()>;
+    ) -> DekeResult<R>;
     fn validate_motion<'ctx>(
-        &mut self,
+        &self,
         qs: &[SRobotQ<N>],
         ctx: &Self::Context<'ctx>,
-    ) -> DekeResult<()>;
+    ) -> DekeResult<R>;
 }
 
 #[derive(Debug, Clone)]
@@ -119,7 +152,7 @@ where
 
     #[inline]
     fn validate<'ctx, E: Into<DekeError>, Q: SRobotQLike<N, E>>(
-        &mut self,
+        &self,
         q: Q,
         ctx: &Self::Context<'ctx>,
     ) -> DekeResult<()> {
@@ -130,7 +163,7 @@ where
 
     #[inline]
     fn validate_motion<'ctx>(
-        &mut self,
+        &self,
         qs: &[SRobotQ<N>],
         ctx: &Self::Context<'ctx>,
     ) -> DekeResult<()> {
@@ -148,7 +181,7 @@ where
 
     #[inline]
     fn validate<'ctx, E: Into<DekeError>, Q: SRobotQLike<N, E>>(
-        &mut self,
+        &self,
         q: Q,
         ctx: &Self::Context<'ctx>,
     ) -> DekeResult<()> {
@@ -161,7 +194,7 @@ where
 
     #[inline]
     fn validate_motion<'ctx>(
-        &mut self,
+        &self,
         qs: &[SRobotQ<N>],
         ctx: &Self::Context<'ctx>,
     ) -> DekeResult<()> {
@@ -180,7 +213,7 @@ where
 
     #[inline]
     fn validate<'ctx, E: Into<DekeError>, Q: SRobotQLike<N, E>>(
-        &mut self,
+        &self,
         q: Q,
         ctx: &Self::Context<'ctx>,
     ) -> DekeResult<()> {
@@ -193,7 +226,7 @@ where
 
     #[inline]
     fn validate_motion<'ctx>(
-        &mut self,
+        &self,
         qs: &[SRobotQ<N>],
         ctx: &Self::Context<'ctx>,
     ) -> DekeResult<()> {
@@ -254,7 +287,7 @@ impl<const N: usize> Validator<N> for JointValidator<N> {
 
     #[inline]
     fn validate<'ctx, E: Into<DekeError>, Q: SRobotQLike<N, E>>(
-        &mut self,
+        &self,
         q: Q,
         _ctx: &Self::Context<'ctx>,
     ) -> DekeResult<()> {
@@ -274,7 +307,7 @@ impl<const N: usize> Validator<N> for JointValidator<N> {
 
     #[inline]
     fn validate_motion<'ctx>(
-        &mut self,
+        &self,
         qs: &[SRobotQ<N>],
         _ctx: &Self::Context<'ctx>,
     ) -> DekeResult<()> {

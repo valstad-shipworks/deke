@@ -49,7 +49,7 @@ impl DynamicJointValidator {
         }
     }
 
-    pub fn validate_dyn(&mut self, q: &[f32]) -> DekeResult<()> {
+    pub fn validate_dyn(&self, q: &[f32]) -> DekeResult<()> {
         match self {
             Self::J1(v) => {
                 let arr: &[f32; 1] = q.try_into().map_err(|_| DekeError::ShapeMismatch {
@@ -110,7 +110,7 @@ impl DynamicJointValidator {
         }
     }
 
-    pub fn validate_motion_dyn(&mut self, qs: &[&[f32]]) -> DekeResult<()> {
+    pub fn validate_motion_dyn(&self, qs: &[&[f32]]) -> DekeResult<()> {
         for q in qs {
             self.validate_dyn(q)?;
         }
@@ -125,7 +125,7 @@ macro_rules! impl_dynamic_joint {
                 type Context<'ctx> = ();
 
                 fn validate<'ctx, E: Into<DekeError>, A: SRobotQLike<$n, E>>(
-                    &mut self,
+                    &self,
                     q: A,
                     ctx: &Self::Context<'ctx>,
                 ) -> DekeResult<()> {
@@ -139,7 +139,7 @@ macro_rules! impl_dynamic_joint {
                 }
 
                 fn validate_motion<'ctx>(
-                    &mut self,
+                    &self,
                     qs: &[SRobotQ<$n>],
                     ctx: &Self::Context<'ctx>,
                 ) -> DekeResult<()> {

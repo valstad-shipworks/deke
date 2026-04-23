@@ -72,7 +72,7 @@ impl<const N: usize> Planner<N> for RrtcPlanner<N> {
         config: &Self::Config,
         start: A,
         goal: B,
-        validator: &mut V,
+        validator: &V,
         ctx: &V::Context<'_>,
     ) -> (DekeResult<SRobotPath<N>>, Self::Diagnostic) {
         let start = match start.to_srobotq().map_err(Into::into) {
@@ -111,7 +111,7 @@ impl<const N: usize> Planner<N> for AorrtcPlanner<N> {
         config: &Self::Config,
         start: A,
         goal: B,
-        validator: &mut V,
+        validator: &V,
         ctx: &V::Context<'_>,
     ) -> (DekeResult<SRobotPath<N>>, Self::Diagnostic) {
         let start = match start.to_srobotq().map_err(Into::into) {
@@ -150,7 +150,7 @@ impl<const N: usize> Planner<N> for KrrtcPlanner<N> {
         config: &Self::Config,
         start: A,
         goal: B,
-        validator: &mut V,
+        validator: &V,
         ctx: &V::Context<'_>,
     ) -> (DekeResult<SRobotPath<N>>, Self::Diagnostic) {
         let start = match start.to_srobotq().map_err(Into::into) {

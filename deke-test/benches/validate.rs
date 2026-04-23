@@ -31,7 +31,7 @@ fn bench_validate(c: &mut Criterion) {
     let vamp_robot = vamp::Robot::M20ID12L;
 
     c.bench_function("deke_validate_single", |b| {
-        let mut v = validator.clone();
+        let v = validator.clone();
         let mut i = 0;
         b.iter(|| {
             let q = &configs[i % configs.len()];
@@ -53,7 +53,7 @@ fn bench_validate(c: &mut Criterion) {
     let wreck_ctx = deke_wreck::WreckValidatorContext::new(&env);
 
     c.bench_function("deke_validate_no_limits", |b| {
-        let mut v = no_limits.clone();
+        let v = no_limits.clone();
         let mut i = 0;
         b.iter(|| {
             let q = &configs[i % configs.len()];
@@ -78,7 +78,7 @@ fn bench_validate(c: &mut Criterion) {
     > = deke_types::ValidatorAnd(validator.0.clone().into(), dyn_validator);
 
     c.bench_function("dynamic_validate_single", |b| {
-        let mut v = dyn_full.clone();
+        let v = dyn_full.clone();
         let mut i = 0;
         b.iter(|| {
             let q = &configs[i % configs.len()];
@@ -90,7 +90,7 @@ fn bench_validate(c: &mut Criterion) {
     let dyn_no_limits: deke_wreck::DynamicWreckValidator = no_limits.clone().into();
 
     c.bench_function("dynamic_validate_no_limits", |b| {
-        let mut v = dyn_no_limits.clone();
+        let v = dyn_no_limits.clone();
         let mut i = 0;
         b.iter(|| {
             let q = &configs[i % configs.len()];

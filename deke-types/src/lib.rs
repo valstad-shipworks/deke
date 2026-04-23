@@ -24,6 +24,8 @@ pub use traj::{RobotTraj, SRobotTraj};
 pub use validator::{JointValidator, Validator, ValidatorAnd, ValidatorNot, ValidatorOr, ValidatorContext, Leaf, FromFlattened};
 pub use validator_dynamic::DynamicJointValidator;
 
+use crate::validator::ValidatorRet;
+
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum DekeError {
     #[error("Expected {expected} joints, but found {found}")]
@@ -60,7 +62,7 @@ impl From<Infallible> for DekeError {
 
 pub type DekeResult<T> = Result<T, DekeError>;
 
-pub trait Planner<const N: usize>: Sized + Clone + Debug + Send + Sync + 'static {
+pub trait Planner<const N: usize, R: ValidatorRet = ()>: Sized + Clone + Debug + Send + Sync + 'static {
     type Diagnostic: Display + Send + Sync;
     type Config;
 
@@ -68,27 +70,27 @@ pub trait Planner<const N: usize>: Sized + Clone + Debug + Send + Sync + 'static
         E: Into<DekeError>,
         A: SRobotQLike<N, E>,
         B: SRobotQLike<N, E>,
-        V: Validator<N>,
+        V: Validator<N, R>,
     >(
         &self,
         config: &Self::Config,
         start: A,
         goal: B,
-        validator: &mut V,
+        validator: &V,
         ctx: &V::Context<'_>,
     ) -> (DekeResult<SRobotPath<N>>, Self::Diagnostic);
 }
 
-pub trait Retimer<const N: usize>: Sized + Clone + Debug + Send + Sync + 'static {
+pub trait Retimer<const N: usize, R: ValidatorRet = ()>: Sized + Clone + Debug + Send + Sync + 'static {
     type Diagnostic: Display + Send + Sync;
     type Constraints;
 
-    fn retime<V: Validator<N>>(
+    fn retime<V: Validator<N, R>>(
         &self,
         constraints: &Self::Constraints,
         path: &SRobotPath<N>,
         fk: &impl FKChain<N>,
-        validator: &mut V,
+        validator: &V,
         ctx: &V::Context<'_>,
     ) -> (DekeResult<SRobotTraj<N>>, Self::Diagnostic);
 }

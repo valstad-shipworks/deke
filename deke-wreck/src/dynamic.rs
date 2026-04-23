@@ -60,7 +60,7 @@ impl DynamicWreckValidator {
     }
 
     pub fn validate_dyn(
-        &mut self,
+        &self,
         q: &[f32],
         environment: &wreck::Collider,
         self_collisions: bool,
@@ -142,7 +142,7 @@ impl DynamicWreckValidator {
     }
 
     pub fn validate_motion_dyn(
-        &mut self,
+        &self,
         qs: &[&[f32]],
         environment: &wreck::Collider,
         self_collisions: bool,
@@ -161,7 +161,7 @@ macro_rules! impl_dynamic_wreck {
                 type Context<'ctx> = WreckValidatorContext<'ctx, $n>;
 
                 fn validate<'ctx, E: Into<DekeError>, A: SRobotQLike<$n, E>>(
-                    &mut self,
+                    &self,
                     q: A,
                     ctx: &Self::Context<'ctx>,
                 ) -> DekeResult<()> {
@@ -175,7 +175,7 @@ macro_rules! impl_dynamic_wreck {
                 }
 
                 fn validate_motion<'ctx>(
-                    &mut self,
+                    &self,
                     qs: &[SRobotQ<$n>],
                     ctx: &Self::Context<'ctx>,
                 ) -> DekeResult<()> {

@@ -25,7 +25,7 @@ impl<const N: usize> Retimer<N> for Topp3Tcp6 {
         constraints: &Self::Constraints,
         path: &SRobotPath<N>,
         fk: &impl FKChain<N>,
-        validator: &mut V,
+        validator: &V,
         ctx: &V::Context<'_>,
     ) -> (DekeResult<SRobotTraj<N>>, Self::Diagnostic) {
         let mut diag = Topp3Tcp6Diagnostic::default();

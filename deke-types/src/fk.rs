@@ -3,7 +3,7 @@ use glam::{Affine3A, Mat3A, Vec3A};
 use crate::{DekeError, SRobotQ};
 
 #[inline(always)]
-fn fast_sin_cos(x: f32) -> (f32, f32) {
+const fn fast_sin_cos(x: f32) -> (f32, f32) {
     const FRAC_2_PI: f32 = std::f32::consts::FRAC_2_PI;
     const PI_2_HI: f32 = 1.570_796_4_f32;
     const PI_2_LO: f32 = -4.371_139e-8_f32;
@@ -33,6 +33,26 @@ fn fast_sin_cos(x: f32) -> (f32, f32) {
     };
 
     (s, c)
+}
+
+#[inline]
+const fn const_sqrt(x: f64) -> f64 {
+    if x < 0.0 || x.is_nan() { return f64::NAN; }
+    if x == 0.0 || x == f64::INFINITY { return x; }
+
+    // Initial guess: halve the exponent. For x = m * 2^e,
+    // sqrt(x) ≈ sqrt(m) * 2^(e/2). Extract, halve, reassemble.
+    let bits = x.to_bits();
+    let exp = ((bits >> 52) & 0x7ff) as i64;
+    let new_exp = ((exp - 1023) / 2 + 1023) as u64;
+    let mut guess = f64::from_bits((new_exp << 52) | (bits & 0x000f_ffff_ffff_ffff));
+
+    let mut prev = 0.0;
+    while guess != prev {
+        prev = guess;
+        guess = (guess + x / guess) * 0.5;
+    }
+    guess
 }
 
 pub trait FKChain<const N: usize>: Clone + Send + Sync {
@@ -253,6 +273,38 @@ impl<const N: usize> DHChain<N> {
             theta_offset,
         }
     }
+
+    /// Construct from the row-major `DH_PARAMS` const array emitted by the
+    /// workcell macro.
+    ///
+    /// `params`: `[[f64; N]; 4]` — rows are `(a, alpha, d, theta_offset)`
+    /// across joints.
+    pub const fn from_dh(params: &[[f64; N]; 4]) -> Self {
+        let mut a = [0.0f32; N];
+        let mut d = [0.0f32; N];
+        let mut sin_alpha = [0.0f32; N];
+        let mut cos_alpha = [0.0f32; N];
+        let mut theta_offset = [0.0f32; N];
+
+        let mut i = 0;
+        while i < N {
+            a[i] = params[0][i] as f32;
+            let (sa, ca) = fast_sin_cos(params[1][i] as f32);
+            sin_alpha[i] = sa;
+            cos_alpha[i] = ca;
+            d[i] = params[2][i] as f32;
+            theta_offset[i] = params[3][i] as f32;
+            i += 1;
+        }
+
+        Self {
+            a,
+            d,
+            sin_alpha,
+            cos_alpha,
+            theta_offset,
+        }
+    }
 }
 
 impl<const N: usize> FKChain<N> for DHChain<N> {
@@ -379,7 +431,7 @@ pub struct HPChain<const N: usize> {
 }
 
 impl<const N: usize> HPChain<N> {
-    pub fn new(joints: [HPJoint; N]) -> Self {
+    pub const fn new(joints: [HPJoint; N]) -> Self {
         let mut a = [0.0; N];
         let mut d = [0.0; N];
         let mut sin_alpha = [0.0; N];
@@ -392,10 +444,10 @@ impl<const N: usize> HPChain<N> {
         while i < N {
             a[i] = joints[i].a;
             d[i] = joints[i].d;
-            let (sa, ca) = joints[i].alpha.sin_cos();
+            let (sa, ca) = fast_sin_cos(joints[i].alpha);
             sin_alpha[i] = sa;
             cos_alpha[i] = ca;
-            let (sb, cb) = joints[i].beta.sin_cos();
+            let (sb, cb) = fast_sin_cos(joints[i].beta);
             sin_beta[i] = sb;
             cos_beta[i] = cb;
             theta_offset[i] = joints[i].theta_offset;
@@ -410,6 +462,111 @@ impl<const N: usize> HPChain<N> {
             sin_beta,
             cos_beta,
             theta_offset,
+        }
+    }
+
+    /// Construct from the row-major `HP_H` and `HP_P` const arrays emitted by
+    /// the workcell macro.
+    ///
+    /// `h`: `[[f64; N]; 3]` — rows are (x, y, z) components across joints.
+    /// `p`: `[[f64; N]; 3]` — rows are (x, y, z) components across points.
+    ///
+    /// Each `h[_][i]` is joint `i`'s axis in the base frame at zero config.
+    /// `p[_][0]` is the base-to-joint-0 offset; `p[_][i]` for `1..N` is the
+    /// offset from joint `i-1`'s origin to joint `i`'s origin. The tool
+    /// offset from joint `N-1` to the flange is not part of this input
+    /// because `HPChain` has no end-effector slot — wrap the result in a
+    /// [`TransformedFK`](crate::TransformedFK) if a tool offset is required.
+    ///
+    /// `theta_offset` is set to zero for every joint: at zero config each
+    /// local x-axis is pinned to `Rx(α) · Ry(β) · [1, 0, 0]` expressed in the
+    /// parent frame.
+    pub const fn from_hp(h: &[[f32; N]; 3], p: &[[f32; N]; 3]) -> Self {
+
+        let mut a = [0.0f32; N];
+        let mut d = [0.0f32; N];
+        let mut sin_alpha = [0.0f32; N];
+        let mut cos_alpha = [0.0f32; N];
+        let mut sin_beta = [0.0f32; N];
+        let mut cos_beta = [0.0f32; N];
+
+        let mut c0 = [1.0f32, 0.0, 0.0];
+        let mut c1 = [0.0f32, 1.0, 0.0];
+        let mut c2 = [0.0f32, 0.0, 1.0];
+
+        const EPS: f32 = 1e-12;
+
+        let mut i = 0;
+        while i < N {
+            let hx = h[0][i];
+            let hy = h[1][i];
+            let hz = h[2][i];
+            let px = p[0][i];
+            let py = p[1][i];
+            let pz = p[2][i];
+
+            let vx = c0[0] * hx + c0[1] * hy + c0[2] * hz;
+            let vy = c1[0] * hx + c1[1] * hy + c1[2] * hz;
+            let vz = c2[0] * hx + c2[1] * hy + c2[2] * hz;
+            let ux = c0[0] * px + c0[1] * py + c0[2] * pz;
+            let uy = c1[0] * px + c1[1] * py + c1[2] * pz;
+            let uz = c2[0] * px + c2[1] * py + c2[2] * pz;
+
+            let sb = vx;
+            let cb = const_sqrt((vy * vy + vz * vz) as f64) as f32;
+
+            let (sa, ca) = if cb > EPS {
+                (-vy / cb, vz / cb)
+            } else {
+                (0.0, 1.0)
+            };
+
+            let big_a = ux;
+            let big_b = sa * uy - ca * uz;
+            let ai = cb * big_a + sb * big_b;
+            let di = sb * big_a - cb * big_b;
+
+            a[i] = ai;
+            d[i] = di;
+            sin_alpha[i] = sa;
+            cos_alpha[i] = ca;
+            sin_beta[i] = sb;
+            cos_beta[i] = cb;
+
+            let sasb = sa * sb;
+            let casb = ca * sb;
+            let sacb = sa * cb;
+            let cacb = ca * cb;
+            let new_c0 = [
+                cb * c0[0] + sasb * c1[0] - casb * c2[0],
+                cb * c0[1] + sasb * c1[1] - casb * c2[1],
+                cb * c0[2] + sasb * c1[2] - casb * c2[2],
+            ];
+            let new_c1 = [
+                ca * c1[0] + sa * c2[0],
+                ca * c1[1] + sa * c2[1],
+                ca * c1[2] + sa * c2[2],
+            ];
+            let new_c2 = [
+                sb * c0[0] - sacb * c1[0] + cacb * c2[0],
+                sb * c0[1] - sacb * c1[1] + cacb * c2[1],
+                sb * c0[2] - sacb * c1[2] + cacb * c2[2],
+            ];
+            c0 = new_c0;
+            c1 = new_c1;
+            c2 = new_c2;
+
+            i += 1;
+        }
+
+        Self {
+            a,
+            d,
+            sin_alpha,
+            cos_alpha,
+            sin_beta,
+            cos_beta,
+            theta_offset: [0.0f32; N],
         }
     }
 

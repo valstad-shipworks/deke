@@ -244,7 +244,7 @@ fn steer<const N: usize>(
 pub(crate) fn solve<const N: usize, V: Validator<N>>(
     start: &SRobotQ<N>,
     goal: &SRobotQ<N>,
-    validator: &mut V,
+    validator: &V,
     ctx: &V::Context<'_>,
     settings: &AorrtcSettings<N>,
     rng: &mut impl Rand,

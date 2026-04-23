@@ -82,7 +82,7 @@ fn kinematic_steer<const N: usize>(
 /// and only accepted if the local time-optimal cost decreases.
 fn round_corners<const N: usize, V: Validator<N>>(
     path: &mut Vec<SRobotQ<N>>,
-    validator: &mut V,
+    validator: &V,
     ctx: &V::Context<'_>,
     limits: &KinematicLimits<N>,
     resolution: f64,
@@ -191,7 +191,7 @@ fn round_corners<const N: usize, V: Validator<N>>(
 /// with high time-optimal cost to maximize improvement per shortcut.
 fn shortcut<const N: usize, V: Validator<N>>(
     path: &mut Vec<SRobotQ<N>>,
-    validator: &mut V,
+    validator: &V,
     ctx: &V::Context<'_>,
     limits: &KinematicLimits<N>,
     resolution: f64,
@@ -299,7 +299,7 @@ fn reconstruct<const N: usize>(
 pub(crate) fn solve<const N: usize, V: Validator<N>>(
     start: &SRobotQ<N>,
     goal: &SRobotQ<N>,
-    validator: &mut V,
+    validator: &V,
     ctx: &V::Context<'_>,
     settings: &KrrtcSettings<N>,
     rng: &mut impl Rand,
@@ -441,7 +441,7 @@ fn extend_and_connect<const N: usize, V: Validator<N>>(
     tree_a: &mut RrtTree<N>,
     tree_b: &mut RrtTree<N>,
     q_rand: &SRobotQ<N>,
-    validator: &mut V,
+    validator: &V,
     ctx: &V::Context<'_>,
     settings: &KrrtcSettings<N>,
 ) -> Option<(usize, usize)> {
