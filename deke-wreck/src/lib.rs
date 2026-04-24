@@ -146,12 +146,56 @@ impl<const N: usize> CollisionFilter<N> {
     }
 }
 
+/// Body-index convention used by [`CollisionFilter::allows`] and
+/// [`Attachment::mounted_on`]:
+///
+/// - `0..N` → link `i`
+/// - `N` → end effector
+/// - `N + 1` → base
+///
+/// Helper constants for readability.
+pub const fn ee_idx<const N: usize>() -> usize {
+    N
+}
+pub const fn base_idx<const N: usize>() -> usize {
+    N + 1
+}
+
 #[derive(Debug, Clone)]
 pub struct Attachment<const N: usize> {
     pub collision: Collider,
     pub token: i16,
     pub uuid: Uuid,
     pub filter: CollisionFilter<N>,
+    /// Optional owning body index. When this `Attachment` is used as an
+    /// *extra* (`WreckValidatorContext::extra_attachments`), the validator
+    /// skips the body whose index equals `mounted_on` so the extra can't
+    /// collide with the body it's physically bolted to (e.g. a payload
+    /// mounted on the EE should not report collision against the EE or its
+    /// own gripper). Has no effect for attachments installed directly on a
+    /// [`CollisionBody`] (that body already skips its own sub-colliders by
+    /// construction).
+    ///
+    /// Index convention matches [`CollisionFilter::allows`]: `0..N` links,
+    /// `N` EE, `N + 1` base. Use [`ee_idx`] / [`base_idx`] for clarity.
+    pub mounted_on: Option<usize>,
+}
+
+impl<const N: usize> Attachment<N> {
+    pub fn new(collision: Collider, token: i16, uuid: Uuid, filter: CollisionFilter<N>) -> Self {
+        Self {
+            collision,
+            token,
+            uuid,
+            filter,
+            mounted_on: None,
+        }
+    }
+
+    pub fn with_mounted_on(mut self, body_idx: usize) -> Self {
+        self.mounted_on = Some(body_idx);
+        self
+    }
 }
 
 pub struct CollisionBody<const N: usize> {
@@ -212,6 +256,11 @@ impl<const N: usize> Clone for CollisionBody<N> {
 
 pub struct WreckValidator<const N: usize, FK: FKChain<N>> {
     base: Option<CollisionBody<N>>,
+    /// Static collision geometry that is *never* transformed — always in the
+    /// world frame (e.g. fixtures, tool stands, safety fences that aren't
+    /// part of the environment `Collider`). Participates only in
+    /// self-collision pair checks with the moving parts.
+    world: Option<CollisionBody<N>>,
     links: [CollisionBody<N>; N],
     ee: CollisionBody<N>,
     fk: FK,
@@ -221,6 +270,7 @@ impl<const N: usize, FK: FKChain<N>> std::fmt::Debug for WreckValidator<N, FK> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WreckValidator")
             .field("base", &self.base)
+            .field("world", &self.world)
             .field("links", &self.links)
             .field("ee", &self.ee)
             .finish()
@@ -231,6 +281,7 @@ impl<const N: usize, FK: FKChain<N>> Clone for WreckValidator<N, FK> {
     fn clone(&self) -> Self {
         Self {
             base: self.base.clone(),
+            world: self.world.clone(),
             links: self.links.clone(),
             ee: self.ee.clone(),
             fk: self.fk.clone(),
@@ -239,14 +290,21 @@ impl<const N: usize, FK: FKChain<N>> Clone for WreckValidator<N, FK> {
 }
 
 impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
+    /// Build a validator.
+    ///
+    /// `world` is a static body in world coordinates that is never
+    /// transformed (e.g. fences, stands, fixtures). `base` is placed at
+    /// [`FKChain::base_tf`].
     pub fn new(
         links: [CollisionBody<N>; N],
         ee: CollisionBody<N>,
         base: Option<CollisionBody<N>>,
+        world: Option<CollisionBody<N>>,
         fk: FK,
     ) -> Self {
         Self {
             base,
+            world,
             links,
             ee,
             fk,
@@ -261,6 +319,10 @@ impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
         &self.base
     }
 
+    pub fn world_ref(&self) -> &Option<CollisionBody<N>> {
+        &self.world
+    }
+
     pub fn ee_ref(&self) -> &CollisionBody<N> {
         &self.ee
     }
@@ -271,9 +333,10 @@ impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
         [CollisionBody<N>; N],
         CollisionBody<N>,
         Option<CollisionBody<N>>,
+        Option<CollisionBody<N>>,
         FK,
     ) {
-        (self.links, self.ee, self.base, self.fk)
+        (self.links, self.ee, self.base, self.world, self.fk)
     }
 
     fn check_collisions(
@@ -282,21 +345,25 @@ impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
         ctx: &WreckValidatorContext<'_, N>,
     ) -> DekeResult<()> {
         let transforms = self.fk.fk(q).map_err(Into::into)?;
+        let base_tf = self.fk.base_tf();
 
         SCRATCH_BODIES.with_borrow_mut(|scratch| {
-            if scratch.len() < N + 1 {
-                scratch.resize_with(N + 1, BodyScratch::default);
+            if scratch.len() < N + 2 {
+                scratch.resize_with(N + 2, BodyScratch::default);
             }
 
             for i in 0..N {
                 scratch[i].refresh(&self.links[i], transforms[i]);
             }
             scratch[N].refresh(&self.ee, transforms[N - 1]);
+            if let Some(base) = &self.base {
+                scratch[N + 1].refresh(base, base_tf);
+            }
 
             for i in 0..N {
-                check_body_env(&self.links[i], Some(&scratch[i]), ctx)?;
+                check_body_env(&self.links[i], Some(&scratch[i]), i, ctx)?;
             }
-            check_body_env(&self.ee, Some(&scratch[N]), ctx)?;
+            check_body_env(&self.ee, Some(&scratch[N]), N, ctx)?;
 
             if ctx.self_collisions {
                 for i in 0..N {
@@ -315,9 +382,19 @@ impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
                             &self.links[i],
                             Some(&scratch[i]),
                             base,
-                            None,
+                            Some(&scratch[N + 1]),
                             i,
                             N + 1,
+                        )?;
+                    }
+                    if let Some(world) = &self.world {
+                        check_body_pair(
+                            &self.links[i],
+                            Some(&scratch[i]),
+                            world,
+                            None,
+                            i,
+                            N + 2,
                         )?;
                     }
                 }
@@ -332,7 +409,27 @@ impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
                     )?;
                 }
                 if let Some(base) = &self.base {
-                    check_body_pair(&self.ee, Some(&scratch[N]), base, None, N, N + 1)?;
+                    check_body_pair(
+                        &self.ee,
+                        Some(&scratch[N]),
+                        base,
+                        Some(&scratch[N + 1]),
+                        N,
+                        N + 1,
+                    )?;
+                }
+                if let Some(world) = &self.world {
+                    check_body_pair(&self.ee, Some(&scratch[N]), world, None, N, N + 2)?;
+                }
+                if let (Some(base), Some(world)) = (&self.base, &self.world) {
+                    check_body_pair(
+                        base,
+                        Some(&scratch[N + 1]),
+                        world,
+                        None,
+                        N + 1,
+                        N + 2,
+                    )?;
                 }
             }
 
@@ -345,17 +442,25 @@ impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
 fn check_body_env<const N: usize>(
     body: &CollisionBody<N>,
     scratch: Option<&BodyScratch>,
+    body_idx: usize,
     ctx: &WreckValidatorContext<'_, N>,
 ) -> DekeResult<()> {
     for (collider, token, filter) in sub_colliders(body, scratch) {
-        if filter.obstacles {
-            if collider.collides_other(ctx.environment) {
-                return Err(DekeError::EnvironmentCollision(token, token));
+        if !filter.obstacles {
+            continue;
+        }
+        if collider.collides_other(ctx.environment) {
+            return Err(DekeError::EnvironmentCollision(token, token));
+        }
+        for extra in ctx.extra_attachments {
+            if matches!(extra.mounted_on, Some(idx) if idx == body_idx) {
+                continue;
             }
-            for extra in ctx.extra_attachments {
-                if collider.collides_other(&extra.collision) {
-                    return Err(DekeError::EnvironmentCollision(token, extra.token));
-                }
+            if !extra.filter.allows(body_idx) {
+                continue;
+            }
+            if collider.collides_other(&extra.collision) {
+                return Err(DekeError::EnvironmentCollision(token, extra.token));
             }
         }
     }
@@ -428,15 +533,19 @@ impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
         q: &SRobotQ<N>,
     ) -> DekeResult<Vec<SelfCollisionDetail>> {
         let transforms = self.fk.fk(q).map_err(Into::into)?;
+        let base_tf = self.fk.base_tf();
 
         SCRATCH_BODIES.with_borrow_mut(|scratch| {
-            if scratch.len() < N + 1 {
-                scratch.resize_with(N + 1, BodyScratch::default);
+            if scratch.len() < N + 2 {
+                scratch.resize_with(N + 2, BodyScratch::default);
             }
             for i in 0..N {
                 scratch[i].refresh(&self.links[i], transforms[i]);
             }
             scratch[N].refresh(&self.ee, transforms[N - 1]);
+            if let Some(base) = &self.base {
+                scratch[N + 1].refresh(base, base_tf);
+            }
 
             let mut details = Vec::new();
 
@@ -445,8 +554,10 @@ impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
                     format!("link_{}", idx)
                 } else if idx == N {
                     "ee".to_string()
-                } else {
+                } else if idx == N + 1 {
                     "base".to_string()
+                } else {
+                    "world".to_string()
                 }
             };
 
@@ -506,9 +617,20 @@ impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
                         &self.links[i],
                         Some(&scratch[i]),
                         base,
-                        None,
+                        Some(&scratch[N + 1]),
                         i,
                         N + 1,
+                        &mut details,
+                    );
+                }
+                if let Some(world) = &self.world {
+                    check_pair(
+                        &self.links[i],
+                        Some(&scratch[i]),
+                        world,
+                        None,
+                        i,
+                        N + 2,
                         &mut details,
                     );
                 }
@@ -530,9 +652,31 @@ impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
                     &self.ee,
                     Some(&scratch[N]),
                     base,
-                    None,
+                    Some(&scratch[N + 1]),
                     N,
                     N + 1,
+                    &mut details,
+                );
+            }
+            if let Some(world) = &self.world {
+                check_pair(
+                    &self.ee,
+                    Some(&scratch[N]),
+                    world,
+                    None,
+                    N,
+                    N + 2,
+                    &mut details,
+                );
+            }
+            if let (Some(base), Some(world)) = (&self.base, &self.world) {
+                check_pair(
+                    base,
+                    Some(&scratch[N + 1]),
+                    world,
+                    None,
+                    N + 1,
+                    N + 2,
                     &mut details,
                 );
             }
@@ -542,8 +686,10 @@ impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
     }
 
     /// Evaluates FK at `q` and returns a single `Collider` containing every
-    /// sub-collider of the validator (base, each link, the end effector, and
-    /// all of their attachments) transformed into world frame.
+    /// sub-collider of the validator (base, each link, the end effector,
+    /// the static world body, and all of their attachments) expressed in
+    /// the world frame. Base is placed at [`FKChain::base_tf`]; the world
+    /// body is passed through without transformation.
     pub fn debug_bodies(&self, q: &SRobotQ<N>) -> DekeResult<Collider> {
         let transforms = self.fk.fk(q).map_err(Into::into)?;
         let mut out = Collider::default();
@@ -565,13 +711,17 @@ impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
             }
         };
 
+        let base_tf = self.fk.base_tf();
         if let Some(base) = &self.base {
-            push_body(base, None);
+            push_body(base, Some(base_tf));
         }
         for i in 0..N {
             push_body(&self.links[i], Some(transforms[i]));
         }
         push_body(&self.ee, Some(transforms[N - 1]));
+        if let Some(world) = &self.world {
+            push_body(world, None);
+        }
 
         Ok(out)
     }

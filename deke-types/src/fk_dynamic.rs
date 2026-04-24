@@ -100,6 +100,13 @@ macro_rules! dynamic_fk {
             impl FKChain<$n> for $name {
                 type Error = DekeError;
 
+                fn base_tf(&self) -> Affine3A {
+                    match self {
+                        Self::$variant(chain) => FKChain::<$n>::base_tf(chain),
+                        _ => Affine3A::IDENTITY,
+                    }
+                }
+
                 fn fk(&self, q: &SRobotQ<$n>) -> Result<[Affine3A; $n], Self::Error> {
                     match self {
                         Self::$variant(chain) => FKChain::<$n>::fk(chain, q).map_err(Into::into),
@@ -163,6 +170,7 @@ impl DynamicURDFChain {
 }
 
 trait ErasedFK<const N: usize>: Send + Sync {
+    fn base_tf(&self) -> Affine3A;
     fn fk(&self, q: &SRobotQ<N>) -> Result<[Affine3A; N], DekeError>;
     fn fk_end(&self, q: &SRobotQ<N>) -> Result<Affine3A, DekeError>;
     fn joint_axes_positions(
@@ -173,6 +181,10 @@ trait ErasedFK<const N: usize>: Send + Sync {
 }
 
 impl<const N: usize, FK: FKChain<N> + 'static> ErasedFK<N> for FK {
+    fn base_tf(&self) -> Affine3A {
+        FKChain::base_tf(self)
+    }
+
     fn fk(&self, q: &SRobotQ<N>) -> Result<[Affine3A; N], DekeError> {
         FKChain::fk(self, q).map_err(Into::into)
     }
@@ -209,6 +221,10 @@ impl<const N: usize> Clone for BoxFK<N> {
 
 impl<const N: usize> FKChain<N> for BoxFK<N> {
     type Error = DekeError;
+
+    fn base_tf(&self) -> Affine3A {
+        self.0.base_tf()
+    }
 
     fn fk(&self, q: &SRobotQ<N>) -> Result<[Affine3A; N], DekeError> {
         self.0.fk(q)

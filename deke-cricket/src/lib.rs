@@ -988,7 +988,7 @@ pub fn cricket(input: TokenStream) -> TokenStream {
                     deke_types::SRobotQ(JOINT_LOWER),
                     deke_types::SRobotQ(JOINT_UPPER),
                 );
-                let collisions = deke_wreck::WreckValidator::new(links, ee, base, fk);
+                let collisions = deke_wreck::WreckValidator::new(links, ee, base, None, fk);
 
                 deke_types::ValidatorAnd(joints, collisions)
             }

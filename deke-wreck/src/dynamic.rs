@@ -191,8 +191,8 @@ macro_rules! impl_dynamic_wreck {
 
             impl<FK: FKChain<$n> + 'static> From<WreckValidator<$n, FK>> for DynamicWreckValidator {
                 fn from(v: WreckValidator<$n, FK>) -> Self {
-                    let (links, ee, base, fk) = v.into_parts();
-                    let w = WreckValidator::new(links, ee, base, BoxFK::new(fk));
+                    let (links, ee, base, world, fk) = v.into_parts();
+                    let w = WreckValidator::new(links, ee, base, world, BoxFK::new(fk));
                     Self::$variant(Box::new(w))
                 }
             }

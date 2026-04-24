@@ -60,6 +60,15 @@ pub trait FKChain<const N: usize>: Clone + Send + Sync {
     fn dof(&self) -> usize {
         N
     }
+    /// Configuration-independent transform from the robot's base frame to the
+    /// world frame. Defaults to identity; wrappers that install a static
+    /// prefix (e.g. [`TransformedFK`] with a prefix set, or [`URDFChain`]
+    /// with fixed leading joints baked in) override this so downstream
+    /// consumers (collision validators, visualizers) can place the static
+    /// base body at the correct pose.
+    fn base_tf(&self) -> Affine3A {
+        Affine3A::IDENTITY
+    }
     /// Theoretical maximum reach: sum of link lengths (upper bound, ignores joint limits).
     fn max_reach(&self) -> Result<f32, Self::Error> {
         let (_, p, p_ee) = self.joint_axes_positions(&SRobotQ::zeros())?;
@@ -1335,6 +1344,17 @@ impl<const N: usize> FKChain<N> for URDFChain<N> {
     #[cfg(not(debug_assertions))]
     type Error = std::convert::Infallible;
 
+    fn base_tf(&self) -> Affine3A {
+        if self.prefix_identity {
+            Affine3A::IDENTITY
+        } else {
+            Affine3A {
+                matrix3: Mat3A::from_cols(self.prefix_c0, self.prefix_c1, self.prefix_c2),
+                translation: self.prefix_t,
+            }
+        }
+    }
+
     fn fk(&self, q: &SRobotQ<N>) -> Result<[Affine3A; N], Self::Error> {
         check_finite(q)?;
         let mut out = [Affine3A::IDENTITY; N];
@@ -1527,6 +1547,13 @@ impl<const N: usize, FK: FKChain<N>> TransformedFK<N, FK> {
 impl<const N: usize, FK: FKChain<N>> FKChain<N> for TransformedFK<N, FK> {
     type Error = FK::Error;
 
+    fn base_tf(&self) -> Affine3A {
+        match &self.prefix {
+            Some(p) => *p * self.inner.base_tf(),
+            None => self.inner.base_tf(),
+        }
+    }
+
     fn max_reach(&self) -> Result<f32, Self::Error> {
         let mut reach = self.inner.max_reach()?;
         if let Some(suf) = &self.suffix {
@@ -1645,6 +1672,10 @@ impl<const M: usize, const N: usize, FK: FKChain<N>> PrismaticFK<M, N, FK> {
 
 impl<const M: usize, const N: usize, FK: FKChain<N>> FKChain<M> for PrismaticFK<M, N, FK> {
     type Error = FK::Error;
+
+    fn base_tf(&self) -> Affine3A {
+        self.inner.base_tf()
+    }
 
     fn fk(&self, q: &SRobotQ<M>) -> Result<[Affine3A; M], Self::Error> {
         let (q_p, inner_q) = self.split_q(q);
