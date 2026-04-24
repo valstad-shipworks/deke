@@ -22,14 +22,14 @@ macro_rules! dynamic_fk {
                 let n = joints.len();
                 let err = || DekeError::ShapeMismatch { expected: n, found: n };
                 Ok(match n {
-                    1 => Self::J1($chain::new(joints.try_into().map_err(|_| err())?)),
-                    2 => Self::J2($chain::new(joints.try_into().map_err(|_| err())?)),
-                    3 => Self::J3($chain::new(joints.try_into().map_err(|_| err())?)),
-                    4 => Self::J4($chain::new(joints.try_into().map_err(|_| err())?)),
-                    5 => Self::J5($chain::new(joints.try_into().map_err(|_| err())?)),
-                    6 => Self::J6($chain::new(joints.try_into().map_err(|_| err())?)),
-                    7 => Self::J7($chain::new(joints.try_into().map_err(|_| err())?)),
-                    8 => Self::J8($chain::new(joints.try_into().map_err(|_| err())?)),
+                    1 => Self::J1(dynamic_fk!(@ctor $chain, joints, err, 1)),
+                    2 => Self::J2(dynamic_fk!(@ctor $chain, joints, err, 2)),
+                    3 => Self::J3(dynamic_fk!(@ctor $chain, joints, err, 3)),
+                    4 => Self::J4(dynamic_fk!(@ctor $chain, joints, err, 4)),
+                    5 => Self::J5(dynamic_fk!(@ctor $chain, joints, err, 5)),
+                    6 => Self::J6(dynamic_fk!(@ctor $chain, joints, err, 6)),
+                    7 => Self::J7(dynamic_fk!(@ctor $chain, joints, err, 7)),
+                    8 => Self::J8(dynamic_fk!(@ctor $chain, joints, err, 8)),
                     _ => return Err(DekeError::ShapeMismatch { expected: 8, found: n }),
                 })
             }
@@ -61,6 +61,14 @@ macro_rules! dynamic_fk {
         }
 
         dynamic_fk!(@impl_fkchain $name, $chain, 1 J1, 2 J2, 3 J3, 4 J4, 5 J5, 6 J6, 7 J7, 8 J8);
+    };
+
+    (@ctor URDFChain, $joints:ident, $err:ident, $n:literal) => {
+        URDFChain::<$n>::new($joints.try_into().map_err(|_| $err())?)?
+    };
+
+    (@ctor $chain:ident, $joints:ident, $err:ident, $n:literal) => {
+        $chain::<$n>::new($joints.try_into().map_err(|_| $err())?)
     };
 
     (@dispatch_fk $self:ident, $q:ident, $($variant:ident $n:literal),+) => {

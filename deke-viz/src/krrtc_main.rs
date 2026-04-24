@@ -114,7 +114,7 @@ fn main() {
         }
     };
 
-    let fk = deke_types::URDFChain::new(URDF_JOINTS);
+    let fk = deke_types::URDFChain::new(URDF_JOINTS).unwrap();
 
     println!("path has {} waypoints:", path.len());
     for (i, q) in path.iter().enumerate() {

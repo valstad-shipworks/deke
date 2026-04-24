@@ -58,7 +58,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         plan_diag
     );
 
-    let fk = URDFChain::<6>::new(URDF_JOINTS);
+    let fk = URDFChain::<6>::new(URDF_JOINTS)?;
 
     let joint_v_max: [f32; 6] = [
         210.0_f32.to_radians(),

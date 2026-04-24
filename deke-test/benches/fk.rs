@@ -39,7 +39,7 @@ fn bench_fk(c: &mut Criterion) {
 
     let dh = DHChain::new(m20id12l::DH_JOINTS);
     let hp = make_hp_chain();
-    let urdf = URDFChain::new(m20id12l::URDF_JOINTS);
+    let urdf = URDFChain::new(m20id12l::URDF_JOINTS).unwrap();
     let vamp_robot = vamp::Robot::M20ID12L;
 
     c.bench_function("fk_dh", |b| {

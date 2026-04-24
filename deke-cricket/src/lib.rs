@@ -61,11 +61,19 @@ struct LinkData {
     shapes: Vec<ShapeData>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum UrdfJointKind {
+    Revolute,
+    Continuous,
+    Prismatic,
+}
+
 #[derive(Debug)]
 struct JointData {
     name: String,
     parent: String,
     child: String,
+    kind: UrdfJointKind,
     origin_xyz: [f64; 3],
     origin_rpy: [f64; 3],
     axis: [f64; 3],
@@ -235,9 +243,12 @@ fn parse_urdf(xml: &str) -> (Vec<LinkData>, Vec<JointData>) {
             links.push(LinkData { name, shapes });
         } else if node.tag_name().name() == "joint" {
             let joint_type = node.attribute("type").unwrap_or("fixed");
-            if joint_type != "revolute" && joint_type != "continuous" && joint_type != "prismatic" {
-                continue;
-            }
+            let kind = match joint_type {
+                "revolute" => UrdfJointKind::Revolute,
+                "continuous" => UrdfJointKind::Continuous,
+                "prismatic" => UrdfJointKind::Prismatic,
+                _ => continue,
+            };
             let name = node.attribute("name").unwrap().to_string();
             let parent = node
                 .children()
@@ -281,6 +292,7 @@ fn parse_urdf(xml: &str) -> (Vec<LinkData>, Vec<JointData>) {
                 name,
                 parent,
                 child,
+                kind,
                 origin_xyz,
                 origin_rpy,
                 axis,
@@ -697,11 +709,19 @@ pub fn cricket(input: TokenStream) -> TokenStream {
             let ax = j.axis[0];
             let ay = j.axis[1];
             let az = j.axis[2];
+            let kind_tokens = match j.kind {
+                UrdfJointKind::Revolute | UrdfJointKind::Continuous => quote! {
+                    deke_types::URDFJointType::Revolute { axis: (#ax, #ay, #az) }
+                },
+                UrdfJointKind::Prismatic => quote! {
+                    deke_types::URDFJointType::Prismatic { axis: (#ax, #ay, #az) }
+                },
+            };
             quote! {
                 deke_types::URDFJoint {
-                    origin_xyz: [#ox, #oy, #oz],
-                    origin_rpy: [#roll, #pitch, #yaw],
-                    axis: [#ax, #ay, #az],
+                    r#type: #kind_tokens,
+                    xyz: (#ox, #oy, #oz),
+                    rpy: (#roll, #pitch, #yaw),
                 }
             }
         })
@@ -957,7 +977,8 @@ pub fn cricket(input: TokenStream) -> TokenStream {
             >;
 
             pub fn validator() -> Validator {
-                let fk = deke_types::URDFChain::<#n_lit>::new(URDF_JOINTS);
+                let fk = deke_types::URDFChain::<#n_lit>::new(URDF_JOINTS)
+                    .expect("URDF_JOINTS emitted by cricket should be all-revolute");
 
                 let links = [#(#link_collider_builds),*];
                 let ee = #ee_collider_build;

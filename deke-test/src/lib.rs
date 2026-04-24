@@ -87,7 +87,7 @@ mod tests {
         }
 
         use deke_types::FKChain;
-        let fk = deke_types::URDFChain::<6>::new(super::m20id12l::URDF_JOINTS);
+        let fk = deke_types::URDFChain::<6>::new(super::m20id12l::URDF_JOINTS).unwrap();
         let test_configs: &[[f32; 6]] = &[
             [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
             [0.5, 0.3, -0.2, 0.1, 0.4, -0.3],

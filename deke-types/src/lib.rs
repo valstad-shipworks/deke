@@ -15,7 +15,8 @@ mod validator;
 mod validator_dynamic;
 
 pub use fk::{
-    DHChain, DHJoint, FKChain, HPChain, HPJoint, PrismaticFK, TransformedFK, URDFChain, URDFJoint,
+    DHChain, DHJoint, FKChain, HPChain, HPJoint, PrismaticFK, TransformedFK, URDFBuildError,
+    URDFChain, URDFJoint, URDFJointType, compose_fixed_joints,
 };
 pub use fk_dynamic::{BoxFK, DynamicDHChain, DynamicHPChain, DynamicURDFChain};
 pub use path::{RobotPath, SRobotPath};
@@ -50,6 +51,16 @@ pub enum DekeError {
     DuplicateWaypoints,
     #[error("Retimer failed: {0}")]
     RetimerFailed(String),
+    #[error(
+        "URDF joint at index {index} has an unexpected type: expected {expected}, found {found}"
+    )]
+    URDFJointTypeMismatch {
+        index: usize,
+        expected: &'static str,
+        found: &'static str,
+    },
+    #[error("URDFChain<{expected}> requires {expected} revolute joints, found {found}")]
+    URDFRevoluteCountMismatch { expected: usize, found: usize },
     #[error("Super error")]
     SuperError,
 }

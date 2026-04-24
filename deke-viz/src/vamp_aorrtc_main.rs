@@ -166,7 +166,7 @@ fn main() {
     let path = deke_types::SRobotPath::try_new(waypoints).expect("invalid path");
 
     let _wreck_validator = validator();
-    let fk = deke_types::URDFChain::new(URDF_JOINTS);
+    let fk = deke_types::URDFChain::new(URDF_JOINTS).unwrap();
 
     println!("path has {} waypoints:", path.len());
     for (i, sq) in path.iter().enumerate() {
