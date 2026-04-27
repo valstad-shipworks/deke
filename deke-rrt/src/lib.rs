@@ -1,16 +1,17 @@
 use std::fmt;
 
 use deke_types::{DekeError, DekeResult, Planner, SRobotPath, SRobotQLike, Validator};
-use tinyrand::{Seeded, StdRand};
 
 mod aorrtc;
 mod krrtc;
+mod randomizer;
 mod rrtc;
 pub mod scurve;
 mod tree;
 
 pub use aorrtc::AorrtcSettings;
 pub use krrtc::KrrtcSettings;
+pub use randomizer::{DekeRand, HaltonRand, RandomizerType};
 pub use rrtc::RrtcSettings;
 pub use scurve::{JointKinLimits, KinematicLimits, direction_cosine};
 
@@ -83,7 +84,7 @@ impl<const N: usize> Planner<N> for RrtcPlanner<N> {
             Ok(g) => g,
             Err(e) => return (Err(e), RrtDiagnostic::empty()),
         };
-        let mut rng = StdRand::seed(config.seed);
+        let mut rng = DekeRand::<N>::new(config.randomizer, config.seed);
         rrtc::solve(&start, &goal, validator, ctx, config, &mut rng)
     }
 }
@@ -122,8 +123,17 @@ impl<const N: usize> Planner<N> for AorrtcPlanner<N> {
             Ok(g) => g,
             Err(e) => return (Err(e), RrtDiagnostic::empty()),
         };
-        let mut rng = StdRand::seed(config.rrtc.seed);
-        aorrtc::solve(&start, &goal, validator, ctx, config, &mut rng)
+        let mut sample_rng = DekeRand::<N>::new(config.rrtc.randomizer, config.rrtc.seed);
+        let mut aux_rng = DekeRand::<N>::new(config.aux_randomizer, config.aux_seed);
+        aorrtc::solve(
+            &start,
+            &goal,
+            validator,
+            ctx,
+            config,
+            &mut sample_rng,
+            &mut aux_rng,
+        )
     }
 }
 
@@ -161,7 +171,7 @@ impl<const N: usize> Planner<N> for KrrtcPlanner<N> {
             Ok(g) => g,
             Err(e) => return (Err(e), RrtDiagnostic::empty()),
         };
-        let mut rng = StdRand::seed(config.seed);
+        let mut rng = DekeRand::<N>::new(config.randomizer, config.seed);
         krrtc::solve(&start, &goal, validator, ctx, config, &mut rng)
     }
 }

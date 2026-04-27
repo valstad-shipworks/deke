@@ -2,6 +2,7 @@ use deke_types::{DekeResult, SRobotPath, SRobotQ, Validator};
 use tinyrand::Rand;
 
 use crate::RrtDiagnostic;
+use crate::randomizer::RandomizerType;
 use crate::rrtc::{
     RrtcSettings, path_cost, rand_f64, reduce, sample_uniform, shortcut, smooth_bspline,
     solve as rrtc_solve, validate_edge, weighted_distance,
@@ -20,6 +21,12 @@ pub struct AorrtcSettings<const N: usize> {
     pub penalize_static_dof: bool,
     pub static_dof_penalty: f32,
     pub static_dof_threshold: f32,
+    /// RNG used for non-sampling work (PHS box-Muller draws, c_rand picks,
+    /// cost-bound resampling). Kept separate from `rrtc.randomizer` so that
+    /// e.g. joint sampling can use Halton while these auxiliary calls stay on
+    /// a conventional PRNG and don't perturb the Halton stripe.
+    pub aux_randomizer: RandomizerType,
+    pub aux_seed: u64,
     pub simplify_shortcut: bool,
     pub simplify_bspline_steps: usize,
     pub simplify_bspline_midpoint_interpolation: f32,
@@ -41,6 +48,8 @@ impl<const N: usize> AorrtcSettings<N> {
             penalize_static_dof: false,
             static_dof_penalty: 100.0,
             static_dof_threshold: 1e-4,
+            aux_randomizer: RandomizerType::Wyrand,
+            aux_seed: 43,
             simplify_shortcut: true,
             simplify_bspline_steps: 5,
             simplify_bspline_midpoint_interpolation: 0.5,
@@ -94,9 +103,15 @@ impl<const N: usize> Phs<N> {
         self.c_best = c_best;
     }
 
-    fn sample(&self, rng: &mut impl Rand, lower: &SRobotQ<N>, upper: &SRobotQ<N>) -> SRobotQ<N> {
+    fn sample(
+        &self,
+        sample_rng: &mut impl Rand,
+        aux_rng: &mut impl Rand,
+        lower: &SRobotQ<N>,
+        upper: &SRobotQ<N>,
+    ) -> SRobotQ<N> {
         if self.c_best >= f64::INFINITY || self.c_best <= self.c_min + 1e-10 {
-            return sample_uniform(rng, lower, upper);
+            return sample_uniform(sample_rng, lower, upper);
         }
 
         let r_major = self.c_best * 0.5;
@@ -104,7 +119,7 @@ impl<const N: usize> Phs<N> {
 
         const MAX_REJECTIONS: u32 = 1000;
         for _ in 0..MAX_REJECTIONS {
-            let ball = uniform_unit_ball::<N>(rng);
+            let ball = uniform_unit_ball::<N>(aux_rng);
 
             let mut scaled_ball = [0.0; N];
             scaled_ball[0] = ball[0] * r_major;
@@ -136,7 +151,7 @@ impl<const N: usize> Phs<N> {
             }
         }
 
-        sample_uniform(rng, lower, upper)
+        sample_uniform(sample_rng, lower, upper)
     }
 }
 
@@ -247,7 +262,8 @@ pub(crate) fn solve<const N: usize, V: Validator<N>>(
     validator: &V,
     ctx: &V::Context<'_>,
     settings: &AorrtcSettings<N>,
-    rng: &mut impl Rand,
+    sample_rng: &mut impl Rand,
+    aux_rng: &mut impl Rand,
 ) -> (DekeResult<SRobotPath<N>>, RrtDiagnostic) {
     let timer = std::time::Instant::now();
     let dof_coeffs = {
@@ -264,7 +280,8 @@ pub(crate) fn solve<const N: usize, V: Validator<N>>(
         c
     };
 
-    let (initial_result, initial_diag) = rrtc_solve(start, goal, validator, ctx, &settings.rrtc, rng);
+    let (initial_result, initial_diag) =
+        rrtc_solve(start, goal, validator, ctx, &settings.rrtc, sample_rng);
 
     let initial_path = match initial_result {
         Ok(path) => path,
@@ -321,9 +338,18 @@ pub(crate) fn solve<const N: usize, V: Validator<N>>(
             iters_since_improvement += 1;
 
             let q_rand = if settings.use_phs {
-                phs.sample(rng, &settings.rrtc.joint_lower, &settings.rrtc.joint_upper)
+                phs.sample(
+                    sample_rng,
+                    aux_rng,
+                    &settings.rrtc.joint_lower,
+                    &settings.rrtc.joint_upper,
+                )
             } else {
-                sample_uniform(rng, &settings.rrtc.joint_lower, &settings.rrtc.joint_upper)
+                sample_uniform(
+                    sample_rng,
+                    &settings.rrtc.joint_lower,
+                    &settings.rrtc.joint_upper,
+                )
             };
 
             let extend_start = inner % 2 == 0;
@@ -336,7 +362,7 @@ pub(crate) fn solve<const N: usize, V: Validator<N>>(
             let h_hat = weighted_distance(&q_rand, target_q, &dof_coeffs);
             let f_hat = g_hat + h_hat;
             let c_range = (best_cost - f_hat).max(0.0);
-            let c_rand = rand_f64(rng) * c_range + g_hat;
+            let c_rand = rand_f64(aux_rng) * c_range + g_hat;
 
             let (tree_a, tree_b) = if extend_start {
                 (&mut start_tree, &mut goal_tree)
@@ -380,7 +406,7 @@ pub(crate) fn solve<const N: usize, V: Validator<N>>(
                     if c_range == 0.0 {
                         break;
                     }
-                    let c_rand = rand_f64(rng) * c_range + g_hat_new;
+                    let c_rand = rand_f64(aux_rng) * c_range + g_hat_new;
                     let (cand_idx, cand_dist) = tree_a.find_nearest_ao(&q_new, c_rand);
                     let cand_cost = tree_a.cost(cand_idx) + cand_dist;
                     if cand_idx == best_parent || cand_cost >= new_cost {

@@ -2,6 +2,7 @@ use deke_types::{DekeError, DekeResult, SRobotPath, SRobotQ, Validator};
 use tinyrand::Rand;
 
 use crate::RrtDiagnostic;
+use crate::randomizer::RandomizerType;
 use crate::rrtc::{rand_f64, sample_uniform, validate_edge};
 use crate::scurve::{
     KinematicLimits, direction_cosine, kinematic_interpolate, kinematic_path_cost,
@@ -25,6 +26,7 @@ pub struct KrrtcSettings<const N: usize> {
     pub balance: bool,
     pub tree_ratio: f64,
     pub seed: u64,
+    pub randomizer: RandomizerType,
     pub shortcut_iterations: usize,
     pub smoothing_iterations: usize,
 }
@@ -46,6 +48,7 @@ impl<const N: usize> KrrtcSettings<N> {
             balance: true,
             tree_ratio: 1.0,
             seed: 42,
+            randomizer: RandomizerType::default(),
             shortcut_iterations: 200,
             smoothing_iterations: 100,
         }

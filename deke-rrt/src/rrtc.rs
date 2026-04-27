@@ -2,6 +2,7 @@ use deke_types::{DekeError, DekeResult, SRobotPath, SRobotQ, Validator};
 use tinyrand::Rand;
 
 use crate::RrtDiagnostic;
+use crate::randomizer::RandomizerType;
 use crate::tree::RrtTree;
 
 #[derive(Debug, Clone, Copy)]
@@ -20,6 +21,7 @@ pub struct RrtcSettings<const N: usize> {
     pub balance: bool,
     pub tree_ratio: f64,
     pub seed: u64,
+    pub randomizer: RandomizerType,
     pub shortcut: bool,
     pub bspline_steps: usize,
     pub bspline_midpoint_interpolation: f32,
@@ -45,6 +47,7 @@ impl<const N: usize> RrtcSettings<N> {
             balance: true,
             tree_ratio: 1.0,
             seed: 42,
+            randomizer: RandomizerType::default(),
             shortcut: true,
             bspline_steps: 5,
             bspline_midpoint_interpolation: 0.5,
