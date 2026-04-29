@@ -1,8 +1,7 @@
 use deke_types::{DekeError, DekeResult, SRobotPath, SRobotQ, Validator};
-use tinyrand::Rand;
 
 use crate::RrtDiagnostic;
-use crate::randomizer::RandomizerType;
+use crate::randomizer::{DekeRng, RandomizerType};
 use crate::tree::RrtTree;
 
 #[derive(Debug, Clone, Copy)]
@@ -58,19 +57,15 @@ impl<const N: usize> RrtcSettings<N> {
     }
 }
 
-#[inline]
-pub(crate) fn rand_f64(rng: &mut impl Rand) -> f64 {
-    (rng.next_u64() >> 11) as f64 * (1.0 / (1u64 << 53) as f64)
-}
-
-pub(crate) fn sample_uniform<const N: usize>(
-    rng: &mut impl Rand,
+pub(crate) fn sample_uniform<const N: usize, R: DekeRng<N>>(
+    rng: &mut R,
     lower: &SRobotQ<N>,
     upper: &SRobotQ<N>,
 ) -> SRobotQ<N> {
+    let unit = rng.sample_unit();
     let mut q = [0.0f32; N];
     for i in 0..N {
-        q[i] = (lower[i] as f64 + rand_f64(rng) * (upper[i] as f64 - lower[i] as f64)) as f32;
+        q[i] = (lower[i] as f64 + unit[i] * (upper[i] as f64 - lower[i] as f64)) as f32;
     }
     SRobotQ::from_array(q)
 }
@@ -277,13 +272,13 @@ fn reconstruct<const N: usize>(
     }
 }
 
-pub(crate) fn solve<const N: usize, V: Validator<N>>(
+pub(crate) fn solve<const N: usize, V: Validator<N>, R: DekeRng<N>>(
     start: &SRobotQ<N>,
     goal: &SRobotQ<N>,
     validator: &V,
     ctx: &V::Context<'_>,
     settings: &RrtcSettings<N>,
-    rng: &mut impl Rand,
+    rng: &mut R,
 ) -> (DekeResult<SRobotPath<N>>, RrtDiagnostic) {
     let timer = std::time::Instant::now();
     let dof_coeffs = {

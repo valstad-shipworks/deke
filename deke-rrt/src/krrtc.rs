@@ -1,9 +1,8 @@
 use deke_types::{DekeError, DekeResult, SRobotPath, SRobotQ, Validator};
-use tinyrand::Rand;
 
 use crate::RrtDiagnostic;
-use crate::randomizer::RandomizerType;
-use crate::rrtc::{rand_f64, sample_uniform, validate_edge};
+use crate::randomizer::{DekeRng, RandomizerType};
+use crate::rrtc::{sample_uniform, validate_edge};
 use crate::scurve::{
     KinematicLimits, direction_cosine, kinematic_interpolate, kinematic_path_cost,
     time_optimal_cost,
@@ -192,14 +191,14 @@ fn round_corners<const N: usize, V: Validator<N>>(
 /// Random shortcutting: pick two random waypoints, if the direct edge is
 /// collision-free, remove everything between them. Biases toward pairs
 /// with high time-optimal cost to maximize improvement per shortcut.
-fn shortcut<const N: usize, V: Validator<N>>(
+fn shortcut<const N: usize, V: Validator<N>, R: DekeRng<N>>(
     path: &mut Vec<SRobotQ<N>>,
     validator: &V,
     ctx: &V::Context<'_>,
     limits: &KinematicLimits<N>,
     resolution: f64,
     iterations: usize,
-    rng: &mut impl Rand,
+    rng: &mut R,
 ) {
     if path.len() <= 2 {
         return;
@@ -229,7 +228,7 @@ fn shortcut<const N: usize, V: Validator<N>>(
         }
 
         // Pick first index weighted by segment cost (favor expensive segments)
-        let r1 = rand_f64(rng) * total_cost;
+        let r1 = rng.next_f64() * total_cost;
         let i = cumulative
             .partition_point(|&c| c < r1)
             .min(segment_costs.len().saturating_sub(1));
@@ -239,7 +238,7 @@ fn shortcut<const N: usize, V: Validator<N>>(
         if remaining == 0 {
             continue;
         }
-        let j = i + 2 + (rand_f64(rng) * remaining as f64) as usize;
+        let j = i + 2 + (rng.next_f64() * remaining as f64) as usize;
         let j = j.min(path.len() - 1);
 
         if validate_edge(&path[i], &path[j], resolution, validator, ctx).is_ok() {
@@ -299,13 +298,13 @@ fn reconstruct<const N: usize>(
     }
 }
 
-pub(crate) fn solve<const N: usize, V: Validator<N>>(
+pub(crate) fn solve<const N: usize, V: Validator<N>, R: DekeRng<N>>(
     start: &SRobotQ<N>,
     goal: &SRobotQ<N>,
     validator: &V,
     ctx: &V::Context<'_>,
     settings: &KrrtcSettings<N>,
-    rng: &mut impl Rand,
+    rng: &mut R,
 ) -> (DekeResult<SRobotPath<N>>, RrtDiagnostic) {
     let timer = std::time::Instant::now();
     let coeffs = settings.kin_limits.velocity_coeffs();

@@ -11,7 +11,7 @@ mod tree;
 
 pub use aorrtc::AorrtcSettings;
 pub use krrtc::KrrtcSettings;
-pub use randomizer::{DekeRand, HaltonRand, RandomizerType};
+pub use randomizer::{DekeRand, DekeRng, HaltonRand, RandomizerType};
 pub use rrtc::RrtcSettings;
 pub use scurve::{JointKinLimits, KinematicLimits, direction_cosine};
 

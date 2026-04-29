@@ -1,10 +1,9 @@
 use deke_types::{DekeResult, SRobotPath, SRobotQ, Validator};
-use tinyrand::Rand;
 
 use crate::RrtDiagnostic;
-use crate::randomizer::RandomizerType;
+use crate::randomizer::{DekeRng, RandomizerType};
 use crate::rrtc::{
-    RrtcSettings, path_cost, rand_f64, reduce, sample_uniform, shortcut, smooth_bspline,
+    RrtcSettings, path_cost, reduce, sample_uniform, shortcut, smooth_bspline,
     solve as rrtc_solve, validate_edge, weighted_distance,
 };
 use crate::tree::RrtTree;
@@ -103,10 +102,10 @@ impl<const N: usize> Phs<N> {
         self.c_best = c_best;
     }
 
-    fn sample(
+    fn sample<S: DekeRng<N>, A: DekeRng<N>>(
         &self,
-        sample_rng: &mut impl Rand,
-        aux_rng: &mut impl Rand,
+        sample_rng: &mut S,
+        aux_rng: &mut A,
         lower: &SRobotQ<N>,
         upper: &SRobotQ<N>,
     ) -> SRobotQ<N> {
@@ -119,7 +118,7 @@ impl<const N: usize> Phs<N> {
 
         const MAX_REJECTIONS: u32 = 1000;
         for _ in 0..MAX_REJECTIONS {
-            let ball = uniform_unit_ball::<N>(aux_rng);
+            let ball = uniform_unit_ball::<N, _>(aux_rng);
 
             let mut scaled_ball = [0.0; N];
             scaled_ball[0] = ball[0] * r_major;
@@ -204,15 +203,15 @@ fn build_orthonormal_basis<const N: usize>(
     basis
 }
 
-fn box_muller(rng: &mut impl Rand) -> (f64, f64) {
-    let u1 = rand_f64(rng).max(1e-300);
-    let u2 = rand_f64(rng);
+fn box_muller<const N: usize, R: DekeRng<N>>(rng: &mut R) -> (f64, f64) {
+    let u1 = rng.next_f64().max(1e-300);
+    let u2 = rng.next_f64();
     let r = (-2.0 * u1.ln()).sqrt();
     let theta = 2.0 * std::f64::consts::PI * u2;
     (r * theta.cos(), r * theta.sin())
 }
 
-fn uniform_unit_ball<const N: usize>(rng: &mut impl Rand) -> [f64; N] {
+fn uniform_unit_ball<const N: usize, R: DekeRng<N>>(rng: &mut R) -> [f64; N] {
     let mut point = [0.0; N];
 
     let mut i = 0;
@@ -235,7 +234,7 @@ fn uniform_unit_ball<const N: usize>(rng: &mut impl Rand) -> [f64; N] {
         *v /= norm;
     }
 
-    let r = rand_f64(rng).powf(1.0 / N as f64);
+    let r = rng.next_f64().powf(1.0 / N as f64);
     for v in &mut point {
         *v *= r;
     }
@@ -256,14 +255,14 @@ fn steer<const N: usize>(
     }
 }
 
-pub(crate) fn solve<const N: usize, V: Validator<N>>(
+pub(crate) fn solve<const N: usize, V: Validator<N>, S: DekeRng<N>, A: DekeRng<N>>(
     start: &SRobotQ<N>,
     goal: &SRobotQ<N>,
     validator: &V,
     ctx: &V::Context<'_>,
     settings: &AorrtcSettings<N>,
-    sample_rng: &mut impl Rand,
-    aux_rng: &mut impl Rand,
+    sample_rng: &mut S,
+    aux_rng: &mut A,
 ) -> (DekeResult<SRobotPath<N>>, RrtDiagnostic) {
     let timer = std::time::Instant::now();
     let dof_coeffs = {
@@ -362,7 +361,7 @@ pub(crate) fn solve<const N: usize, V: Validator<N>>(
             let h_hat = weighted_distance(&q_rand, target_q, &dof_coeffs);
             let f_hat = g_hat + h_hat;
             let c_range = (best_cost - f_hat).max(0.0);
-            let c_rand = rand_f64(aux_rng) * c_range + g_hat;
+            let c_rand = aux_rng.next_f64() * c_range + g_hat;
 
             let (tree_a, tree_b) = if extend_start {
                 (&mut start_tree, &mut goal_tree)
@@ -406,7 +405,7 @@ pub(crate) fn solve<const N: usize, V: Validator<N>>(
                     if c_range == 0.0 {
                         break;
                     }
-                    let c_rand = rand_f64(aux_rng) * c_range + g_hat_new;
+                    let c_rand = aux_rng.next_f64() * c_range + g_hat_new;
                     let (cand_idx, cand_dist) = tree_a.find_nearest_ao(&q_new, c_rand);
                     let cand_cost = tree_a.cost(cand_idx) + cand_dist;
                     if cand_idx == best_parent || cand_cost >= new_cost {
