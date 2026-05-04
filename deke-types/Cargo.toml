@@ -11,6 +11,8 @@ repository = "https://github.com/valstad-shipworks/deke"
 approx = "0.5.1"
 const_soft_float = "0.1.4"
 glam = "0.32.1"
+glam-traits-ext = { path = "../../glam-traits", features = ["approx"] }
+# glam-traits-ext = { version = "0.32.1", features = ["approx"] }
 ndarray = {version = "0.17.2", features = ["approx"]}
 num-traits = "0.2.19"
 thiserror = "2.0.18"

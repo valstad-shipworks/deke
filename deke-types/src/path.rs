@@ -9,14 +9,14 @@ pub type RobotPath<T = f32> = Array2<T>;
 ///
 /// SRobotPath is guaranteed to have at least 2 waypoints, so it always has a defined start and end configuration.
 #[derive(Debug, Clone)]
-pub struct SRobotPath<const N: usize, T: Float = f32> {
-    first: SRobotQ<N, T>,
-    last: SRobotQ<N, T>,
-    waypoints: Vec<SRobotQ<N, T>>,
+pub struct SRobotPath<const N: usize, F: Float = f32> {
+    first: SRobotQ<N, F>,
+    last: SRobotQ<N, F>,
+    waypoints: Vec<SRobotQ<N, F>>,
 }
 
-impl<const N: usize, T: Float> SRobotPath<N, T> {
-    pub fn try_new(waypoints: Vec<SRobotQ<N, T>>) -> DekeResult<Self> {
+impl<const N: usize, F: Float> SRobotPath<N, F> {
+    pub fn try_new(waypoints: Vec<SRobotQ<N, F>>) -> DekeResult<Self> {
         if waypoints.len() < 2 {
             return Err(crate::DekeError::PathTooShort(waypoints.len()));
         }
@@ -28,9 +28,9 @@ impl<const N: usize, T: Float> SRobotPath<N, T> {
     }
 
     pub fn new_prechecked(
-        first: SRobotQ<N, T>,
-        last: SRobotQ<N, T>,
-        middle: Vec<SRobotQ<N, T>>,
+        first: SRobotQ<N, F>,
+        last: SRobotQ<N, F>,
+        middle: Vec<SRobotQ<N, F>>,
     ) -> Self {
         let mut waypoints = Vec::with_capacity(middle.len() + 2);
         waypoints.push(first);
@@ -43,7 +43,7 @@ impl<const N: usize, T: Float> SRobotPath<N, T> {
         }
     }
 
-    pub fn from_two(start: SRobotQ<N, T>, goal: SRobotQ<N, T>) -> Self {
+    pub fn from_two(start: SRobotQ<N, F>, goal: SRobotQ<N, F>) -> Self {
         Self {
             first: start,
             last: goal,
@@ -55,35 +55,35 @@ impl<const N: usize, T: Float> SRobotPath<N, T> {
         self.waypoints.len()
     }
 
-    pub fn get(&self, index: usize) -> Option<&SRobotQ<N, T>> {
+    pub fn get(&self, index: usize) -> Option<&SRobotQ<N, F>> {
         self.waypoints.get(index)
     }
 
-    pub fn first(&self) -> &SRobotQ<N, T> {
+    pub fn first(&self) -> &SRobotQ<N, F> {
         &self.first
     }
 
-    pub fn last(&self) -> &SRobotQ<N, T> {
+    pub fn last(&self) -> &SRobotQ<N, F> {
         &self.last
     }
 
-    pub fn iter(&self) -> std::slice::Iter<'_, SRobotQ<N, T>> {
+    pub fn iter(&self) -> std::slice::Iter<'_, SRobotQ<N, F>> {
         self.waypoints.iter()
     }
 
-    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, SRobotQ<N, T>> {
+    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, SRobotQ<N, F>> {
         self.waypoints.iter_mut()
     }
 
-    pub fn segments(&self) -> impl Iterator<Item = (&SRobotQ<N, T>, &SRobotQ<N, T>)> {
+    pub fn segments(&self) -> impl Iterator<Item = (&SRobotQ<N, F>, &SRobotQ<N, F>)> {
         self.waypoints.windows(2).map(|w| (&w[0], &w[1]))
     }
 
-    pub fn push(&mut self, q: SRobotQ<N, T>) {
+    pub fn push(&mut self, q: SRobotQ<N, F>) {
         self.waypoints.push(q);
     }
 
-    pub fn pop(&mut self) -> Option<SRobotQ<N, T>> {
+    pub fn pop(&mut self) -> Option<SRobotQ<N, F>> {
         if self.waypoints.len() > 2 {
             let popped = self.waypoints.pop();
             if let Some(p) = popped {
@@ -125,20 +125,20 @@ impl<const N: usize, T: Float> SRobotPath<N, T> {
         wps
     }
 
-    pub fn arc_length(&self) -> T {
+    pub fn arc_length(&self) -> F {
         self.segments()
             .map(|(a, b)| a.distance(b))
-            .fold(T::zero(), |acc, d| acc + d)
+            .fold(F::zero(), |acc, d| acc + d)
     }
 
-    pub fn segment_lengths(&self) -> Vec<T> {
+    pub fn segment_lengths(&self) -> Vec<F> {
         self.segments().map(|(a, b)| a.distance(b)).collect()
     }
 
-    pub fn cumulative_lengths(&self) -> Vec<T> {
+    pub fn cumulative_lengths(&self) -> Vec<F> {
         let mut cum = Vec::with_capacity(self.len());
-        let mut total = T::zero();
-        cum.push(T::zero());
+        let mut total = F::zero();
+        cum.push(F::zero());
         for (a, b) in self.segments() {
             total = total + a.distance(b);
             cum.push(total);
@@ -146,19 +146,19 @@ impl<const N: usize, T: Float> SRobotPath<N, T> {
         cum
     }
 
-    pub fn max_segment_length(&self) -> T {
+    pub fn max_segment_length(&self) -> F {
         self.segments()
             .map(|(a, b)| a.distance(b))
-            .fold(T::zero(), |a, b| a.max(b))
+            .fold(F::zero(), |a, b| a.max(b))
     }
 
-    pub fn max_joint_step(&self) -> T {
+    pub fn max_joint_step(&self) -> F {
         self.segments()
             .map(|(a, b)| (*a - *b).linf_norm())
-            .fold(T::zero(), |a, b| a.max(b))
+            .fold(F::zero(), |a, b| a.max(b))
     }
 
-    pub fn sample(&self, t: T) -> Option<SRobotQ<N, T>> {
+    pub fn sample(&self, t: F) -> Option<SRobotQ<N, F>> {
         let n = self.len();
         if n < 2 {
             return if n == 1 {
@@ -168,22 +168,22 @@ impl<const N: usize, T: Float> SRobotPath<N, T> {
             };
         }
 
-        let t = t.max(T::zero()).min(T::one());
+        let t = t.max(F::zero()).min(F::one());
         let total = self.arc_length();
-        if total == T::zero() {
+        if total == F::zero() {
             return Some(self.waypoints[0]);
         }
 
         let target = t * total;
-        let mut accumulated = T::zero();
+        let mut accumulated = F::zero();
 
         for (a, b) in self.segments() {
             let seg_len = a.distance(b);
             if accumulated + seg_len >= target {
-                let local_t = if seg_len > T::zero() {
+                let local_t = if seg_len > F::zero() {
                     (target - accumulated) / seg_len
                 } else {
-                    T::zero()
+                    F::zero()
                 };
                 return Some(a.interpolate(b, local_t));
             }
@@ -193,7 +193,7 @@ impl<const N: usize, T: Float> SRobotPath<N, T> {
         Some(self.last)
     }
 
-    pub fn densify(&self, max_dist: T) -> Self {
+    pub fn densify(&self, max_dist: F) -> Self {
         if self.len() < 2 {
             return self.clone();
         }
@@ -203,9 +203,9 @@ impl<const N: usize, T: Float> SRobotPath<N, T> {
 
         for (a, b) in self.segments() {
             let d = a.distance(b);
-            let steps = (d / max_dist).ceil().max(T::one()).to_usize().unwrap_or(1);
+            let steps = (d / max_dist).ceil().max(F::one()).to_usize().unwrap_or(1);
             for i in 1..=steps {
-                let t = T::from(i).unwrap() / T::from(steps).unwrap();
+                let t = F::from(i).unwrap() / F::from(steps).unwrap();
                 out.push(a.interpolate(b, t));
             }
         }
@@ -218,7 +218,7 @@ impl<const N: usize, T: Float> SRobotPath<N, T> {
     }
 
     /// Removes consecutive duplicate waypoints within `tol` distance of each other.
-    pub fn deduplicate(&self, tol: T) -> Self {
+    pub fn deduplicate(&self, tol: F) -> Self {
         let mut out = Vec::with_capacity(self.len());
         out.push(self.waypoints[0]);
         for q in &self.waypoints[1..] {
@@ -236,7 +236,7 @@ impl<const N: usize, T: Float> SRobotPath<N, T> {
         }
     }
 
-    pub fn simplify(&self, tol: T) -> Self {
+    pub fn simplify(&self, tol: F) -> Self {
         if self.len() <= 2 {
             return self.clone();
         }
@@ -259,7 +259,7 @@ impl<const N: usize, T: Float> SRobotPath<N, T> {
         }
     }
 
-    pub fn to_robot_path(&self) -> RobotPath<T> {
+    pub fn to_robot_path(&self) -> RobotPath<F> {
         let n = self.waypoints.len();
         let mut arr = RobotPath::zeros((n, N));
         for (i, q) in self.waypoints.iter().enumerate() {
@@ -366,10 +366,10 @@ impl<const N: usize, T: Float> TryFrom<RobotPath<T>> for SRobotPath<N, T> {
     }
 }
 
-impl<const N: usize, T: Float> TryFrom<&RobotPath<T>> for SRobotPath<N, T> {
+impl<const N: usize, F: Float> TryFrom<&RobotPath<F>> for SRobotPath<N, F> {
     type Error = crate::DekeError;
 
-    fn try_from(arr: &RobotPath<T>) -> Result<Self, Self::Error> {
+    fn try_from(arr: &RobotPath<F>) -> Result<Self, Self::Error> {
         if arr.ncols() != N {
             return Err(crate::DekeError::ShapeMismatch {
                 expected: N,
@@ -378,7 +378,7 @@ impl<const N: usize, T: Float> TryFrom<&RobotPath<T>> for SRobotPath<N, T> {
         }
         let mut waypoints = Vec::with_capacity(arr.nrows());
         for row in arr.rows() {
-            let mut q = [T::zero(); N];
+            let mut q = [F::zero(); N];
             for (j, &v) in row.iter().enumerate() {
                 q[j] = v;
             }
@@ -478,11 +478,11 @@ impl<const N: usize> TryFrom<RobotPath<f32>> for SRobotPath<N, f64> {
     }
 }
 
-fn srdp_mark<const N: usize, T: Float>(
-    pts: &[SRobotQ<N, T>],
+fn srdp_mark<const N: usize, F: Float>(
+    pts: &[SRobotQ<N, F>],
     start: usize,
     end: usize,
-    tol: T,
+    tol: F,
     keep: &mut [bool],
 ) {
     if end <= start + 1 {
@@ -492,17 +492,17 @@ fn srdp_mark<const N: usize, T: Float>(
     let seg = pts[end] - pts[start];
     let seg_len_sq = seg.norm_squared();
 
-    let mut max_dist = T::zero();
+    let mut max_dist = F::zero();
     let mut max_idx = start;
 
-    let near_zero: T = T::from(1e-30).unwrap_or_else(T::zero);
+    let near_zero: F = F::from(1e-30).unwrap_or_else(F::zero);
 
     for i in (start + 1)..end {
         let v = pts[i] - pts[start];
         let dist = if seg_len_sq < near_zero {
             v.norm()
         } else {
-            let t = (v.dot(&seg) / seg_len_sq).max(T::zero()).min(T::one());
+            let t = (v.dot(&seg) / seg_len_sq).max(F::zero()).min(F::one());
             (v - seg * t).norm()
         };
         if dist > max_dist {

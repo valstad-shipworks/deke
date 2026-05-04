@@ -1,7 +1,7 @@
 use glam::{Affine3A, Vec3A};
 
-use crate::{DHChain, DHJoint, HPChain, HPJoint, URDFChain, URDFJoint};
-use crate::{DekeError, DekeResult, FKChain, SRobotQ};
+use super::{DHChain, DHJoint, FKChain, HPChain, HPJoint, URDFChain, URDFJoint};
+use crate::{DekeError, DekeResult, SRobotQ};
 
 macro_rules! dynamic_fk {
     ($name:ident, $chain:ident, $joint:ident) => {

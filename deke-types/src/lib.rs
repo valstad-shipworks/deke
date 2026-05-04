@@ -4,10 +4,10 @@ use std::{
 };
 
 pub use glam;
+use num_traits::Float;
 pub use wide;
 
 mod fk;
-mod fk_dynamic;
 mod path;
 mod q;
 mod traj;
@@ -15,10 +15,10 @@ mod validator;
 mod validator_dynamic;
 
 pub use fk::{
-    DHChain, DHJoint, FKChain, HPChain, HPJoint, PrismaticFK, TransformedFK, URDFBuildError,
-    URDFChain, URDFJoint, URDFJointType, compose_fixed_joints,
+    BoxFK, DHChain, DHJoint, DynamicDHChain, DynamicHPChain, DynamicURDFChain, FKChain, HPChain,
+    HPJoint, PrismaticFK, TransformedFK, URDFBuildError, URDFChain, URDFJoint, URDFJointType,
+    compose_fixed_joints,
 };
-pub use fk_dynamic::{BoxFK, DynamicDHChain, DynamicHPChain, DynamicURDFChain};
 pub use path::{RobotPath, SRobotPath};
 pub use q::{RobotQ, SRobotQ, robotq, SRobotQLike};
 pub use traj::{RobotTraj, SRobotTraj};
@@ -73,14 +73,14 @@ impl From<Infallible> for DekeError {
 
 pub type DekeResult<T> = Result<T, DekeError>;
 
-pub trait Planner<const N: usize, R: ValidatorRet = ()>: Sized + Clone + Debug + Send + Sync + 'static {
+pub trait Planner<const N: usize, F: Float = f32, R: ValidatorRet = ()>: Sized + Clone + Debug + Send + Sync + 'static {
     type Diagnostic: Display + Send + Sync;
     type Config;
 
     fn plan<
         E: Into<DekeError>,
-        A: SRobotQLike<N, E>,
-        B: SRobotQLike<N, E>,
+        A: SRobotQLike<N, E, F>,
+        B: SRobotQLike<N, E, F>,
         V: Validator<N, R>,
     >(
         &self,
@@ -89,17 +89,17 @@ pub trait Planner<const N: usize, R: ValidatorRet = ()>: Sized + Clone + Debug +
         goal: B,
         validator: &V,
         ctx: &V::Context<'_>,
-    ) -> (DekeResult<SRobotPath<N>>, Self::Diagnostic);
+    ) -> (DekeResult<SRobotPath<N, F>>, Self::Diagnostic);
 }
 
-pub trait Retimer<const N: usize, R: ValidatorRet = ()>: Sized + Clone + Debug + Send + Sync + 'static {
+pub trait Retimer<const N: usize, F: Float = f32, R: ValidatorRet = ()>: Sized + Clone + Debug + Send + Sync + 'static {
     type Diagnostic: Display + Send + Sync;
     type Constraints;
 
     fn retime<V: Validator<N, R>>(
         &self,
         constraints: &Self::Constraints,
-        path: &SRobotPath<N>,
+        path: &SRobotPath<N, F>,
         fk: &impl FKChain<N>,
         validator: &V,
         ctx: &V::Context<'_>,

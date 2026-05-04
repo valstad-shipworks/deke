@@ -6,13 +6,13 @@ use crate::{DekeError, DekeResult, RobotPath, SRobotPath, SRobotQ};
 
 /// Dynamically-sized robot trajectory: a dense [`RobotPath`] sampled uniformly at `dt`.
 #[derive(Debug, Clone)]
-pub struct RobotTraj<T: Float = f32> {
+pub struct RobotTraj<F: Float = f32> {
     dt: Duration,
-    path: RobotPath<T>,
+    path: RobotPath<F>,
 }
 
-impl<T: Float> RobotTraj<T> {
-    pub fn new(dt: Duration, path: RobotPath<T>) -> Self {
+impl<F: Float> RobotTraj<F> {
+    pub fn new(dt: Duration, path: RobotPath<F>) -> Self {
         Self { dt, path }
     }
 
@@ -20,15 +20,15 @@ impl<T: Float> RobotTraj<T> {
         self.dt
     }
 
-    pub fn path(&self) -> &RobotPath<T> {
+    pub fn path(&self) -> &RobotPath<F> {
         &self.path
     }
 
-    pub fn path_mut(&mut self) -> &mut RobotPath<T> {
+    pub fn path_mut(&mut self) -> &mut RobotPath<F> {
         &mut self.path
     }
 
-    pub fn into_path(self) -> RobotPath<T> {
+    pub fn into_path(self) -> RobotPath<F> {
         self.path
     }
 
@@ -56,17 +56,17 @@ impl<T: Float> RobotTraj<T> {
 
 /// Statically-sized robot trajectory: an [`SRobotPath`] sampled uniformly at `dt`.
 #[derive(Debug, Clone)]
-pub struct SRobotTraj<const N: usize, T: Float = f32> {
+pub struct SRobotTraj<const N: usize, F: Float = f32> {
     dt: Duration,
-    path: SRobotPath<N, T>,
+    path: SRobotPath<N, F>,
 }
 
-impl<const N: usize, T: Float> SRobotTraj<N, T> {
-    pub fn new(dt: Duration, path: SRobotPath<N, T>) -> Self {
+impl<const N: usize, F: Float> SRobotTraj<N, F> {
+    pub fn new(dt: Duration, path: SRobotPath<N, F>) -> Self {
         Self { dt, path }
     }
 
-    pub fn try_from_waypoints(dt: Duration, waypoints: Vec<SRobotQ<N, T>>) -> DekeResult<Self> {
+    pub fn try_from_waypoints(dt: Duration, waypoints: Vec<SRobotQ<N, F>>) -> DekeResult<Self> {
         Ok(Self {
             dt,
             path: SRobotPath::try_new(waypoints)?,
@@ -81,15 +81,15 @@ impl<const N: usize, T: Float> SRobotTraj<N, T> {
         self.dt = dt;
     }
 
-    pub fn path(&self) -> &SRobotPath<N, T> {
+    pub fn path(&self) -> &SRobotPath<N, F> {
         &self.path
     }
 
-    pub fn path_mut(&mut self) -> &mut SRobotPath<N, T> {
+    pub fn path_mut(&mut self) -> &mut SRobotPath<N, F> {
         &mut self.path
     }
 
-    pub fn into_path(self) -> SRobotPath<N, T> {
+    pub fn into_path(self) -> SRobotPath<N, F> {
         self.path
     }
 
@@ -105,15 +105,15 @@ impl<const N: usize, T: Float> SRobotTraj<N, T> {
         N
     }
 
-    pub fn first(&self) -> &SRobotQ<N, T> {
+    pub fn first(&self) -> &SRobotQ<N, F> {
         self.path.first()
     }
 
-    pub fn last(&self) -> &SRobotQ<N, T> {
+    pub fn last(&self) -> &SRobotQ<N, F> {
         self.path.last()
     }
 
-    pub fn get(&self, index: usize) -> Option<&SRobotQ<N, T>> {
+    pub fn get(&self, index: usize) -> Option<&SRobotQ<N, F>> {
         self.path.get(index)
     }
 
@@ -126,11 +126,11 @@ impl<const N: usize, T: Float> SRobotTraj<N, T> {
         self.dt.saturating_mul(index as u32)
     }
 
-    pub fn iter(&self) -> std::slice::Iter<'_, SRobotQ<N, T>> {
+    pub fn iter(&self) -> std::slice::Iter<'_, SRobotQ<N, F>> {
         self.path.iter()
     }
 
-    pub fn iter_timed(&self) -> impl Iterator<Item = (Duration, &SRobotQ<N, T>)> + '_ {
+    pub fn iter_timed(&self) -> impl Iterator<Item = (Duration, &SRobotQ<N, F>)> + '_ {
         let dt = self.dt;
         self.path
             .iter()
@@ -140,7 +140,7 @@ impl<const N: usize, T: Float> SRobotTraj<N, T> {
 
     /// Samples the trajectory at a given wall-clock time via linear interpolation between
     /// adjacent waypoints. Times outside `[0, duration()]` are clamped.
-    pub fn sample_at_time(&self, t: Duration) -> Option<SRobotQ<N, T>> {
+    pub fn sample_at_time(&self, t: Duration) -> Option<SRobotQ<N, F>> {
         let n = self.len();
         if n == 0 {
             return None;
@@ -160,7 +160,7 @@ impl<const N: usize, T: Float> SRobotTraj<N, T> {
 
         let f = clamped / dt_secs;
         let i = (f.floor() as usize).min(n - 2);
-        let local = T::from(f - i as f64).unwrap_or_else(T::zero);
+        let local = F::from(f - i as f64).unwrap_or_else(F::zero);
 
         let a = self.path.get(i)?;
         let b = self.path.get(i + 1)?;
@@ -169,39 +169,39 @@ impl<const N: usize, T: Float> SRobotTraj<N, T> {
 
     /// Finite-difference velocity at sample index `i`, in joint-units per second.
     /// Uses forward difference at the start, backward at the end, central elsewhere.
-    pub fn velocity_at(&self, i: usize) -> Option<SRobotQ<N, T>> {
+    pub fn velocity_at(&self, i: usize) -> Option<SRobotQ<N, F>> {
         let n = self.len();
         if n < 2 || i >= n {
             return None;
         }
-        let dt_secs = T::from(self.dt.as_secs_f64()).unwrap_or_else(T::zero);
-        if dt_secs == T::zero() {
+        let dt_secs = F::from(self.dt.as_secs_f64()).unwrap_or_else(F::zero);
+        if dt_secs == F::zero() {
             return Some(SRobotQ::zeros());
         }
 
         let (a, b, span) = if i == 0 {
-            (*self.path.get(0)?, *self.path.get(1)?, T::one())
+            (*self.path.get(0)?, *self.path.get(1)?, F::one())
         } else if i == n - 1 {
-            (*self.path.get(n - 2)?, *self.path.get(n - 1)?, T::one())
+            (*self.path.get(n - 2)?, *self.path.get(n - 1)?, F::one())
         } else {
             (
                 *self.path.get(i - 1)?,
                 *self.path.get(i + 1)?,
-                T::from(2.0).unwrap_or_else(T::one),
+                F::from(2.0).unwrap_or_else(F::one),
             )
         };
 
-        Some((b - a) * (T::one() / (span * dt_secs)))
+        Some((b - a) * (F::one() / (span * dt_secs)))
     }
 
     /// Finite-difference acceleration at sample index `i`, in joint-units per second^2.
-    pub fn acceleration_at(&self, i: usize) -> Option<SRobotQ<N, T>> {
+    pub fn acceleration_at(&self, i: usize) -> Option<SRobotQ<N, F>> {
         let n = self.len();
         if n < 3 || i >= n {
             return None;
         }
-        let dt_secs = T::from(self.dt.as_secs_f64()).unwrap_or_else(T::zero);
-        if dt_secs == T::zero() {
+        let dt_secs = F::from(self.dt.as_secs_f64()).unwrap_or_else(F::zero);
+        if dt_secs == F::zero() {
             return Some(SRobotQ::zeros());
         }
 
@@ -209,12 +209,12 @@ impl<const N: usize, T: Float> SRobotTraj<N, T> {
         let a = *self.path.get(idx - 1)?;
         let b = *self.path.get(idx)?;
         let c = *self.path.get(idx + 1)?;
-        let inv_dt_sq = T::one() / (dt_secs * dt_secs);
-        Some((a - b * T::from(2.0).unwrap_or_else(T::one) + c) * inv_dt_sq)
+        let inv_dt_sq = F::one() / (dt_secs * dt_secs);
+        Some((a - b * F::from(2.0).unwrap_or_else(F::one) + c) * inv_dt_sq)
     }
 
-    pub fn max_joint_velocity(&self) -> T {
-        let mut peak = T::zero();
+    pub fn max_joint_velocity(&self) -> F {
+        let mut peak = F::zero();
         for i in 0..self.len() {
             if let Some(v) = self.velocity_at(i) {
                 peak = peak.max(v.linf_norm());
@@ -223,8 +223,8 @@ impl<const N: usize, T: Float> SRobotTraj<N, T> {
         peak
     }
 
-    pub fn max_joint_acceleration(&self) -> T {
-        let mut peak = T::zero();
+    pub fn max_joint_acceleration(&self) -> F {
+        let mut peak = F::zero();
         for i in 0..self.len() {
             if let Some(a) = self.acceleration_at(i) {
                 peak = peak.max(a.linf_norm());
@@ -251,7 +251,7 @@ impl<const N: usize, T: Float> SRobotTraj<N, T> {
         self.dt = Duration::from_secs_f64(new_secs);
     }
 
-    pub fn to_robot_traj(&self) -> RobotTraj<T> {
+    pub fn to_robot_traj(&self) -> RobotTraj<F> {
         RobotTraj {
             dt: self.dt,
             path: self.path.to_robot_path(),
@@ -259,48 +259,48 @@ impl<const N: usize, T: Float> SRobotTraj<N, T> {
     }
 }
 
-impl<const N: usize, T: Float> std::ops::Index<usize> for SRobotTraj<N, T> {
-    type Output = SRobotQ<N, T>;
+impl<const N: usize, F: Float> std::ops::Index<usize> for SRobotTraj<N, F> {
+    type Output = SRobotQ<N, F>;
     #[inline]
-    fn index(&self, i: usize) -> &SRobotQ<N, T> {
+    fn index(&self, i: usize) -> &SRobotQ<N, F> {
         &self.path[i]
     }
 }
 
-impl<'a, const N: usize, T: Float> IntoIterator for &'a SRobotTraj<N, T> {
-    type Item = &'a SRobotQ<N, T>;
-    type IntoIter = std::slice::Iter<'a, SRobotQ<N, T>>;
+impl<'a, const N: usize, F: Float> IntoIterator for &'a SRobotTraj<N, F> {
+    type Item = &'a SRobotQ<N, F>;
+    type IntoIter = std::slice::Iter<'a, SRobotQ<N, F>>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.path.iter()
     }
 }
 
-impl<const N: usize, T: Float> AsRef<SRobotPath<N, T>> for SRobotTraj<N, T> {
-    fn as_ref(&self) -> &SRobotPath<N, T> {
+impl<const N: usize, F: Float> AsRef<SRobotPath<N, F>> for SRobotTraj<N, F> {
+    fn as_ref(&self) -> &SRobotPath<N, F> {
         &self.path
     }
 }
 
-impl<const N: usize, T: Float> From<SRobotTraj<N, T>> for SRobotPath<N, T> {
-    fn from(traj: SRobotTraj<N, T>) -> Self {
+impl<const N: usize, F: Float> From<SRobotTraj<N, F>> for SRobotPath<N, F> {
+    fn from(traj: SRobotTraj<N, F>) -> Self {
         traj.path
     }
 }
 
-impl<const N: usize, T: Float> From<SRobotTraj<N, T>> for RobotTraj<T> {
-    fn from(traj: SRobotTraj<N, T>) -> Self {
+impl<const N: usize, F: Float> From<SRobotTraj<N, F>> for RobotTraj<F> {
+    fn from(traj: SRobotTraj<N, F>) -> Self {
         traj.to_robot_traj()
     }
 }
 
-impl<const N: usize, T: Float> TryFrom<RobotTraj<T>> for SRobotTraj<N, T> {
+impl<const N: usize, F: Float> TryFrom<RobotTraj<F>> for SRobotTraj<N, F> {
     type Error = DekeError;
 
-    fn try_from(traj: RobotTraj<T>) -> Result<Self, Self::Error> {
+    fn try_from(traj: RobotTraj<F>) -> Result<Self, Self::Error> {
         Ok(Self {
             dt: traj.dt,
-            path: SRobotPath::<N, T>::try_from(traj.path)?,
+            path: SRobotPath::<N, F>::try_from(traj.path)?,
         })
     }
 }
