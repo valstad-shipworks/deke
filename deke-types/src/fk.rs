@@ -1,58 +1,15 @@
+use const_soft_float::soft_f32::SoftF32;
 use glam::{Affine3A, Mat3A, Vec3A};
 
 use crate::{DekeError, SRobotQ};
 
+/// Const-context sine/cosine via soft-float. Use only inside `const fn`
+/// builders where the runtime intrinsic is unavailable; hot paths must call
+/// `f32::sin_cos` directly.
 #[inline(always)]
-const fn fast_sin_cos(x: f32) -> (f32, f32) {
-    const FRAC_2_PI: f32 = std::f32::consts::FRAC_2_PI;
-    const PI_2_HI: f32 = 1.570_796_4_f32;
-    const PI_2_LO: f32 = -4.371_139e-8_f32;
-
-    const S1: f32 = -0.166_666_67;
-    const S2: f32 = 0.008_333_294;
-    const S3: f32 = -0.000_198_074_14;
-
-    const C1: f32 = -0.5;
-    const C2: f32 = 0.041_666_52;
-    const C3: f32 = -0.001_388_523_4;
-
-    let q = (x * FRAC_2_PI).round();
-    let qi = q as i32;
-    let r = x - q * PI_2_HI - q * PI_2_LO;
-    let r2 = r * r;
-
-    let sin_r = r * (1.0 + r2 * (S1 + r2 * (S2 + r2 * S3)));
-    let cos_r = 1.0 + r2 * (C1 + r2 * (C2 + r2 * C3));
-
-    let (s, c) = match qi & 3 {
-        0 => (sin_r, cos_r),
-        1 => (cos_r, -sin_r),
-        2 => (-sin_r, -cos_r),
-        3 => (-cos_r, sin_r),
-        _ => unsafe { std::hint::unreachable_unchecked() },
-    };
-
-    (s, c)
-}
-
-#[inline]
-const fn const_sqrt(x: f64) -> f64 {
-    if x < 0.0 || x.is_nan() { return f64::NAN; }
-    if x == 0.0 || x == f64::INFINITY { return x; }
-
-    // Initial guess: halve the exponent. For x = m * 2^e,
-    // sqrt(x) ≈ sqrt(m) * 2^(e/2). Extract, halve, reassemble.
-    let bits = x.to_bits();
-    let exp = ((bits >> 52) & 0x7ff) as i64;
-    let new_exp = ((exp - 1023) / 2 + 1023) as u64;
-    let mut guess = f64::from_bits((new_exp << 52) | (bits & 0x000f_ffff_ffff_ffff));
-
-    let mut prev = 0.0;
-    while guess != prev {
-        prev = guess;
-        guess = (guess + x / guess) * 0.5;
-    }
-    guess
+const fn const_sin_cos(x: f32) -> (f32, f32) {
+    let sf = SoftF32::from_f32(x);
+    (sf.sin().to_f32(), sf.cos().to_f32())
 }
 
 pub trait FKChain<const N: usize>: Clone + Send + Sync {
@@ -300,14 +257,14 @@ impl AffineRaw {
     }
 
     /// Build the URDF RPY-convention rotation (`Rz(yaw)·Ry(pitch)·Rx(roll)`)
-    /// and translate by `xyz`, using [`fast_sin_cos`] for const evaluation.
+    /// and translate by `xyz`, using [`const_sin_cos`] for const evaluation.
     #[inline(always)]
     const fn from_xyz_rpy(xyz: (f64, f64, f64), rpy: (f64, f64, f64)) -> Self {
         let (ox, oy, oz) = xyz;
         let (roll, pitch, yaw) = rpy;
-        let (sr, cr) = fast_sin_cos(roll as f32);
-        let (sp, cp) = fast_sin_cos(pitch as f32);
-        let (sy, cy) = fast_sin_cos(yaw as f32);
+        let (sr, cr) = const_sin_cos(roll as f32);
+        let (sp, cp) = const_sin_cos(pitch as f32);
+        let (sy, cy) = const_sin_cos(yaw as f32);
         Self {
             c0: [cy * cp, sy * cp, -sp],
             c1: [cy * sp * sr - sy * cr, sy * sp * sr + cy * cr, cp * sr],
@@ -400,7 +357,7 @@ impl<const N: usize> DHChain<N> {
         while i < N {
             a[i] = joints[i].a;
             d[i] = joints[i].d;
-            let (sa, ca) = fast_sin_cos(joints[i].alpha);
+            let (sa, ca) = const_sin_cos(joints[i].alpha);
             sin_alpha[i] = sa;
             cos_alpha[i] = ca;
             theta_offset[i] = joints[i].theta_offset;
@@ -431,7 +388,7 @@ impl<const N: usize> DHChain<N> {
         let mut i = 0;
         while i < N {
             a[i] = params[0][i] as f32;
-            let (sa, ca) = fast_sin_cos(params[1][i] as f32);
+            let (sa, ca) = const_sin_cos(params[1][i] as f32);
             sin_alpha[i] = sa;
             cos_alpha[i] = ca;
             d[i] = params[2][i] as f32;
@@ -471,7 +428,7 @@ impl<const N: usize> FKChain<N> for DHChain<N> {
 
         let mut i = 0;
         while i < N {
-            let (st, ct) = fast_sin_cos(q.0[i] + self.theta_offset[i]);
+            let (st, ct) = (q.0[i] + self.theta_offset[i]).sin_cos();
             let sa = self.sin_alpha[i];
             let ca = self.cos_alpha[i];
 
@@ -505,7 +462,7 @@ impl<const N: usize> FKChain<N> for DHChain<N> {
 
         let mut i = 0;
         while i < N {
-            let (st, ct) = fast_sin_cos(q.0[i] + self.theta_offset[i]);
+            let (st, ct) = (q.0[i] + self.theta_offset[i]).sin_cos();
             let sa = self.sin_alpha[i];
             let ca = self.cos_alpha[i];
 
@@ -586,10 +543,10 @@ impl<const N: usize> HPChain<N> {
         while i < N {
             a[i] = joints[i].a;
             d[i] = joints[i].d;
-            let (sa, ca) = fast_sin_cos(joints[i].alpha);
+            let (sa, ca) = const_sin_cos(joints[i].alpha);
             sin_alpha[i] = sa;
             cos_alpha[i] = ca;
-            let (sb, cb) = fast_sin_cos(joints[i].beta);
+            let (sb, cb) = const_sin_cos(joints[i].beta);
             sin_beta[i] = sb;
             cos_beta[i] = cb;
             theta_offset[i] = joints[i].theta_offset;
@@ -655,7 +612,7 @@ impl<const N: usize> HPChain<N> {
             let uz = c2[0] * px + c2[1] * py + c2[2] * pz;
 
             let sb = vx;
-            let cb = const_sqrt((vy * vy + vz * vz) as f64) as f32;
+            let cb = SoftF32::from_f32(vy * vy + vz * vz).sqrt().to_f32();
 
             let (sa, ca) = if cb > EPS {
                 (-vy / cb, vz / cb)
@@ -765,7 +722,7 @@ impl<const N: usize> FKChain<N> for HPChain<N> {
 
         let mut i = 0;
         while i < N {
-            let (st, ct) = fast_sin_cos(q.0[i] + self.theta_offset[i]);
+            let (st, ct) = (q.0[i] + self.theta_offset[i]).sin_cos();
             let (c0, c1, c2, t) = self.local_frame(i, st, ct);
             accumulate(&mut acc_m, &mut acc_t, c0, c1, c2, t);
 
@@ -785,7 +742,7 @@ impl<const N: usize> FKChain<N> for HPChain<N> {
 
         let mut i = 0;
         while i < N {
-            let (st, ct) = fast_sin_cos(q.0[i] + self.theta_offset[i]);
+            let (st, ct) = (q.0[i] + self.theta_offset[i]).sin_cos();
             let (c0, c1, c2, t) = self.local_frame(i, st, ct);
             accumulate(&mut acc_m, &mut acc_t, c0, c1, c2, t);
             i += 1;
@@ -1007,9 +964,9 @@ impl<const N: usize> URDFChain<N> {
             fr_identity[i] = is_identity;
 
             if !is_identity {
-                let (sr, cr) = fast_sin_cos(roll as f32);
-                let (sp, cp) = fast_sin_cos(pitch as f32);
-                let (sy, cy) = fast_sin_cos(yaw as f32);
+                let (sr, cr) = const_sin_cos(roll as f32);
+                let (sp, cp) = const_sin_cos(pitch as f32);
+                let (sy, cy) = const_sin_cos(yaw as f32);
                 fr_c0[i] = Vec3A::new(cy * cp, sy * cp, -sp);
                 fr_c1[i] = Vec3A::new(cy * sp * sr - sy * cr, sy * sp * sr + cy * cr, cp * sr);
                 fr_c2[i] = Vec3A::new(cy * sp * cr + sy * sr, sy * sp * cr - cy * sr, cp * cr);
@@ -1362,7 +1319,7 @@ impl<const N: usize> FKChain<N> for URDFChain<N> {
 
         let mut i = 0;
         while i < N {
-            let (st, ct) = fast_sin_cos(q.0[i]);
+            let (st, ct) = q.0[i].sin_cos();
             self.accumulate_joint(i, st, ct, &mut c0, &mut c1, &mut c2, &mut t);
 
             out[i] = Affine3A {
@@ -1388,7 +1345,7 @@ impl<const N: usize> FKChain<N> for URDFChain<N> {
 
         let mut i = 0;
         while i < N {
-            let (st, ct) = fast_sin_cos(q.0[i]);
+            let (st, ct) = q.0[i].sin_cos();
             self.accumulate_joint(i, st, ct, &mut c0, &mut c1, &mut c2, &mut t);
             i += 1;
         }
@@ -1413,7 +1370,7 @@ impl<const N: usize> FKChain<N> for URDFChain<N> {
 
         let mut i = 0;
         while i < N {
-            let (st, ct) = fast_sin_cos(q.0[i]);
+            let (st, ct) = q.0[i].sin_cos();
             self.accumulate_joint(i, st, ct, &mut c0, &mut c1, &mut c2, &mut t);
             frames[i] = Affine3A {
                 matrix3: Mat3A::from_cols(c0, c1, c2),

@@ -9,6 +9,7 @@ repository = "https://github.com/valstad-shipworks/deke"
 
 [dependencies]
 approx = "0.5.1"
+const_soft_float = "0.1.4"
 glam = "0.32.1"
 ndarray = {version = "0.17.2", features = ["approx"]}
 num-traits = "0.2.19"
