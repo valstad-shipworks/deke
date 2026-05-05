@@ -8,14 +8,14 @@ fn tcp_velocity_is_limiting() {
     let fk = common::dh_6dof();
     let a = SRobotQ::from_array([0.0, -1.2, 1.5, -0.3, 0.5, 0.0]);
     let b = SRobotQ::from_array([0.6, -0.6, 0.9, 0.3, -0.2, 0.8]);
-    let path = SRobotPath::<6>::try_new(vec![a, b]).unwrap();
+    let path = SRobotPath::<6, f64>::try_new(vec![a, b]).unwrap();
 
     // Moderate joint limits, TCP velocity is the tight limit.
     let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(5.0, 30.0, 3_000.0);
     cfg.tcp = TcpLimits {
         v_max: 0.25,
-        a_max: f32::INFINITY,
-        j_max: f32::INFINITY,
+        a_max: f64::INFINITY,
+        j_max: f64::INFINITY,
     };
     cfg.solver.max_iterations = 2_000;
 

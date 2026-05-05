@@ -6,7 +6,7 @@ use deke_types::{DekeError, Retimer, SRobotPath, SRobotQ};
 #[test]
 fn impossible_bounds_return_error_not_panic() {
     let fk = common::dh_1dof();
-    let path = SRobotPath::<1>::try_new(vec![
+    let path = SRobotPath::<1, f64>::try_new(vec![
         SRobotQ::from_array([0.0]),
         SRobotQ::from_array([1.0]),
     ])
@@ -28,5 +28,6 @@ fn impossible_bounds_return_error_not_panic() {
             | SolveStatus::GloballyInfeasible
             | SolveStatus::MaxIterationsExceeded
             | SolveStatus::DivergingIterates
+            | SolveStatus::FeasibilityRestorationFailed
     ));
 }

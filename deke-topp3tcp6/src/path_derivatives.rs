@@ -1,4 +1,5 @@
 use deke_types::{DekeError, DekeResult, FKChain, SRobotPath, SRobotQ};
+use glam_traits_ext::{TAffine3, TVec3};
 
 /// Constant geometric path data needed by the retimer NLP.
 ///
@@ -7,7 +8,7 @@ use deke_types::{DekeError, DekeResult, FKChain, SRobotPath, SRobotQ};
 /// and the tool-center-point path `p(s)` at each densified waypoint.
 #[derive(Debug, Clone)]
 pub struct PathDerivatives<const N: usize> {
-    pub waypoints: Vec<SRobotQ<N, f32>>,
+    pub waypoints: Vec<SRobotQ<N, f64>>,
     pub s: Vec<f64>,
     pub ds: Vec<f64>,
     pub qp: Vec<[f64; N]>,
@@ -23,7 +24,7 @@ impl<const N: usize> PathDerivatives<N> {
     /// Verifies that the first `locked_prefix` joints are constant across every waypoint in the
     /// input path. Returns the first violation as a [`DekeError::LockedPrefixViolation`].
     pub fn check_locked_prefix(
-        path: &SRobotPath<N, f32>,
+        path: &SRobotPath<N, f64>,
         locked_prefix: usize,
     ) -> DekeResult<()> {
         if locked_prefix == 0 {
@@ -44,8 +45,8 @@ impl<const N: usize> PathDerivatives<N> {
         Ok(())
     }
 
-    pub fn new<FK: FKChain<N>>(
-        densified: &SRobotPath<N, f32>,
+    pub fn new<FK: FKChain<N, f64>>(
+        densified: &SRobotPath<N, f64>,
         fk: &FK,
     ) -> DekeResult<Self> {
         Self::build(densified, Some(fk))
@@ -54,12 +55,12 @@ impl<const N: usize> PathDerivatives<N> {
     /// Same as [`Self::new`] but skips all forward-kinematics evaluation. The resulting
     /// `PathDerivatives` has empty `tcp`, `pp`, `ppp`, and `pppp` vectors; callers must gate any
     /// TCP logic on `has_tcp()`.
-    pub fn new_without_tcp(densified: &SRobotPath<N, f32>) -> DekeResult<Self> {
+    pub fn new_without_tcp(densified: &SRobotPath<N, f64>) -> DekeResult<Self> {
         Self::build::<crate::path_derivatives::NeverFK<N>>(densified, None)
     }
 
-    fn build<FK: FKChain<N>>(
-        densified: &SRobotPath<N, f32>,
+    fn build<FK: FKChain<N, f64>>(
+        densified: &SRobotPath<N, f64>,
         fk: Option<&FK>,
     ) -> DekeResult<Self> {
         let m = densified.len();
@@ -76,7 +77,7 @@ impl<const N: usize> PathDerivatives<N> {
             let b = densified.get(k + 1).unwrap().0;
             let mut sq = 0.0_f64;
             for j in 0..N {
-                let d = (b[j] - a[j]) as f64;
+                let d = b[j] - a[j];
                 sq += d * d;
             }
             let d = sq.sqrt();
@@ -88,27 +89,18 @@ impl<const N: usize> PathDerivatives<N> {
             s.push(total);
         }
 
-        let wps_f64: Vec<[f64; N]> = densified
-            .iter()
-            .map(|wp| {
-                let mut a = [0.0_f64; N];
-                for j in 0..N {
-                    a[j] = wp.0[j] as f64;
-                }
-                a
-            })
-            .collect();
+        let wps_arr: Vec<[f64; N]> = densified.iter().map(|wp| wp.0).collect();
 
-        let qp = fd_first::<N>(&wps_f64, &ds);
-        let qpp = fd_second::<N>(&wps_f64, &ds);
+        let qp = fd_first::<N>(&wps_arr, &ds);
+        let qpp = fd_second::<N>(&wps_arr, &ds);
         let qppp = fd_third_of_second::<N>(&qpp, &ds);
 
         let (tcp, pp, ppp, pppp) = if let Some(fk) = fk {
             let mut tcp = Vec::with_capacity(m);
             for wp in densified.iter() {
                 let pose = fk.fk_end(wp).map_err(|e| e.into())?;
-                let t = pose.translation;
-                tcp.push([t.x as f64, t.y as f64, t.z as f64]);
+                let t = pose.translation();
+                tcp.push([t.x(), t.y(), t.z()]);
             }
             let pp = fd_first::<3>(&tcp, &ds);
             let ppp = fd_second::<3>(&tcp, &ds);
@@ -155,22 +147,31 @@ impl<const N: usize> PathDerivatives<N> {
 #[derive(Clone)]
 pub struct NeverFK<const N: usize>;
 
-impl<const N: usize> FKChain<N> for NeverFK<N> {
+impl<const N: usize> FKChain<N, f64> for NeverFK<N> {
     type Error = DekeError;
-    fn fk(&self, _q: &deke_types::SRobotQ<N>) -> Result<[deke_types::glam::Affine3A; N], Self::Error> {
+    fn fk(
+        &self,
+        _q: &deke_types::SRobotQ<N, f64>,
+    ) -> Result<[deke_types::glam::DAffine3; N], Self::Error> {
         unreachable!("NeverFK is a placeholder — PathDerivatives::new_without_tcp never calls FK")
     }
-    fn fk_end(&self, _q: &deke_types::SRobotQ<N>) -> Result<deke_types::glam::Affine3A, Self::Error> {
+    fn fk_end(
+        &self,
+        _q: &deke_types::SRobotQ<N, f64>,
+    ) -> Result<deke_types::glam::DAffine3, Self::Error> {
         unreachable!()
     }
     fn joint_axes_positions(
         &self,
-        _q: &deke_types::SRobotQ<N>,
-    ) -> Result<(
-        [deke_types::glam::Vec3A; N],
-        [deke_types::glam::Vec3A; N],
-        deke_types::glam::Vec3A,
-    ), Self::Error> {
+        _q: &deke_types::SRobotQ<N, f64>,
+    ) -> Result<
+        (
+            [deke_types::glam::DVec3; N],
+            [deke_types::glam::DVec3; N],
+            deke_types::glam::DVec3,
+        ),
+        Self::Error,
+    > {
         unreachable!()
     }
 }

@@ -14,8 +14,8 @@ pub struct KrrtcSettings<const N: usize> {
     pub range: f64,
     pub max_iterations: usize,
     pub max_samples: usize,
-    pub joint_lower: SRobotQ<N>,
-    pub joint_upper: SRobotQ<N>,
+    pub joint_lower: SRobotQ<N, f64>,
+    pub joint_upper: SRobotQ<N, f64>,
     pub kin_limits: KinematicLimits<N>,
     pub resolution: f64,
     pub dynamic_domain: bool,
@@ -31,7 +31,7 @@ pub struct KrrtcSettings<const N: usize> {
 }
 
 impl<const N: usize> KrrtcSettings<N> {
-    pub fn new(lower: SRobotQ<N>, upper: SRobotQ<N>, kin_limits: KinematicLimits<N>) -> Self {
+    pub fn new(lower: SRobotQ<N, f64>, upper: SRobotQ<N, f64>, kin_limits: KinematicLimits<N>) -> Self {
         Self {
             range: 0.5,
             max_iterations: 100_000,
@@ -55,11 +55,11 @@ impl<const N: usize> KrrtcSettings<N> {
 }
 
 fn kinematic_steer<const N: usize>(
-    from: &SRobotQ<N>,
-    toward: &SRobotQ<N>,
+    from: &SRobotQ<N, f64>,
+    toward: &SRobotQ<N, f64>,
     range: f64,
     limits: &KinematicLimits<N>,
-) -> SRobotQ<N> {
+) -> SRobotQ<N, f64> {
     let cost = time_optimal_cost(from, toward, limits);
     if cost <= range {
         *toward
@@ -82,8 +82,8 @@ fn kinematic_steer<const N: usize>(
 ///
 /// Every candidate modification is collision-validated on both affected edges
 /// and only accepted if the local time-optimal cost decreases.
-fn round_corners<const N: usize, V: Validator<N>>(
-    path: &mut Vec<SRobotQ<N>>,
+fn round_corners<const N: usize, V: Validator<N, (), f64>>(
+    path: &mut Vec<SRobotQ<N, f64>>,
     validator: &V,
     ctx: &V::Context<'_>,
     limits: &KinematicLimits<N>,
@@ -155,7 +155,7 @@ fn round_corners<const N: usize, V: Validator<N>>(
         // Pull didn't help — try arc split: replace the corner with two
         // waypoints that round it, placed along the incoming/outgoing edges.
         let mut best_arc_cost = old_cost;
-        let mut best_arc: Option<(SRobotQ<N>, SRobotQ<N>)> = None;
+        let mut best_arc: Option<(SRobotQ<N, f64>, SRobotQ<N, f64>)> = None;
 
         for &frac in &[0.25f32, 0.33, 0.4] {
             let p1 = prev + (curr - prev) * (1.0 - frac);
@@ -191,8 +191,8 @@ fn round_corners<const N: usize, V: Validator<N>>(
 /// Random shortcutting: pick two random waypoints, if the direct edge is
 /// collision-free, remove everything between them. Biases toward pairs
 /// with high time-optimal cost to maximize improvement per shortcut.
-fn shortcut<const N: usize, V: Validator<N>, R: DekeRng<N>>(
-    path: &mut Vec<SRobotQ<N>>,
+fn shortcut<const N: usize, V: Validator<N, (), f64>, R: DekeRng<N>>(
+    path: &mut Vec<SRobotQ<N, f64>>,
     validator: &V,
     ctx: &V::Context<'_>,
     limits: &KinematicLimits<N>,
@@ -262,7 +262,7 @@ fn shortcut<const N: usize, V: Validator<N>, R: DekeRng<N>>(
     }
 }
 
-fn backtrack_path<const N: usize>(tree: &RrtTree<N>, idx: usize) -> Vec<SRobotQ<N>> {
+fn backtrack_path<const N: usize>(tree: &RrtTree<N>, idx: usize) -> Vec<SRobotQ<N, f64>> {
     let mut path = Vec::new();
     let mut current = idx;
     loop {
@@ -283,7 +283,7 @@ fn reconstruct<const N: usize>(
     tree_b: &RrtTree<N>,
     idx_b: usize,
     a_is_start: bool,
-) -> Vec<SRobotQ<N>> {
+) -> Vec<SRobotQ<N, f64>> {
     let path_a = backtrack_path(tree_a, idx_a);
     let path_b = backtrack_path(tree_b, idx_b);
 
@@ -298,14 +298,14 @@ fn reconstruct<const N: usize>(
     }
 }
 
-pub(crate) fn solve<const N: usize, V: Validator<N>, R: DekeRng<N>>(
-    start: &SRobotQ<N>,
-    goal: &SRobotQ<N>,
+pub(crate) fn solve<const N: usize, V: Validator<N, (), f64>, R: DekeRng<N>>(
+    start: &SRobotQ<N, f64>,
+    goal: &SRobotQ<N, f64>,
     validator: &V,
     ctx: &V::Context<'_>,
     settings: &KrrtcSettings<N>,
     rng: &mut R,
-) -> (DekeResult<SRobotPath<N>>, RrtDiagnostic) {
+) -> (DekeResult<SRobotPath<N, f64>>, RrtDiagnostic) {
     let timer = std::time::Instant::now();
     let coeffs = settings.kin_limits.velocity_coeffs();
 
@@ -439,10 +439,10 @@ pub(crate) fn solve<const N: usize, V: Validator<N>, R: DekeRng<N>>(
     )
 }
 
-fn extend_and_connect<const N: usize, V: Validator<N>>(
+fn extend_and_connect<const N: usize, V: Validator<N, (), f64>>(
     tree_a: &mut RrtTree<N>,
     tree_b: &mut RrtTree<N>,
-    q_rand: &SRobotQ<N>,
+    q_rand: &SRobotQ<N, f64>,
     validator: &V,
     ctx: &V::Context<'_>,
     settings: &KrrtcSettings<N>,

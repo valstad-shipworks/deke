@@ -55,7 +55,7 @@ pub fn build_and_solve<const N: usize>(
             let pp = &deriv.pp[k];
             let pp_norm_sq = pp[0] * pp[0] + pp[1] * pp[1] + pp[2] * pp[2];
             if pp_norm_sq > 1e-18 {
-                let upper = constraints.tcp.v_max as f64 / pp_norm_sq.sqrt();
+                let upper = constraints.tcp.v_max / pp_norm_sq.sqrt();
                 subject_to!(problem, sd_k <= upper);
             }
         }
@@ -65,7 +65,7 @@ pub fn build_and_solve<const N: usize>(
             if qp_j.abs() < 1e-12 {
                 continue;
             }
-            let v_max = constraints.joint.v_max.0[j] as f64;
+            let v_max = constraints.joint.v_max.0[j];
             if v_max.is_finite() && v_max > 0.0 {
                 let upper = v_max / qp_j.abs();
                 subject_to!(problem, sd_k <= upper);
@@ -120,9 +120,9 @@ pub fn build_and_solve<const N: usize>(
             let qp_j = deriv.qp[k][j];
             let qpp_j = deriv.qpp[k][j];
             let qppp_j = deriv.qppp[k][j];
-            let v_max = constraints.joint.v_max.0[j] as f64;
-            let a_max = constraints.joint.a_max.0[j] as f64;
-            let j_max = constraints.joint.j_max.0[j] as f64;
+            let v_max = constraints.joint.v_max.0[j];
+            let a_max = constraints.joint.a_max.0[j];
+            let j_max = constraints.joint.j_max.0[j];
 
             if v_max.is_finite() && v_max > 0.0 && qp_j.abs() > 1e-12 {
                 let expr = qp_j * sd_k;
@@ -151,7 +151,7 @@ pub fn build_and_solve<const N: usize>(
         }
 
         if tcp_active && constraints.tcp.a_max.is_finite() && constraints.tcp.a_max > 0.0 {
-            let a_bound_sq = (constraints.tcp.a_max as f64) * (constraints.tcp.a_max as f64);
+            let a_bound_sq = constraints.tcp.a_max * constraints.tcp.a_max;
             let ppp = &deriv.ppp[k];
             let pp = &deriv.pp[k];
             let c0 = ppp[0] * sd_k * sd_k + pp[0] * sdd_k;
@@ -162,7 +162,7 @@ pub fn build_and_solve<const N: usize>(
         }
 
         if tcp_active && constraints.tcp.j_max.is_finite() && constraints.tcp.j_max > 0.0 {
-            let j_bound_sq = (constraints.tcp.j_max as f64) * (constraints.tcp.j_max as f64);
+            let j_bound_sq = constraints.tcp.j_max * constraints.tcp.j_max;
             let pppp = &deriv.pppp[k];
             let ppp = &deriv.ppp[k];
             let pp = &deriv.pp[k];
@@ -248,7 +248,7 @@ fn apply_initial_guess<'a, const N: usize>(
         for j in lock..N {
             let q = deriv.qp[k][j].abs();
             if q > 1e-9 {
-                let v = constraints.joint.v_max.0[j] as f64;
+                let v = constraints.joint.v_max.0[j];
                 if v.is_finite() && v > 0.0 {
                     let bound = v / q;
                     if bound < cap {
@@ -264,7 +264,7 @@ fn apply_initial_guess<'a, const N: usize>(
             let pp = &deriv.pp[k];
             let pn_sq = pp[0] * pp[0] + pp[1] * pp[1] + pp[2] * pp[2];
             if pn_sq > 1e-18 {
-                let bound = constraints.tcp.v_max as f64 / pn_sq.sqrt();
+                let bound = constraints.tcp.v_max / pn_sq.sqrt();
                 if bound < cap {
                     cap = bound;
                 }

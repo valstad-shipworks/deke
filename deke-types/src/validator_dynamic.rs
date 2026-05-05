@@ -153,6 +153,36 @@ macro_rules! impl_dynamic_joint {
                 }
             }
 
+            /// f64 entry point — downcasts to f32 and dispatches to the f32 impl.
+            /// `DynamicJointValidator` stores `JointValidator<N, f32>`, so f64 inputs
+            /// are narrowed at the boundary; precision is governed by the f32 limits
+            /// the validator was configured with.
+            impl Validator<$n, (), f64> for DynamicJointValidator {
+                type Context<'ctx> = ();
+
+                fn validate<'ctx, E: Into<DekeError>, A: SRobotQLike<$n, E, f64>>(
+                    &self,
+                    q: A,
+                    ctx: &Self::Context<'ctx>,
+                ) -> DekeResult<()> {
+                    let q64 = q.to_srobotq().map_err(Into::into)?;
+                    let q32: SRobotQ<$n, f32> = q64.into();
+                    <Self as Validator<$n, (), f32>>::validate(self, q32, ctx)
+                }
+
+                fn validate_motion<'ctx>(
+                    &self,
+                    qs: &[SRobotQ<$n, f64>],
+                    ctx: &Self::Context<'ctx>,
+                ) -> DekeResult<()> {
+                    for q in qs {
+                        let q32: SRobotQ<$n, f32> = (*q).into();
+                        <Self as Validator<$n, (), f32>>::validate(self, q32, ctx)?;
+                    }
+                    Ok(())
+                }
+            }
+
             impl From<JointValidator<$n>> for DynamicJointValidator {
                 fn from(v: JointValidator<$n>) -> Self {
                     Self::$variant(v)

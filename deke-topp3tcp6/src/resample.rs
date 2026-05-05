@@ -15,7 +15,7 @@ pub fn resample_to_uniform<const N: usize>(
     solution: &Solution,
     deriv: &PathDerivatives<N>,
     dt_out: Duration,
-) -> (Duration, Vec<SRobotQ<N, f32>>) {
+) -> (Duration, Vec<SRobotQ<N, f64>>) {
     let m = deriv.num_waypoints();
     let seg = deriv.num_segments();
     assert!(m >= 2 && seg >= 1);
@@ -48,7 +48,7 @@ pub fn resample_to_uniform<const N: usize>(
         let ds = deriv.ds[seg_idx];
 
         let s_local = sd * tau + 0.5 * sdd * tau * tau + (1.0 / 6.0) * sddd * tau * tau * tau;
-        let u = (s_local / ds).clamp(0.0, 1.0) as f32;
+        let u = (s_local / ds).clamp(0.0, 1.0);
 
         let a = deriv.waypoints[seg_idx];
         let b = deriv.waypoints[seg_idx + 1];

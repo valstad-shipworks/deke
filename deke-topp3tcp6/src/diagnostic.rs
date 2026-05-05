@@ -98,18 +98,18 @@ pub struct Topp3Tcp6Diagnostic {
     pub densified_samples: usize,
     pub output_samples: usize,
     pub total_time: Duration,
-    pub peak_joint_velocity: f32,
-    pub peak_joint_acceleration: f32,
-    pub peak_joint_jerk: f32,
-    pub peak_tcp_velocity: f32,
-    pub peak_tcp_acceleration: f32,
-    pub peak_tcp_jerk: f32,
+    pub peak_joint_velocity: f64,
+    pub peak_joint_acceleration: f64,
+    pub peak_joint_jerk: f64,
+    pub peak_tcp_velocity: f64,
+    pub peak_tcp_acceleration: f64,
+    pub peak_tcp_jerk: f64,
     /// Mean across all waypoints of the per-step max limit utilization.
     /// Each joint (v/a/j) and TCP (v/a/j) limit is treated independently; at every waypoint the
     /// utilization is `max_i(|q_i| / limit_i)` over every finite-bounded limit. A value near 1.0
     /// means the solver is driving against some limit on every step.
-    pub average_utilization: f32,
-    pub boundary_projection_residual: f32,
+    pub average_utilization: f64,
+    pub boundary_projection_residual: f64,
     pub limiting_constraint: Option<LimitingGroup>,
     pub message: Option<String>,
 }

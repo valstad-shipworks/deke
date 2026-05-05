@@ -8,7 +8,7 @@ fn straight_line_six_dof_joint_limits_dominant() {
     let fk = common::dh_6dof();
     let a = SRobotQ::from_array([0.0, -1.2, 1.5, -0.3, 0.5, 0.0]);
     let b = SRobotQ::from_array([0.6, -0.6, 0.9, 0.3, -0.2, 0.8]);
-    let path = SRobotPath::<6>::try_new(vec![a, b]).unwrap();
+    let path = SRobotPath::<6, f64>::try_new(vec![a, b]).unwrap();
 
     // Tight joint limits, loose TCP limits.
     let cfg = Topp3Tcp6Constraints::<6>::symmetric(1.0, 3.0, 300.0);

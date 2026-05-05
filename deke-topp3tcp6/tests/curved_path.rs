@@ -13,7 +13,7 @@ fn multi_waypoint_curved_path_solves_and_is_feasible() {
         SRobotQ::from_array([0.6, -0.7, 0.9, -0.3, 0.1, 0.3]),
         SRobotQ::from_array([0.8, -0.5, 0.7, -0.4, 0.0, 0.4]),
     ];
-    let path = SRobotPath::<6>::try_new(waypoints).unwrap();
+    let path = SRobotPath::<6, f64>::try_new(waypoints).unwrap();
 
     let cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 8.0, 400.0);
     let mut validator = common::wide_validator::<6>();

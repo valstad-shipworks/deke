@@ -1,6 +1,6 @@
 use std::{fmt::Debug, sync::Arc};
 
-use crate::{DekeError, DekeResult, SRobotQ, SRobotQLike};
+use crate::{DekeError, DekeResult, FKScalar, SRobotQ, SRobotQLike};
 
 
 pub trait ValidatorContext: Sized {}
@@ -119,17 +119,17 @@ impl ValidatorRet for f64 {
     }
 }
 
-pub trait Validator<const N: usize, R: ValidatorRet = ()>: Sized + Clone + Debug + Send + Sync + 'static {
+pub trait Validator<const N: usize, R: ValidatorRet = (), F: FKScalar = f32>: Sized + Clone + Debug + Send + Sync + 'static {
     type Context<'ctx>: ValidatorContext;
 
-    fn validate<'ctx, E: Into<DekeError>, A: SRobotQLike<N, E>>(
+    fn validate<'ctx, E: Into<DekeError>, A: SRobotQLike<N, E, F>>(
         &self,
         q: A,
         ctx: &Self::Context<'ctx>,
     ) -> DekeResult<R>;
     fn validate_motion<'ctx>(
         &self,
-        qs: &[SRobotQ<N>],
+        qs: &[SRobotQ<N, F>],
         ctx: &Self::Context<'ctx>,
     ) -> DekeResult<R>;
 }
@@ -143,19 +143,20 @@ pub struct ValidatorOr<A, B>(pub A, pub B);
 #[derive(Debug, Clone)]
 pub struct ValidatorNot<A>(pub A);
 
-impl<const N: usize, A, B> Validator<N> for ValidatorAnd<A, B>
+impl<const N: usize, F: FKScalar, R: ValidatorRet, A, B> Validator<N, R, F>
+    for ValidatorAnd<A, B>
 where
-    A: Validator<N>,
-    B: Validator<N>,
+    A: Validator<N, R, F>,
+    B: Validator<N, R, F>,
 {
     type Context<'ctx> = (A::Context<'ctx>, B::Context<'ctx>);
 
     #[inline]
-    fn validate<'ctx, E: Into<DekeError>, Q: SRobotQLike<N, E>>(
+    fn validate<'ctx, E: Into<DekeError>, Q: SRobotQLike<N, E, F>>(
         &self,
         q: Q,
         ctx: &Self::Context<'ctx>,
-    ) -> DekeResult<()> {
+    ) -> DekeResult<R> {
         let q = q.to_srobotq().map_err(Into::into)?;
         self.0.validate(q, &ctx.0)?;
         self.1.validate(q, &ctx.1)
@@ -164,30 +165,30 @@ where
     #[inline]
     fn validate_motion<'ctx>(
         &self,
-        qs: &[SRobotQ<N>],
+        qs: &[SRobotQ<N, F>],
         ctx: &Self::Context<'ctx>,
-    ) -> DekeResult<()> {
+    ) -> DekeResult<R> {
         self.0.validate_motion(qs, &ctx.0)?;
         self.1.validate_motion(qs, &ctx.1)
     }
 }
 
-impl<const N: usize, A, B> Validator<N> for ValidatorOr<A, B>
+impl<const N: usize, F: FKScalar, R: ValidatorRet, A, B> Validator<N, R, F> for ValidatorOr<A, B>
 where
-    A: Validator<N>,
-    B: Validator<N>,
+    A: Validator<N, R, F>,
+    B: Validator<N, R, F>,
 {
     type Context<'ctx> = (A::Context<'ctx>, B::Context<'ctx>);
 
     #[inline]
-    fn validate<'ctx, E: Into<DekeError>, Q: SRobotQLike<N, E>>(
+    fn validate<'ctx, E: Into<DekeError>, Q: SRobotQLike<N, E, F>>(
         &self,
         q: Q,
         ctx: &Self::Context<'ctx>,
-    ) -> DekeResult<()> {
+    ) -> DekeResult<R> {
         let q = q.to_srobotq().map_err(Into::into)?;
         match self.0.validate(q, &ctx.0) {
-            Ok(()) => Ok(()),
+            Ok(r) => Ok(r),
             Err(_) => self.1.validate(q, &ctx.1),
         }
     }
@@ -195,24 +196,27 @@ where
     #[inline]
     fn validate_motion<'ctx>(
         &self,
-        qs: &[SRobotQ<N>],
+        qs: &[SRobotQ<N, F>],
         ctx: &Self::Context<'ctx>,
-    ) -> DekeResult<()> {
+    ) -> DekeResult<R> {
         match self.0.validate_motion(qs, &ctx.0) {
-            Ok(()) => Ok(()),
+            Ok(r) => Ok(r),
             Err(_) => self.1.validate_motion(qs, &ctx.1),
         }
     }
 }
 
-impl<const N: usize, A> Validator<N> for ValidatorNot<A>
+/// `Not` is only meaningful for `R = ()` (a pass/fail validator). For
+/// scalar-returning validators the inversion of the return value isn't
+/// well-defined, so the impl is restricted to the unit case.
+impl<const N: usize, F: FKScalar, A> Validator<N, (), F> for ValidatorNot<A>
 where
-    A: Validator<N>,
+    A: Validator<N, (), F>,
 {
     type Context<'ctx> = A::Context<'ctx>;
 
     #[inline]
-    fn validate<'ctx, E: Into<DekeError>, Q: SRobotQLike<N, E>>(
+    fn validate<'ctx, E: Into<DekeError>, Q: SRobotQLike<N, E, F>>(
         &self,
         q: Q,
         ctx: &Self::Context<'ctx>,
@@ -227,7 +231,7 @@ where
     #[inline]
     fn validate_motion<'ctx>(
         &self,
-        qs: &[SRobotQ<N>],
+        qs: &[SRobotQ<N, F>],
         ctx: &Self::Context<'ctx>,
     ) -> DekeResult<()> {
         match self.0.validate_motion(qs, ctx) {
@@ -238,13 +242,13 @@ where
 }
 
 #[derive(Clone)]
-pub struct JointValidator<const N: usize> {
-    lower: SRobotQ<N>,
-    upper: SRobotQ<N>,
-    extras: Option<Arc<[Box<dyn Fn(&SRobotQ<N>) -> bool + Send + Sync>]>>,
+pub struct JointValidator<const N: usize, F: FKScalar = f32> {
+    lower: SRobotQ<N, F>,
+    upper: SRobotQ<N, F>,
+    extras: Option<Arc<[Box<dyn Fn(&SRobotQ<N, F>) -> bool + Send + Sync>]>>,
 }
 
-impl<const N: usize> Debug for JointValidator<N> {
+impl<const N: usize, F: FKScalar> Debug for JointValidator<N, F> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("JointValidator")
             .field("lower", &self.lower)
@@ -260,8 +264,8 @@ impl<const N: usize> Debug for JointValidator<N> {
     }
 }
 
-impl<const N: usize> JointValidator<N> {
-    pub fn new(lower: SRobotQ<N>, upper: SRobotQ<N>) -> Self {
+impl<const N: usize, F: FKScalar> JointValidator<N, F> {
+    pub fn new(lower: SRobotQ<N, F>, upper: SRobotQ<N, F>) -> Self {
         Self {
             lower,
             upper,
@@ -270,9 +274,9 @@ impl<const N: usize> JointValidator<N> {
     }
 
     pub fn new_with_extras(
-        lower: SRobotQ<N>,
-        upper: SRobotQ<N>,
-        extras: Vec<Box<dyn Fn(&SRobotQ<N>) -> bool + Send + Sync>>,
+        lower: SRobotQ<N, F>,
+        upper: SRobotQ<N, F>,
+        extras: Vec<Box<dyn Fn(&SRobotQ<N, F>) -> bool + Send + Sync>>,
     ) -> Self {
         Self {
             lower,
@@ -282,11 +286,11 @@ impl<const N: usize> JointValidator<N> {
     }
 }
 
-impl<const N: usize> Validator<N> for JointValidator<N> {
+impl<const N: usize, F: FKScalar> Validator<N, (), F> for JointValidator<N, F> {
     type Context<'ctx> = ();
 
     #[inline]
-    fn validate<'ctx, E: Into<DekeError>, Q: SRobotQLike<N, E>>(
+    fn validate<'ctx, E: Into<DekeError>, Q: SRobotQLike<N, E, F>>(
         &self,
         q: Q,
         _ctx: &Self::Context<'ctx>,
@@ -308,7 +312,7 @@ impl<const N: usize> Validator<N> for JointValidator<N> {
     #[inline]
     fn validate_motion<'ctx>(
         &self,
-        qs: &[SRobotQ<N>],
+        qs: &[SRobotQ<N, F>],
         _ctx: &Self::Context<'ctx>,
     ) -> DekeResult<()> {
         for q in qs {

@@ -8,7 +8,7 @@ fn locks_first_two_joints_across_trajectory() {
     let fk = common::dh_6dof();
     let a = SRobotQ::from_array([0.2, -0.9, 1.3, 0.0, 0.0, 0.0]);
     let b = SRobotQ::from_array([0.2, -0.9, 0.9, 0.3, 0.2, 0.4]);
-    let path = SRobotPath::<6>::try_new(vec![a, b]).unwrap();
+    let path = SRobotPath::<6, f64>::try_new(vec![a, b]).unwrap();
 
     let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 4.0, 400.0);
     cfg.locked_prefix = 2;
@@ -31,7 +31,7 @@ fn mismatched_locked_prefix_errors() {
     let fk = common::dh_6dof();
     let a = SRobotQ::from_array([0.2, -0.9, 1.3, 0.0, 0.0, 0.0]);
     let b = SRobotQ::from_array([0.3, -0.9, 0.9, 0.3, 0.2, 0.4]); // joint 0 moves
-    let path = SRobotPath::<6>::try_new(vec![a, b]).unwrap();
+    let path = SRobotPath::<6, f64>::try_new(vec![a, b]).unwrap();
 
     let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 4.0, 400.0);
     cfg.locked_prefix = 2;

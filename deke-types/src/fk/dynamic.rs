@@ -1,6 +1,6 @@
 use glam::{Affine3A, Vec3A};
 
-use super::{DHChain, DHJoint, FKChain, HPChain, HPJoint, URDFChain, URDFJoint};
+use super::{DHChain, DHJoint, FKChain, FKScalar, HPChain, HPJoint, URDFChain, URDFJoint};
 use crate::{DekeError, DekeResult, SRobotQ};
 
 macro_rules! dynamic_fk {
@@ -78,7 +78,7 @@ macro_rules! dynamic_fk {
                     expected: $n,
                     found: $q.len(),
                 })?;
-                Ok(FKChain::<$n>::fk(chain, &SRobotQ(*arr)).map_err(|e| -> DekeError { e.into() })?.to_vec())
+                Ok(FKChain::<$n, f32>::fk(chain, &SRobotQ(*arr)).map_err(|e| -> DekeError { e.into() })?.to_vec())
             }),+
         }
     };
@@ -90,26 +90,26 @@ macro_rules! dynamic_fk {
                     expected: $n,
                     found: $q.len(),
                 })?;
-                FKChain::<$n>::fk_end(chain, &SRobotQ(*arr)).map_err(|e| -> DekeError { e.into() })
+                FKChain::<$n, f32>::fk_end(chain, &SRobotQ(*arr)).map_err(|e| -> DekeError { e.into() })
             }),+
         }
     };
 
     (@impl_fkchain $name:ident, $chain:ident, $($n:literal $variant:ident),+) => {
         $(
-            impl FKChain<$n> for $name {
+            impl FKChain<$n, f32> for $name {
                 type Error = DekeError;
 
                 fn base_tf(&self) -> Affine3A {
                     match self {
-                        Self::$variant(chain) => FKChain::<$n>::base_tf(chain),
+                        Self::$variant(chain) => FKChain::<$n, f32>::base_tf(chain),
                         _ => Affine3A::IDENTITY,
                     }
                 }
 
-                fn fk(&self, q: &SRobotQ<$n>) -> Result<[Affine3A; $n], Self::Error> {
+                fn fk(&self, q: &SRobotQ<$n, f32>) -> Result<[Affine3A; $n], Self::Error> {
                     match self {
-                        Self::$variant(chain) => FKChain::<$n>::fk(chain, q).map_err(Into::into),
+                        Self::$variant(chain) => FKChain::<$n, f32>::fk(chain, q).map_err(Into::into),
                         _ => Err(DekeError::ShapeMismatch {
                             expected: self.dof(),
                             found: $n,
@@ -117,9 +117,9 @@ macro_rules! dynamic_fk {
                     }
                 }
 
-                fn fk_end(&self, q: &SRobotQ<$n>) -> Result<Affine3A, Self::Error> {
+                fn fk_end(&self, q: &SRobotQ<$n, f32>) -> Result<Affine3A, Self::Error> {
                     match self {
-                        Self::$variant(chain) => FKChain::<$n>::fk_end(chain, q).map_err(Into::into),
+                        Self::$variant(chain) => FKChain::<$n, f32>::fk_end(chain, q).map_err(Into::into),
                         _ => Err(DekeError::ShapeMismatch {
                             expected: self.dof(),
                             found: $n,
@@ -127,9 +127,9 @@ macro_rules! dynamic_fk {
                     }
                 }
 
-                fn joint_axes_positions(&self, q: &SRobotQ<$n>) -> Result<([Vec3A; $n], [Vec3A; $n], Vec3A), Self::Error> {
+                fn joint_axes_positions(&self, q: &SRobotQ<$n, f32>) -> Result<([Vec3A; $n], [Vec3A; $n], Vec3A), Self::Error> {
                     match self {
-                        Self::$variant(chain) => FKChain::<$n>::joint_axes_positions(chain, q).map_err(Into::into),
+                        Self::$variant(chain) => FKChain::<$n, f32>::joint_axes_positions(chain, q).map_err(Into::into),
                         _ => Err(DekeError::ShapeMismatch {
                             expected: self.dof(),
                             found: $n,
@@ -169,75 +169,75 @@ impl DynamicURDFChain {
     }
 }
 
-trait ErasedFK<const N: usize>: Send + Sync {
-    fn base_tf(&self) -> Affine3A;
-    fn fk(&self, q: &SRobotQ<N>) -> Result<[Affine3A; N], DekeError>;
-    fn fk_end(&self, q: &SRobotQ<N>) -> Result<Affine3A, DekeError>;
+trait ErasedFK<const N: usize, F: FKScalar>: Send + Sync {
+    fn base_tf(&self) -> super::AAffine3<F>;
+    fn fk(&self, q: &SRobotQ<N, F>) -> Result<[super::AAffine3<F>; N], DekeError>;
+    fn fk_end(&self, q: &SRobotQ<N, F>) -> Result<super::AAffine3<F>, DekeError>;
     fn joint_axes_positions(
         &self,
-        q: &SRobotQ<N>,
-    ) -> Result<([Vec3A; N], [Vec3A; N], Vec3A), DekeError>;
-    fn clone_box(&self) -> Box<dyn ErasedFK<N>>;
+        q: &SRobotQ<N, F>,
+    ) -> Result<([super::AVec3<F>; N], [super::AVec3<F>; N], super::AVec3<F>), DekeError>;
+    fn clone_box(&self) -> Box<dyn ErasedFK<N, F>>;
 }
 
-impl<const N: usize, FK: FKChain<N> + 'static> ErasedFK<N> for FK {
-    fn base_tf(&self) -> Affine3A {
+impl<const N: usize, F: FKScalar, FK: FKChain<N, F> + 'static> ErasedFK<N, F> for FK {
+    fn base_tf(&self) -> super::AAffine3<F> {
         FKChain::base_tf(self)
     }
 
-    fn fk(&self, q: &SRobotQ<N>) -> Result<[Affine3A; N], DekeError> {
+    fn fk(&self, q: &SRobotQ<N, F>) -> Result<[super::AAffine3<F>; N], DekeError> {
         FKChain::fk(self, q).map_err(Into::into)
     }
 
-    fn fk_end(&self, q: &SRobotQ<N>) -> Result<Affine3A, DekeError> {
+    fn fk_end(&self, q: &SRobotQ<N, F>) -> Result<super::AAffine3<F>, DekeError> {
         FKChain::fk_end(self, q).map_err(Into::into)
     }
 
     fn joint_axes_positions(
         &self,
-        q: &SRobotQ<N>,
-    ) -> Result<([Vec3A; N], [Vec3A; N], Vec3A), DekeError> {
+        q: &SRobotQ<N, F>,
+    ) -> Result<([super::AVec3<F>; N], [super::AVec3<F>; N], super::AVec3<F>), DekeError> {
         FKChain::joint_axes_positions(self, q).map_err(Into::into)
     }
 
-    fn clone_box(&self) -> Box<dyn ErasedFK<N>> {
+    fn clone_box(&self) -> Box<dyn ErasedFK<N, F>> {
         Box::new(self.clone())
     }
 }
 
-pub struct BoxFK<const N: usize>(Box<dyn ErasedFK<N>>);
+pub struct BoxFK<const N: usize, F: FKScalar = f32>(Box<dyn ErasedFK<N, F>>);
 
-impl<const N: usize> BoxFK<N> {
-    pub fn new(fk: impl FKChain<N> + 'static) -> Self {
+impl<const N: usize, F: FKScalar> BoxFK<N, F> {
+    pub fn new(fk: impl FKChain<N, F> + 'static) -> Self {
         Self(Box::new(fk))
     }
 }
 
-impl<const N: usize> Clone for BoxFK<N> {
+impl<const N: usize, F: FKScalar> Clone for BoxFK<N, F> {
     fn clone(&self) -> Self {
         Self(self.0.clone_box())
     }
 }
 
-impl<const N: usize> FKChain<N> for BoxFK<N> {
+impl<const N: usize, F: FKScalar> FKChain<N, F> for BoxFK<N, F> {
     type Error = DekeError;
 
-    fn base_tf(&self) -> Affine3A {
+    fn base_tf(&self) -> super::AAffine3<F> {
         self.0.base_tf()
     }
 
-    fn fk(&self, q: &SRobotQ<N>) -> Result<[Affine3A; N], DekeError> {
+    fn fk(&self, q: &SRobotQ<N, F>) -> Result<[super::AAffine3<F>; N], DekeError> {
         self.0.fk(q)
     }
 
-    fn fk_end(&self, q: &SRobotQ<N>) -> Result<Affine3A, DekeError> {
+    fn fk_end(&self, q: &SRobotQ<N, F>) -> Result<super::AAffine3<F>, DekeError> {
         self.0.fk_end(q)
     }
 
     fn joint_axes_positions(
         &self,
-        q: &SRobotQ<N>,
-    ) -> Result<([Vec3A; N], [Vec3A; N], Vec3A), DekeError> {
+        q: &SRobotQ<N, F>,
+    ) -> Result<([super::AVec3<F>; N], [super::AVec3<F>; N], super::AVec3<F>), DekeError> {
         self.0.joint_axes_positions(q)
     }
 }

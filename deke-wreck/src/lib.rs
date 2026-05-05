@@ -750,3 +750,33 @@ impl<const N: usize, FK: FKChain<N> + 'static> Validator<N> for WreckValidator<N
         Ok(())
     }
 }
+
+/// f64 entry point — downcasts to f32 and dispatches to the f32 impl.
+/// `WreckValidator` is f32-only internally for SIMD performance; this lets
+/// it plug into f64 retimers (e.g. `Topp3Tcp6`) at the cost of an inexpensive
+/// f64 → f32 narrowing per query.
+impl<const N: usize, FK: FKChain<N> + 'static> Validator<N, (), f64> for WreckValidator<N, FK> {
+    type Context<'ctx> = WreckValidatorContext<'ctx, N>;
+
+    fn validate<'ctx, E: Into<DekeError>, A: SRobotQLike<N, E, f64>>(
+        &self,
+        q: A,
+        ctx: &Self::Context<'ctx>,
+    ) -> DekeResult<()> {
+        let q64 = q.to_srobotq().map_err(Into::into)?;
+        let q32: SRobotQ<N, f32> = q64.into();
+        self.check_collisions(&q32, ctx)
+    }
+
+    fn validate_motion<'ctx>(
+        &self,
+        qs: &[SRobotQ<N, f64>],
+        ctx: &Self::Context<'ctx>,
+    ) -> DekeResult<()> {
+        for q in qs {
+            let q32: SRobotQ<N, f32> = (*q).into();
+            self.check_collisions(&q32, ctx)?;
+        }
+        Ok(())
+    }
+}

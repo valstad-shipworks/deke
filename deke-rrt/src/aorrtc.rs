@@ -16,10 +16,10 @@ pub struct AorrtcSettings<const N: usize> {
     pub use_phs: bool,
     pub cost_bound_resamples: usize,
     pub stall_iterations: usize,
-    pub dof_cost_weights: SRobotQ<N>,
+    pub dof_cost_weights: SRobotQ<N, f64>,
     pub penalize_static_dof: bool,
-    pub static_dof_penalty: f32,
-    pub static_dof_threshold: f32,
+    pub static_dof_penalty: f64,
+    pub static_dof_threshold: f64,
     /// RNG used for non-sampling work (PHS box-Muller draws, c_rand picks,
     /// cost-bound resampling). Kept separate from `rrtc.randomizer` so that
     /// e.g. joint sampling can use Halton while these auxiliary calls stay on
@@ -28,14 +28,14 @@ pub struct AorrtcSettings<const N: usize> {
     pub aux_seed: u64,
     pub simplify_shortcut: bool,
     pub simplify_bspline_steps: usize,
-    pub simplify_bspline_midpoint_interpolation: f32,
+    pub simplify_bspline_midpoint_interpolation: f64,
     pub simplify_bspline_min_change: f64,
     pub simplify_reduce_max_steps: usize,
     pub simplify_reduce_range_ratio: f64,
 }
 
 impl<const N: usize> AorrtcSettings<N> {
-    pub fn new(lower: SRobotQ<N>, upper: SRobotQ<N>) -> Self {
+    pub fn new(lower: SRobotQ<N, f64>, upper: SRobotQ<N, f64>) -> Self {
         Self {
             rrtc: RrtcSettings::new(lower, upper),
             max_iterations: 100_000,
@@ -69,7 +69,7 @@ struct Phs<const N: usize> {
 }
 
 impl<const N: usize> Phs<N> {
-    fn new(start: &SRobotQ<N>, goal: &SRobotQ<N>, coeffs: &[f64; N]) -> Self {
+    fn new(start: &SRobotQ<N, f64>, goal: &SRobotQ<N, f64>, coeffs: &[f64; N]) -> Self {
         let mut sqrt_coeffs = [0.0; N];
         let mut inv_sqrt_coeffs = [0.0; N];
         for i in 0..N {
@@ -106,9 +106,9 @@ impl<const N: usize> Phs<N> {
         &self,
         sample_rng: &mut S,
         aux_rng: &mut A,
-        lower: &SRobotQ<N>,
-        upper: &SRobotQ<N>,
-    ) -> SRobotQ<N> {
+        lower: &SRobotQ<N, f64>,
+        upper: &SRobotQ<N, f64>,
+    ) -> SRobotQ<N, f64> {
         if self.c_best >= f64::INFINITY || self.c_best <= self.c_min + 1e-10 {
             return sample_uniform(sample_rng, lower, upper);
         }
@@ -134,19 +134,19 @@ impl<const N: usize> Phs<N> {
                 point[i] += self.center[i];
             }
 
-            let mut q_f32 = [0.0f32; N];
+            let mut q = [0.0f64; N];
             let mut in_bounds = true;
             for i in 0..N {
                 let qi = point[i] * self.inv_sqrt_coeffs[i];
-                q_f32[i] = qi as f32;
-                if qi < lower[i] as f64 || qi > upper[i] as f64 {
+                q[i] = qi;
+                if qi < lower[i] || qi > upper[i] {
                     in_bounds = false;
                     break;
                 }
             }
 
             if in_bounds {
-                return SRobotQ::from_array(q_f32);
+                return SRobotQ::from_array(q);
             }
         }
 
@@ -242,28 +242,28 @@ fn uniform_unit_ball<const N: usize, R: DekeRng<N>>(rng: &mut R) -> [f64; N] {
 }
 
 fn steer<const N: usize>(
-    from: &SRobotQ<N>,
-    toward: &SRobotQ<N>,
+    from: &SRobotQ<N, f64>,
+    toward: &SRobotQ<N, f64>,
     range: f64,
     coeffs: &[f64; N],
-) -> SRobotQ<N> {
+) -> SRobotQ<N, f64> {
     let dist = weighted_distance(from, toward, coeffs);
     if dist <= range {
         *toward
     } else {
-        *from + (*toward - *from) * (range / dist) as f32
+        *from + (*toward - *from) * (range / dist)
     }
 }
 
-pub(crate) fn solve<const N: usize, V: Validator<N>, S: DekeRng<N>, A: DekeRng<N>>(
-    start: &SRobotQ<N>,
-    goal: &SRobotQ<N>,
+pub(crate) fn solve<const N: usize, V: Validator<N, (), f64>, S: DekeRng<N>, A: DekeRng<N>>(
+    start: &SRobotQ<N, f64>,
+    goal: &SRobotQ<N, f64>,
     validator: &V,
     ctx: &V::Context<'_>,
     settings: &AorrtcSettings<N>,
     sample_rng: &mut S,
     aux_rng: &mut A,
-) -> (DekeResult<SRobotPath<N>>, RrtDiagnostic) {
+) -> (DekeResult<SRobotPath<N, f64>>, RrtDiagnostic) {
     let timer = std::time::Instant::now();
     let dof_coeffs = {
         let mut c = [0.0f64; N];
@@ -287,7 +287,7 @@ pub(crate) fn solve<const N: usize, V: Validator<N>, S: DekeRng<N>, A: DekeRng<N
         Err(e) => return (Err(e), initial_diag),
     };
 
-    let mut best_waypoints: Vec<SRobotQ<N>> = initial_path.iter().copied().collect();
+    let mut best_waypoints: Vec<SRobotQ<N, f64>> = initial_path.iter().copied().collect();
     let mut best_cost = path_cost(&best_waypoints, &dof_coeffs);
 
     let c_min = weighted_distance(start, goal, &dof_coeffs);
@@ -541,8 +541,8 @@ fn reconstruct<const N: usize>(
     tree_b: &RrtTree<N>,
     idx_b: usize,
     a_is_start: bool,
-) -> Vec<SRobotQ<N>> {
-    let backtrack = |tree: &RrtTree<N>, idx: usize| -> Vec<SRobotQ<N>> {
+) -> Vec<SRobotQ<N, f64>> {
+    let backtrack = |tree: &RrtTree<N>, idx: usize| -> Vec<SRobotQ<N, f64>> {
         let mut path = Vec::new();
         let mut current = idx;
         loop {

@@ -4,7 +4,6 @@ use std::{
 };
 
 pub use glam;
-use num_traits::Float;
 pub use wide;
 
 mod fk;
@@ -15,9 +14,9 @@ mod validator;
 mod validator_dynamic;
 
 pub use fk::{
-    BoxFK, DHChain, DHJoint, DynamicDHChain, DynamicHPChain, DynamicURDFChain, FKChain, HPChain,
-    HPJoint, PrismaticFK, TransformedFK, URDFBuildError, URDFChain, URDFJoint, URDFJointType,
-    compose_fixed_joints,
+    BoxFK, DHChain, DHJoint, DynamicDHChain, DynamicHPChain, DynamicURDFChain, FKChain, FKScalar,
+    FPDispatch, HPChain, HPJoint, PrismaticFK, TransformedFK, URDFBuildError, URDFChain,
+    URDFJoint, URDFJointType, compose_fixed_joints, compose_fixed_joints_f64,
 };
 pub use path::{RobotPath, SRobotPath};
 pub use q::{RobotQ, SRobotQ, robotq, SRobotQLike};
@@ -73,7 +72,7 @@ impl From<Infallible> for DekeError {
 
 pub type DekeResult<T> = Result<T, DekeError>;
 
-pub trait Planner<const N: usize, F: Float = f32, R: ValidatorRet = ()>: Sized + Clone + Debug + Send + Sync + 'static {
+pub trait Planner<const N: usize, F: fk::FKScalar = f32, R: ValidatorRet = ()>: Sized + Clone + Debug + Send + Sync + 'static {
     type Diagnostic: Display + Send + Sync;
     type Config;
 
@@ -81,7 +80,7 @@ pub trait Planner<const N: usize, F: Float = f32, R: ValidatorRet = ()>: Sized +
         E: Into<DekeError>,
         A: SRobotQLike<N, E, F>,
         B: SRobotQLike<N, E, F>,
-        V: Validator<N, R>,
+        V: Validator<N, R, F>,
     >(
         &self,
         config: &Self::Config,
@@ -92,16 +91,16 @@ pub trait Planner<const N: usize, F: Float = f32, R: ValidatorRet = ()>: Sized +
     ) -> (DekeResult<SRobotPath<N, F>>, Self::Diagnostic);
 }
 
-pub trait Retimer<const N: usize, F: Float = f32, R: ValidatorRet = ()>: Sized + Clone + Debug + Send + Sync + 'static {
+pub trait Retimer<const N: usize, F: fk::FKScalar = f32, R: ValidatorRet = ()>: Sized + Clone + Debug + Send + Sync + 'static {
     type Diagnostic: Display + Send + Sync;
     type Constraints;
 
-    fn retime<V: Validator<N, R>>(
+    fn retime<V: Validator<N, R, F>>(
         &self,
         constraints: &Self::Constraints,
         path: &SRobotPath<N, F>,
-        fk: &impl FKChain<N>,
+        fk: &impl FKChain<N, F>,
         validator: &V,
         ctx: &V::Context<'_>,
-    ) -> (DekeResult<SRobotTraj<N>>, Self::Diagnostic);
+    ) -> (DekeResult<SRobotTraj<N, F>>, Self::Diagnostic);
 }

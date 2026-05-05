@@ -6,7 +6,7 @@ use deke_types::{Retimer, SRobotPath, SRobotQ};
 #[test]
 fn single_joint_rest_to_rest_matches_trapezoidal() {
     let fk = common::dh_1dof();
-    let path = SRobotPath::<1>::try_new(vec![
+    let path = SRobotPath::<1, f64>::try_new(vec![
         SRobotQ::from_array([0.0]),
         SRobotQ::from_array([1.0]),
     ])

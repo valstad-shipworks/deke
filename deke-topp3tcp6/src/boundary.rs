@@ -27,8 +27,8 @@ impl ProjectedBoundary {
 /// If `v` or `a` have components perpendicular to `qp`, the projected scalars ignore them and
 /// the perpendicular norm is returned as a residual for the caller to sanity-check.
 pub fn project<const N: usize>(
-    v: &SRobotQ<N>,
-    a: &SRobotQ<N>,
+    v: &SRobotQ<N, f64>,
+    a: &SRobotQ<N, f64>,
     qp: &[f64; N],
     qpp: &[f64; N],
 ) -> ProjectedBoundary {
@@ -47,19 +47,19 @@ pub fn project<const N: usize>(
 
     let mut v_dot_qp = 0.0_f64;
     for j in 0..N {
-        v_dot_qp += v.0[j] as f64 * qp[j];
+        v_dot_qp += v.0[j] * qp[j];
     }
     let sd = v_dot_qp / qp_norm_sq;
 
     let mut v_res_sq = 0.0_f64;
     for j in 0..N {
-        let residual = v.0[j] as f64 - sd * qp[j];
+        let residual = v.0[j] - sd * qp[j];
         v_res_sq += residual * residual;
     }
 
     let mut a_minus_qpp_sd2_dot_qp = 0.0_f64;
     for j in 0..N {
-        let adj = a.0[j] as f64 - qpp[j] * sd * sd;
+        let adj = a.0[j] - qpp[j] * sd * sd;
         a_minus_qpp_sd2_dot_qp += adj * qp[j];
     }
     let sdd = a_minus_qpp_sd2_dot_qp / qp_norm_sq;
@@ -67,7 +67,7 @@ pub fn project<const N: usize>(
     let mut a_res_sq = 0.0_f64;
     for j in 0..N {
         let expected = qpp[j] * sd * sd + qp[j] * sdd;
-        let residual = a.0[j] as f64 - expected;
+        let residual = a.0[j] - expected;
         a_res_sq += residual * residual;
     }
 
@@ -79,10 +79,10 @@ pub fn project<const N: usize>(
     }
 }
 
-fn vector_norm<const N: usize>(v: &[f32; N]) -> f64 {
+fn vector_norm<const N: usize>(v: &[f64; N]) -> f64 {
     let mut s = 0.0_f64;
     for x in v {
-        s += (*x as f64) * (*x as f64);
+        s += *x * *x;
     }
     s.sqrt()
 }
@@ -97,8 +97,8 @@ mod tests {
         // Take sd = 2, sdd = 3 ⇒ v = [2, 0, 0], a = qpp·4 + qp·3 = [3, 4, 0]
         let qp = [1.0_f64, 0.0, 0.0];
         let qpp = [0.0_f64, 1.0, 0.0];
-        let v = SRobotQ::<3>::from_array([2.0, 0.0, 0.0]);
-        let a = SRobotQ::<3>::from_array([3.0, 4.0, 0.0]);
+        let v = SRobotQ::<3, f64>::from_array([2.0, 0.0, 0.0]);
+        let a = SRobotQ::<3, f64>::from_array([3.0, 4.0, 0.0]);
         let out = project::<3>(&v, &a, &qp, &qpp);
         assert!((out.sd - 2.0).abs() < 1e-9);
         assert!((out.sdd - 3.0).abs() < 1e-9);
@@ -110,8 +110,8 @@ mod tests {
     fn perpendicular_velocity_reports_residual() {
         let qp = [1.0_f64, 0.0];
         let qpp = [0.0_f64, 0.0];
-        let v = SRobotQ::<2>::from_array([0.0, 1.0]);
-        let a = SRobotQ::<2>::from_array([0.0, 0.0]);
+        let v = SRobotQ::<2, f64>::from_array([0.0, 1.0]);
+        let a = SRobotQ::<2, f64>::from_array([0.0, 0.0]);
         let out = project::<2>(&v, &a, &qp, &qpp);
         assert!(out.sd.abs() < 1e-9);
         assert!((out.velocity_residual - 1.0).abs() < 1e-9);

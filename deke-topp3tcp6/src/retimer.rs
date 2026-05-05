@@ -16,18 +16,18 @@ use crate::resample::resample_to_uniform;
 #[derive(Debug, Clone, Default)]
 pub struct Topp3Tcp6;
 
-impl<const N: usize> Retimer<N> for Topp3Tcp6 {
+impl<const N: usize> Retimer<N, f64> for Topp3Tcp6 {
     type Diagnostic = Topp3Tcp6Diagnostic;
     type Constraints = Topp3Tcp6Constraints<N>;
 
-    fn retime<V: Validator<N>>(
+    fn retime<V: Validator<N, (), f64>>(
         &self,
         constraints: &Self::Constraints,
-        path: &SRobotPath<N>,
-        fk: &impl FKChain<N>,
+        path: &SRobotPath<N, f64>,
+        fk: &impl FKChain<N, f64>,
         validator: &V,
         ctx: &V::Context<'_>,
-    ) -> (DekeResult<SRobotTraj<N>>, Self::Diagnostic) {
+    ) -> (DekeResult<SRobotTraj<N, f64>>, Self::Diagnostic) {
         let mut diag = Topp3Tcp6Diagnostic::default();
 
         if let Err(e) = PathDerivatives::<N>::check_locked_prefix(path, constraints.locked_prefix) {
@@ -73,8 +73,8 @@ impl<const N: usize> Retimer<N> for Topp3Tcp6 {
             &deriv.qpp[end_idx],
         );
         let residual = start.max_residual().max(end.max_residual());
-        diag.boundary_projection_residual = residual as f32;
-        if residual as f32 > constraints.boundary.projection_tolerance {
+        diag.boundary_projection_residual = residual;
+        if residual > constraints.boundary.projection_tolerance {
             diag.limiting_constraint = Some(LimitingGroup::BoundaryCondition);
             let err = DekeError::BoundaryInfeasible(residual as f32);
             diag.message = Some(format!("{}", err));
@@ -101,7 +101,7 @@ impl<const N: usize> Retimer<N> for Topp3Tcp6 {
 
         populate_analytical_peaks(&mut diag, &solution, &deriv, constraints);
 
-        let dt_out = Duration::from_secs_f64(1.0 / constraints.sample_rate_hz as f64);
+        let dt_out = Duration::from_secs_f64(1.0 / constraints.sample_rate_hz);
         let (total_time, samples) = resample_to_uniform(&solution, &deriv, dt_out);
         diag.output_samples = samples.len();
         diag.total_time = total_time;
@@ -125,9 +125,9 @@ impl<const N: usize> Retimer<N> for Topp3Tcp6 {
 }
 
 fn densify_path<const N: usize>(
-    path: &SRobotPath<N>,
+    path: &SRobotPath<N, f64>,
     opts: &crate::constraints::DensificationOptions,
-) -> DekeResult<SRobotPath<N>> {
+) -> DekeResult<SRobotPath<N, f64>> {
     let mut p = if let Some(step) = opts.max_segment_step {
         path.densify(step)
     } else {
@@ -138,7 +138,7 @@ fn densify_path<const N: usize>(
         let n = opts.min_samples.max(2);
         let mut wps = Vec::with_capacity(n);
         for i in 0..n {
-            let t = i as f32 / (n - 1) as f32;
+            let t = i as f64 / (n - 1) as f64;
             wps.push(p.sample(t).unwrap_or(*p.first()));
         }
         p = SRobotPath::try_new(wps)?;
@@ -148,7 +148,7 @@ fn densify_path<const N: usize>(
         let n = opts.max_samples.max(2);
         let mut wps = Vec::with_capacity(n);
         for i in 0..n {
-            let t = i as f32 / (n - 1) as f32;
+            let t = i as f64 / (n - 1) as f64;
             wps.push(p.sample(t).unwrap_or(*p.first()));
         }
         p = SRobotPath::try_new(wps)?;
@@ -173,12 +173,12 @@ fn infer_limiting_group<const N: usize>(
                 let qp = deriv.qp[k][j];
                 let qpp = deriv.qpp[k][j];
                 let v = (qp * sd).abs();
-                let v_max = constraints.joint.v_max.0[j] as f64;
+                let v_max = constraints.joint.v_max.0[j];
                 if v_max.is_finite() && v - v_max > worst.0 {
                     worst = (v - v_max, LimitingGroup::JointVelocity);
                 }
                 let a = (qpp * sd * sd + qp * sdd).abs();
-                let a_max = constraints.joint.a_max.0[j] as f64;
+                let a_max = constraints.joint.a_max.0[j];
                 if a_max.is_finite() && a - a_max > worst.0 {
                     worst = (a - a_max, LimitingGroup::JointAcceleration);
                 }
@@ -186,7 +186,7 @@ fn infer_limiting_group<const N: usize>(
             if deriv.has_tcp() {
                 let pp = &deriv.pp[k];
                 let tcp_v = (pp[0] * pp[0] + pp[1] * pp[1] + pp[2] * pp[2]).sqrt() * sd;
-                let tcp_v_max = constraints.tcp.v_max as f64;
+                let tcp_v_max = constraints.tcp.v_max;
                 if tcp_v_max.is_finite() && tcp_v - tcp_v_max > worst.0 {
                     worst = (tcp_v - tcp_v_max, LimitingGroup::TcpVelocity);
                 }
@@ -219,12 +219,12 @@ fn populate_analytical_peaks<const N: usize>(
     let mut peak_ta = 0.0_f64;
     let mut peak_tj = 0.0_f64;
 
-    let jv_max: Vec<f64> = (0..N).map(|j| constraints.joint.v_max.0[j] as f64).collect();
-    let ja_max: Vec<f64> = (0..N).map(|j| constraints.joint.a_max.0[j] as f64).collect();
-    let jj_max: Vec<f64> = (0..N).map(|j| constraints.joint.j_max.0[j] as f64).collect();
-    let tv_max = constraints.tcp.v_max as f64;
-    let ta_max = constraints.tcp.a_max as f64;
-    let tj_max = constraints.tcp.j_max as f64;
+    let jv_max: Vec<f64> = (0..N).map(|j| constraints.joint.v_max.0[j]).collect();
+    let ja_max: Vec<f64> = (0..N).map(|j| constraints.joint.a_max.0[j]).collect();
+    let jj_max: Vec<f64> = (0..N).map(|j| constraints.joint.j_max.0[j]).collect();
+    let tv_max = constraints.tcp.v_max;
+    let ta_max = constraints.tcp.a_max;
+    let tj_max = constraints.tcp.j_max;
 
     let update_util = |cur: &mut f64, val: f64, limit: f64| {
         if limit.is_finite() && limit > 0.0 {
@@ -290,11 +290,11 @@ fn populate_analytical_peaks<const N: usize>(
         util_sum += step_util;
     }
 
-    diag.peak_joint_velocity = peak_jv as f32;
-    diag.peak_joint_acceleration = peak_ja as f32;
-    diag.peak_joint_jerk = peak_jj as f32;
-    diag.peak_tcp_velocity = peak_tv as f32;
-    diag.peak_tcp_acceleration = peak_ta as f32;
-    diag.peak_tcp_jerk = peak_tj as f32;
-    diag.average_utilization = if m > 0 { (util_sum / m as f64) as f32 } else { 0.0 };
+    diag.peak_joint_velocity = peak_jv;
+    diag.peak_joint_acceleration = peak_ja;
+    diag.peak_joint_jerk = peak_jj;
+    diag.peak_tcp_velocity = peak_tv;
+    diag.peak_tcp_acceleration = peak_ta;
+    diag.peak_tcp_jerk = peak_tj;
+    diag.average_utilization = if m > 0 { util_sum / m as f64 } else { 0.0 };
 }

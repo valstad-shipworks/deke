@@ -9,9 +9,9 @@ pub struct RrtcSettings<const N: usize> {
     pub range: f64,
     pub max_iterations: usize,
     pub max_samples: usize,
-    pub joint_lower: SRobotQ<N>,
-    pub joint_upper: SRobotQ<N>,
-    pub dof_cost_weights: SRobotQ<N>,
+    pub joint_lower: SRobotQ<N, f64>,
+    pub joint_upper: SRobotQ<N, f64>,
+    pub dof_cost_weights: SRobotQ<N, f64>,
     pub resolution: f64,
     pub dynamic_domain: bool,
     pub radius: f64,
@@ -23,14 +23,14 @@ pub struct RrtcSettings<const N: usize> {
     pub randomizer: RandomizerType,
     pub shortcut: bool,
     pub bspline_steps: usize,
-    pub bspline_midpoint_interpolation: f32,
+    pub bspline_midpoint_interpolation: f64,
     pub bspline_min_change: f64,
     pub reduce_max_steps: usize,
     pub reduce_range_ratio: f64,
 }
 
 impl<const N: usize> RrtcSettings<N> {
-    pub fn new(lower: SRobotQ<N>, upper: SRobotQ<N>) -> Self {
+    pub fn new(lower: SRobotQ<N, f64>, upper: SRobotQ<N, f64>) -> Self {
         Self {
             range: 0.5,
             max_iterations: 100_000,
@@ -59,69 +59,69 @@ impl<const N: usize> RrtcSettings<N> {
 
 pub(crate) fn sample_uniform<const N: usize, R: DekeRng<N>>(
     rng: &mut R,
-    lower: &SRobotQ<N>,
-    upper: &SRobotQ<N>,
-) -> SRobotQ<N> {
+    lower: &SRobotQ<N, f64>,
+    upper: &SRobotQ<N, f64>,
+) -> SRobotQ<N, f64> {
     let unit = rng.sample_unit();
-    let mut q = [0.0f32; N];
+    let mut q = [0.0f64; N];
     for i in 0..N {
-        q[i] = (lower[i] as f64 + unit[i] * (upper[i] as f64 - lower[i] as f64)) as f32;
+        q[i] = lower[i] + unit[i] * (upper[i] - lower[i]);
     }
     SRobotQ::from_array(q)
 }
 
 pub(crate) fn weighted_distance<const N: usize>(
-    a: &SRobotQ<N>,
-    b: &SRobotQ<N>,
+    a: &SRobotQ<N, f64>,
+    b: &SRobotQ<N, f64>,
     coeffs: &[f64; N],
 ) -> f64 {
     let mut sum = 0.0;
     for i in 0..N {
-        let d = a.0[i] as f64 - b.0[i] as f64;
+        let d = a.0[i] - b.0[i];
         sum += coeffs[i] * d * d;
     }
     sum.sqrt()
 }
 
-pub(crate) fn path_cost<const N: usize>(path: &[SRobotQ<N>], coeffs: &[f64; N]) -> f64 {
+pub(crate) fn path_cost<const N: usize>(path: &[SRobotQ<N, f64>], coeffs: &[f64; N]) -> f64 {
     path.windows(2)
         .map(|w| weighted_distance(&w[0], &w[1], coeffs))
         .sum()
 }
 
 fn steer<const N: usize>(
-    from: &SRobotQ<N>,
-    toward: &SRobotQ<N>,
+    from: &SRobotQ<N, f64>,
+    toward: &SRobotQ<N, f64>,
     range: f64,
     coeffs: &[f64; N],
-) -> SRobotQ<N> {
+) -> SRobotQ<N, f64> {
     let dist = weighted_distance(from, toward, coeffs);
     if dist <= range {
         *toward
     } else {
-        *from + (*toward - *from) * (range / dist) as f32
+        *from + (*toward - *from) * (range / dist)
     }
 }
 
-pub(crate) fn validate_edge<const N: usize, V: Validator<N>>(
-    from: &SRobotQ<N>,
-    to: &SRobotQ<N>,
+pub(crate) fn validate_edge<const N: usize, V: Validator<N, (), f64>>(
+    from: &SRobotQ<N, f64>,
+    to: &SRobotQ<N, f64>,
     resolution: f64,
     validator: &V,
     ctx: &V::Context<'_>,
 ) -> DekeResult<()> {
-    let dist = from.distance(to) as f64;
+    let dist = from.distance(to);
     let steps = ((dist / resolution).ceil() as usize).max(1);
     let mut points = Vec::with_capacity(steps);
     for i in 1..=steps {
-        let t = i as f32 / steps as f32;
+        let t = i as f64 / steps as f64;
         points.push(*from + (*to - *from) * t);
     }
     validator.validate_motion(&points, ctx)
 }
 
-pub(crate) fn shortcut<const N: usize, V: Validator<N>>(
-    path: &mut Vec<SRobotQ<N>>,
+pub(crate) fn shortcut<const N: usize, V: Validator<N, (), f64>>(
+    path: &mut Vec<SRobotQ<N, f64>>,
     validator: &V,
     ctx: &V::Context<'_>,
     resolution: f64,
@@ -144,8 +144,8 @@ pub(crate) fn shortcut<const N: usize, V: Validator<N>>(
     }
 }
 
-pub(crate) fn reduce<const N: usize, V: Validator<N>>(
-    path: &mut Vec<SRobotQ<N>>,
+pub(crate) fn reduce<const N: usize, V: Validator<N, (), f64>>(
+    path: &mut Vec<SRobotQ<N, f64>>,
     validator: &V,
     ctx: &V::Context<'_>,
     resolution: f64,
@@ -178,7 +178,7 @@ pub(crate) fn reduce<const N: usize, V: Validator<N>>(
     }
 }
 
-fn subdivide<const N: usize>(path: &mut Vec<SRobotQ<N>>) {
+fn subdivide<const N: usize>(path: &mut Vec<SRobotQ<N, f64>>) {
     if path.is_empty() {
         return;
     }
@@ -191,13 +191,13 @@ fn subdivide<const N: usize>(path: &mut Vec<SRobotQ<N>>) {
     *path = new_path;
 }
 
-pub(crate) fn smooth_bspline<const N: usize, V: Validator<N>>(
-    path: &mut Vec<SRobotQ<N>>,
+pub(crate) fn smooth_bspline<const N: usize, V: Validator<N, (), f64>>(
+    path: &mut Vec<SRobotQ<N, f64>>,
     validator: &V,
     ctx: &V::Context<'_>,
     resolution: f64,
     max_steps: usize,
-    midpoint_interpolation: f32,
+    midpoint_interpolation: f64,
     min_change: f64,
 ) {
     if path.len() < 3 {
@@ -219,7 +219,7 @@ pub(crate) fn smooth_bspline<const N: usize, V: Validator<N>>(
             let temp_2 = curr + (next - curr) * t;
             let candidate = (temp_1 + temp_2) * 0.5;
 
-            if curr.distance(&candidate) as f64 > min_change
+            if curr.distance(&candidate) > min_change
                 && validate_edge(&prev, &candidate, resolution, validator, ctx).is_ok()
                 && validate_edge(&candidate, &next, resolution, validator, ctx).is_ok()
             {
@@ -236,7 +236,7 @@ pub(crate) fn smooth_bspline<const N: usize, V: Validator<N>>(
     }
 }
 
-fn backtrack_path<const N: usize>(tree: &RrtTree<N>, idx: usize) -> Vec<SRobotQ<N>> {
+fn backtrack_path<const N: usize>(tree: &RrtTree<N>, idx: usize) -> Vec<SRobotQ<N, f64>> {
     let mut path = Vec::new();
     let mut current = idx;
     loop {
@@ -257,7 +257,7 @@ fn reconstruct<const N: usize>(
     tree_b: &RrtTree<N>,
     idx_b: usize,
     a_is_start: bool,
-) -> Vec<SRobotQ<N>> {
+) -> Vec<SRobotQ<N, f64>> {
     let path_a = backtrack_path(tree_a, idx_a);
     let path_b = backtrack_path(tree_b, idx_b);
 
@@ -272,14 +272,14 @@ fn reconstruct<const N: usize>(
     }
 }
 
-pub(crate) fn solve<const N: usize, V: Validator<N>, R: DekeRng<N>>(
-    start: &SRobotQ<N>,
-    goal: &SRobotQ<N>,
+pub(crate) fn solve<const N: usize, V: Validator<N, (), f64>, R: DekeRng<N>>(
+    start: &SRobotQ<N, f64>,
+    goal: &SRobotQ<N, f64>,
     validator: &V,
     ctx: &V::Context<'_>,
     settings: &RrtcSettings<N>,
     rng: &mut R,
-) -> (DekeResult<SRobotPath<N>>, RrtDiagnostic) {
+) -> (DekeResult<SRobotPath<N, f64>>, RrtDiagnostic) {
     let timer = std::time::Instant::now();
     let dof_coeffs = {
         let mut c = [0.0f64; N];
@@ -430,10 +430,10 @@ pub(crate) fn solve<const N: usize, V: Validator<N>, R: DekeRng<N>>(
     )
 }
 
-fn extend_and_connect<const N: usize, V: Validator<N>>(
+fn extend_and_connect<const N: usize, V: Validator<N, (), f64>>(
     tree_a: &mut RrtTree<N>,
     tree_b: &mut RrtTree<N>,
-    q_rand: &SRobotQ<N>,
+    q_rand: &SRobotQ<N, f64>,
     validator: &V,
     ctx: &V::Context<'_>,
     settings: &RrtcSettings<N>,

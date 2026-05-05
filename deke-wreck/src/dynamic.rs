@@ -73,7 +73,7 @@ impl DynamicWreckValidator {
                 })?;
                 let ctx = WreckValidatorContext::new(environment)
                     .with_self_collisions(self_collisions);
-                v.validate(SRobotQ(*arr), &ctx)
+                <WreckValidator<_, BoxFK<_>> as Validator<_, (), f32>>::validate(v, SRobotQ::<_, f32>(*arr), &ctx)
             }
             Self::J2(v) => {
                 let arr: &[f32; 2] = q.try_into().map_err(|_| DekeError::ShapeMismatch {
@@ -82,7 +82,7 @@ impl DynamicWreckValidator {
                 })?;
                 let ctx = WreckValidatorContext::new(environment)
                     .with_self_collisions(self_collisions);
-                v.validate(SRobotQ(*arr), &ctx)
+                <WreckValidator<_, BoxFK<_>> as Validator<_, (), f32>>::validate(v, SRobotQ::<_, f32>(*arr), &ctx)
             }
             Self::J3(v) => {
                 let arr: &[f32; 3] = q.try_into().map_err(|_| DekeError::ShapeMismatch {
@@ -91,7 +91,7 @@ impl DynamicWreckValidator {
                 })?;
                 let ctx = WreckValidatorContext::new(environment)
                     .with_self_collisions(self_collisions);
-                v.validate(SRobotQ(*arr), &ctx)
+                <WreckValidator<_, BoxFK<_>> as Validator<_, (), f32>>::validate(v, SRobotQ::<_, f32>(*arr), &ctx)
             }
             Self::J4(v) => {
                 let arr: &[f32; 4] = q.try_into().map_err(|_| DekeError::ShapeMismatch {
@@ -100,7 +100,7 @@ impl DynamicWreckValidator {
                 })?;
                 let ctx = WreckValidatorContext::new(environment)
                     .with_self_collisions(self_collisions);
-                v.validate(SRobotQ(*arr), &ctx)
+                <WreckValidator<_, BoxFK<_>> as Validator<_, (), f32>>::validate(v, SRobotQ::<_, f32>(*arr), &ctx)
             }
             Self::J5(v) => {
                 let arr: &[f32; 5] = q.try_into().map_err(|_| DekeError::ShapeMismatch {
@@ -109,7 +109,7 @@ impl DynamicWreckValidator {
                 })?;
                 let ctx = WreckValidatorContext::new(environment)
                     .with_self_collisions(self_collisions);
-                v.validate(SRobotQ(*arr), &ctx)
+                <WreckValidator<_, BoxFK<_>> as Validator<_, (), f32>>::validate(v, SRobotQ::<_, f32>(*arr), &ctx)
             }
             Self::J6(v) => {
                 let arr: &[f32; 6] = q.try_into().map_err(|_| DekeError::ShapeMismatch {
@@ -118,7 +118,7 @@ impl DynamicWreckValidator {
                 })?;
                 let ctx = WreckValidatorContext::new(environment)
                     .with_self_collisions(self_collisions);
-                v.validate(SRobotQ(*arr), &ctx)
+                <WreckValidator<_, BoxFK<_>> as Validator<_, (), f32>>::validate(v, SRobotQ::<_, f32>(*arr), &ctx)
             }
             Self::J7(v) => {
                 let arr: &[f32; 7] = q.try_into().map_err(|_| DekeError::ShapeMismatch {
@@ -127,7 +127,7 @@ impl DynamicWreckValidator {
                 })?;
                 let ctx = WreckValidatorContext::new(environment)
                     .with_self_collisions(self_collisions);
-                v.validate(SRobotQ(*arr), &ctx)
+                <WreckValidator<_, BoxFK<_>> as Validator<_, (), f32>>::validate(v, SRobotQ::<_, f32>(*arr), &ctx)
             }
             Self::J8(v) => {
                 let arr: &[f32; 8] = q.try_into().map_err(|_| DekeError::ShapeMismatch {
@@ -136,7 +136,7 @@ impl DynamicWreckValidator {
                 })?;
                 let ctx = WreckValidatorContext::new(environment)
                     .with_self_collisions(self_collisions);
-                v.validate(SRobotQ(*arr), &ctx)
+                <WreckValidator<_, BoxFK<_>> as Validator<_, (), f32>>::validate(v, SRobotQ::<_, f32>(*arr), &ctx)
             }
         }
     }
@@ -166,7 +166,9 @@ macro_rules! impl_dynamic_wreck {
                     ctx: &Self::Context<'ctx>,
                 ) -> DekeResult<()> {
                     match self {
-                        Self::$variant(v) => v.validate(q, ctx),
+                        Self::$variant(v) => {
+                            <WreckValidator<$n, BoxFK<$n>> as Validator<$n, (), f32>>::validate(v, q, ctx)
+                        }
                         _ => Err(DekeError::ShapeMismatch {
                             expected: self.dof(),
                             found: $n,
@@ -180,12 +182,42 @@ macro_rules! impl_dynamic_wreck {
                     ctx: &Self::Context<'ctx>,
                 ) -> DekeResult<()> {
                     match self {
-                        Self::$variant(v) => v.validate_motion(qs, ctx),
+                        Self::$variant(v) => {
+                            <WreckValidator<$n, BoxFK<$n>> as Validator<$n, (), f32>>::validate_motion(v, qs, ctx)
+                        }
                         _ => Err(DekeError::ShapeMismatch {
                             expected: self.dof(),
                             found: $n,
                         }),
                     }
+                }
+            }
+
+            /// f64 entry point — downcasts to f32 and dispatches to the f32 impl.
+            /// Same trade-off as [`WreckValidator`]'s f64 impl.
+            impl Validator<$n, (), f64> for DynamicWreckValidator {
+                type Context<'ctx> = WreckValidatorContext<'ctx, $n>;
+
+                fn validate<'ctx, E: Into<DekeError>, A: SRobotQLike<$n, E, f64>>(
+                    &self,
+                    q: A,
+                    ctx: &Self::Context<'ctx>,
+                ) -> DekeResult<()> {
+                    let q64 = q.to_srobotq().map_err(Into::into)?;
+                    let q32: SRobotQ<$n, f32> = q64.into();
+                    <Self as Validator<$n, (), f32>>::validate(self, q32, ctx)
+                }
+
+                fn validate_motion<'ctx>(
+                    &self,
+                    qs: &[SRobotQ<$n, f64>],
+                    ctx: &Self::Context<'ctx>,
+                ) -> DekeResult<()> {
+                    for q in qs {
+                        let q32: SRobotQ<$n, f32> = (*q).into();
+                        <Self as Validator<$n, (), f32>>::validate(self, q32, ctx)?;
+                    }
+                    Ok(())
                 }
             }
 

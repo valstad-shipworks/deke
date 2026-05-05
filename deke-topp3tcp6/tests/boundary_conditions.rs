@@ -6,7 +6,7 @@ use deke_types::{DekeError, Retimer, SRobotPath, SRobotQ};
 #[test]
 fn aligned_non_zero_velocity_is_feasible() {
     let fk = common::dh_1dof();
-    let path = SRobotPath::<1>::try_new(vec![
+    let path = SRobotPath::<1, f64>::try_new(vec![
         SRobotQ::from_array([0.0]),
         SRobotQ::from_array([1.0]),
     ])
@@ -40,7 +40,7 @@ fn perpendicular_velocity_rejects() {
     let fk = common::dh_6dof();
     let a = SRobotQ::from_array([0.0, -1.0, 1.2, 0.0, 0.0, 0.0]);
     let b = SRobotQ::from_array([1.0, -1.0, 1.2, 0.0, 0.0, 0.0]);
-    let path = SRobotPath::<6>::try_new(vec![a, b]).unwrap();
+    let path = SRobotPath::<6, f64>::try_new(vec![a, b]).unwrap();
 
     // Path tangent is along joint 0. v_start is along joint 2 — perpendicular.
     let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(1.0, 3.0, 200.0);

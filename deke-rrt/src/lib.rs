@@ -59,15 +59,15 @@ impl<const N: usize> RrtcPlanner<N> {
     }
 }
 
-impl<const N: usize> Planner<N> for RrtcPlanner<N> {
+impl<const N: usize> Planner<N, f64> for RrtcPlanner<N> {
     type Diagnostic = RrtDiagnostic;
     type Config = RrtcSettings<N>;
 
     fn plan<
         E: Into<DekeError>,
-        A: SRobotQLike<N, E>,
-        B: SRobotQLike<N, E>,
-        V: Validator<N>,
+        A: SRobotQLike<N, E, f64>,
+        B: SRobotQLike<N, E, f64>,
+        V: Validator<N, (), f64>,
     >(
         &self,
         config: &Self::Config,
@@ -75,7 +75,7 @@ impl<const N: usize> Planner<N> for RrtcPlanner<N> {
         goal: B,
         validator: &V,
         ctx: &V::Context<'_>,
-    ) -> (DekeResult<SRobotPath<N>>, Self::Diagnostic) {
+    ) -> (DekeResult<SRobotPath<N, f64>>, Self::Diagnostic) {
         let start = match start.to_srobotq().map_err(Into::into) {
             Ok(s) => s,
             Err(e) => return (Err(e), RrtDiagnostic::empty()),
@@ -98,15 +98,15 @@ impl<const N: usize> AorrtcPlanner<N> {
     }
 }
 
-impl<const N: usize> Planner<N> for AorrtcPlanner<N> {
+impl<const N: usize> Planner<N, f64> for AorrtcPlanner<N> {
     type Diagnostic = RrtDiagnostic;
     type Config = AorrtcSettings<N>;
 
     fn plan<
         E: Into<DekeError>,
-        A: SRobotQLike<N, E>,
-        B: SRobotQLike<N, E>,
-        V: Validator<N>,
+        A: SRobotQLike<N, E, f64>,
+        B: SRobotQLike<N, E, f64>,
+        V: Validator<N, (), f64>,
     >(
         &self,
         config: &Self::Config,
@@ -114,7 +114,7 @@ impl<const N: usize> Planner<N> for AorrtcPlanner<N> {
         goal: B,
         validator: &V,
         ctx: &V::Context<'_>,
-    ) -> (DekeResult<SRobotPath<N>>, Self::Diagnostic) {
+    ) -> (DekeResult<SRobotPath<N, f64>>, Self::Diagnostic) {
         let start = match start.to_srobotq().map_err(Into::into) {
             Ok(s) => s,
             Err(e) => return (Err(e), RrtDiagnostic::empty()),
@@ -146,15 +146,15 @@ impl<const N: usize> KrrtcPlanner<N> {
     }
 }
 
-impl<const N: usize> Planner<N> for KrrtcPlanner<N> {
+impl<const N: usize> Planner<N, f64> for KrrtcPlanner<N> {
     type Diagnostic = RrtDiagnostic;
     type Config = KrrtcSettings<N>;
 
     fn plan<
         E: Into<DekeError>,
-        A: SRobotQLike<N, E>,
-        B: SRobotQLike<N, E>,
-        V: Validator<N>,
+        A: SRobotQLike<N, E, f64>,
+        B: SRobotQLike<N, E, f64>,
+        V: Validator<N, (), f64>,
     >(
         &self,
         config: &Self::Config,
@@ -162,7 +162,7 @@ impl<const N: usize> Planner<N> for KrrtcPlanner<N> {
         goal: B,
         validator: &V,
         ctx: &V::Context<'_>,
-    ) -> (DekeResult<SRobotPath<N>>, Self::Diagnostic) {
+    ) -> (DekeResult<SRobotPath<N, f64>>, Self::Diagnostic) {
         let start = match start.to_srobotq().map_err(Into::into) {
             Ok(s) => s,
             Err(e) => return (Err(e), RrtDiagnostic::empty()),

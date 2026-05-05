@@ -15,7 +15,7 @@ fn time_optimal_solution_saturates_some_limit_on_average() {
         SRobotQ::from_array([0.6, -0.7, 0.9, -0.3, 0.1, 0.3]),
         SRobotQ::from_array([0.8, -0.5, 0.7, -0.4, 0.0, 0.4]),
     ];
-    let path = SRobotPath::<6>::try_new(waypoints).unwrap();
+    let path = SRobotPath::<6, f64>::try_new(waypoints).unwrap();
 
     let cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 4.0, 200.0);
     let mut validator = common::wide_validator::<6>();
@@ -47,7 +47,7 @@ fn time_optimal_solution_saturates_some_limit_on_average() {
 #[test]
 fn single_joint_rest_to_rest_utilization_is_high() {
     let fk = common::dh_1dof();
-    let path = SRobotPath::<1>::try_new(vec![
+    let path = SRobotPath::<1, f64>::try_new(vec![
         SRobotQ::from_array([0.0]),
         SRobotQ::from_array([1.0]),
     ])
