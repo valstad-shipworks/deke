@@ -138,6 +138,30 @@ impl<const N: usize, F: FKScalar, FK: FKChain<N, F>> FKChain<N, F> for Transform
         Ok(end)
     }
 
+    fn all_fk(
+        &self,
+        q: &SRobotQ<N, F>,
+    ) -> Result<(AAffine3<F>, [AAffine3<F>; N], AAffine3<F>), Self::Error> {
+        let (inner_base, mut frames, mut end) = self.inner.all_fk(q)?;
+
+        if let Some(pre) = &self.prefix {
+            for f in &mut frames {
+                *f = *pre * *f;
+            }
+            end = *pre * end;
+        }
+        if let Some(suf) = &self.suffix {
+            end = end * *suf;
+        }
+
+        let base = match &self.prefix {
+            Some(p) => *p * inner_base,
+            None => inner_base,
+        };
+
+        Ok((base, frames, end))
+    }
+
     fn joint_axes_positions(
         &self,
         q: &SRobotQ<N, F>,

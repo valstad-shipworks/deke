@@ -105,6 +105,13 @@ where
         self.f32_chain.fk_end(q)
     }
 
+    fn all_fk(
+        &self,
+        q: &SRobotQ<N, f32>,
+    ) -> Result<(AAffine3<f32>, [AAffine3<f32>; N], AAffine3<f32>), Self::Error> {
+        self.f32_chain.all_fk(q)
+    }
+
     fn joint_axes_positions(
         &self,
         q: &SRobotQ<N, f32>,
@@ -155,6 +162,13 @@ where
 
     fn fk_end(&self, q: &SRobotQ<N, f64>) -> Result<AAffine3<f64>, Self::Error> {
         self.f64_chain.fk_end(q)
+    }
+
+    fn all_fk(
+        &self,
+        q: &SRobotQ<N, f64>,
+    ) -> Result<(AAffine3<f64>, [AAffine3<f64>; N], AAffine3<f64>), Self::Error> {
+        self.f64_chain.all_fk(q)
     }
 
     fn joint_axes_positions(

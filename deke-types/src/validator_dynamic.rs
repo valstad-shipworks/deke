@@ -56,56 +56,56 @@ impl DynamicJointValidator {
                     expected: 1,
                     found: q.len(),
                 })?;
-                v.validate(SRobotQ(*arr), &())
+                <JointValidator<_, f32> as Validator<_, (), f32>>::validate(v, SRobotQ(*arr), &())
             }
             Self::J2(v) => {
                 let arr: &[f32; 2] = q.try_into().map_err(|_| DekeError::ShapeMismatch {
                     expected: 2,
                     found: q.len(),
                 })?;
-                v.validate(SRobotQ(*arr), &())
+                <JointValidator<_, f32> as Validator<_, (), f32>>::validate(v, SRobotQ(*arr), &())
             }
             Self::J3(v) => {
                 let arr: &[f32; 3] = q.try_into().map_err(|_| DekeError::ShapeMismatch {
                     expected: 3,
                     found: q.len(),
                 })?;
-                v.validate(SRobotQ(*arr), &())
+                <JointValidator<_, f32> as Validator<_, (), f32>>::validate(v, SRobotQ(*arr), &())
             }
             Self::J4(v) => {
                 let arr: &[f32; 4] = q.try_into().map_err(|_| DekeError::ShapeMismatch {
                     expected: 4,
                     found: q.len(),
                 })?;
-                v.validate(SRobotQ(*arr), &())
+                <JointValidator<_, f32> as Validator<_, (), f32>>::validate(v, SRobotQ(*arr), &())
             }
             Self::J5(v) => {
                 let arr: &[f32; 5] = q.try_into().map_err(|_| DekeError::ShapeMismatch {
                     expected: 5,
                     found: q.len(),
                 })?;
-                v.validate(SRobotQ(*arr), &())
+                <JointValidator<_, f32> as Validator<_, (), f32>>::validate(v, SRobotQ(*arr), &())
             }
             Self::J6(v) => {
                 let arr: &[f32; 6] = q.try_into().map_err(|_| DekeError::ShapeMismatch {
                     expected: 6,
                     found: q.len(),
                 })?;
-                v.validate(SRobotQ(*arr), &())
+                <JointValidator<_, f32> as Validator<_, (), f32>>::validate(v, SRobotQ(*arr), &())
             }
             Self::J7(v) => {
                 let arr: &[f32; 7] = q.try_into().map_err(|_| DekeError::ShapeMismatch {
                     expected: 7,
                     found: q.len(),
                 })?;
-                v.validate(SRobotQ(*arr), &())
+                <JointValidator<_, f32> as Validator<_, (), f32>>::validate(v, SRobotQ(*arr), &())
             }
             Self::J8(v) => {
                 let arr: &[f32; 8] = q.try_into().map_err(|_| DekeError::ShapeMismatch {
                     expected: 8,
                     found: q.len(),
                 })?;
-                v.validate(SRobotQ(*arr), &())
+                <JointValidator<_, f32> as Validator<_, (), f32>>::validate(v, SRobotQ(*arr), &())
             }
         }
     }

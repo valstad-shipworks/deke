@@ -815,14 +815,9 @@ impl<const N: usize, F: FKScalar> FKChain<N, F> for URDFChain<N, F> {
             );
             i += 1;
         }
-
-        if N > 0 && !self.suffix_identity {
-            self.apply_suffix(&mut c0, &mut c1, &mut c2, &mut t);
-            out[N - 1] = AAffine3::<F>::from_mat3_translation(
-                AMat3::<F>::from_cols(c0, c1, c2),
-                t,
-            );
-        }
+        // The trailing fixed-joint suffix is part of the EE frame, not the
+        // last revolute link's frame; it is applied only in `fk_end` /
+        // `all_fk`.
         Ok(out)
     }
 
@@ -845,6 +840,39 @@ impl<const N: usize, F: FKScalar> FKChain<N, F> for URDFChain<N, F> {
             AMat3::<F>::from_cols(c0, c1, c2),
             t,
         ))
+    }
+
+    fn all_fk(
+        &self,
+        q: &SRobotQ<N, F>,
+    ) -> Result<(AAffine3<F>, [AAffine3<F>; N], AAffine3<F>), Self::Error> {
+        check_finite::<N, F>(q)?;
+        let mut frames = [AAffine3::<F>::IDENTITY; N];
+        let (mut c0, mut c1, mut c2, mut t) = self.initial_frame();
+
+        let mut i = 0;
+        while i < N {
+            let (st, ct) = q.0[i].sin_cos();
+            self.accumulate_joint(i, st, ct, &mut c0, &mut c1, &mut c2, &mut t);
+            frames[i] = AAffine3::<F>::from_mat3_translation(
+                AMat3::<F>::from_cols(c0, c1, c2),
+                t,
+            );
+            i += 1;
+        }
+
+        // The suffix only contributes to the EE frame; apply it to a
+        // separate copy of the post-loop accumulator so per-link frames
+        // remain untouched.
+        if !self.suffix_identity {
+            self.apply_suffix(&mut c0, &mut c1, &mut c2, &mut t);
+        }
+        let end = AAffine3::<F>::from_mat3_translation(
+            AMat3::<F>::from_cols(c0, c1, c2),
+            t,
+        );
+
+        Ok((self.base_tf(), frames, end))
     }
 
     fn joint_axes_positions(

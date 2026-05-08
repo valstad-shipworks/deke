@@ -259,6 +259,22 @@ impl<const N: usize, F: FKScalar> FKChain<N, F> for DHChain<N, F> {
         ))
     }
 
+    fn all_fk(
+        &self,
+        q: &SRobotQ<N, F>,
+    ) -> Result<(AAffine3<F>, [AAffine3<F>; N], AAffine3<F>), Self::Error> {
+        let frames = self.fk(q)?;
+        // DH has no tool/suffix offset, so the last accumulated frame *is*
+        // the EE frame. For N == 0 there is nothing to accumulate; the EE
+        // is identity.
+        let end = if N > 0 {
+            frames[N - 1]
+        } else {
+            AAffine3::<F>::IDENTITY
+        };
+        Ok((self.base_tf(), frames, end))
+    }
+
     fn joint_axes_positions(
         &self,
         q: &SRobotQ<N, F>,

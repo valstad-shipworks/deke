@@ -432,6 +432,21 @@ impl<const N: usize, F: FKScalar> FKChain<N, F> for HPChain<N, F> {
         Ok(AAffine3::<F>::from_mat3_translation(acc_m, acc_t))
     }
 
+    fn all_fk(
+        &self,
+        q: &SRobotQ<N, F>,
+    ) -> Result<(AAffine3<F>, [AAffine3<F>; N], AAffine3<F>), Self::Error> {
+        let frames = self.fk(q)?;
+        // HP has no tool/suffix offset; the last accumulated frame is the
+        // EE frame.
+        let end = if N > 0 {
+            frames[N - 1]
+        } else {
+            AAffine3::<F>::IDENTITY
+        };
+        Ok((self.base_tf(), frames, end))
+    }
+
     fn joint_axes_positions(
         &self,
         q: &SRobotQ<N, F>,

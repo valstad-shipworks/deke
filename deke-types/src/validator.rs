@@ -143,6 +143,54 @@ pub struct ValidatorOr<A, B>(pub A, pub B);
 #[derive(Debug, Clone)]
 pub struct ValidatorNot<A>(pub A);
 
+impl<A, B> ValidatorAnd<A, B> {
+    /// Construct an AND combinator after a compile-time assertion that
+    /// `A` and `B` share the `Validator<N, R, F>` signature passed via
+    /// turbofish or inferred at the call site.
+    ///
+    /// Direct tuple-struct construction (`ValidatorAnd(a, b)`) skips this
+    /// check and is what the [`combine_validators!`] macro emits — both
+    /// forms produce the same value, and the trait impl below only fires
+    /// for `(N, R, F)` triples both members support, so callers that
+    /// dispatch through the trait are safe either way.
+    ///
+    /// [`combine_validators!`]: deke-cricket
+    pub fn new<const N: usize, R: ValidatorRet, F: FKScalar>(a: A, b: B) -> Self
+    where
+        A: Validator<N, R, F>,
+        B: Validator<N, R, F>,
+    {
+        Self(a, b)
+    }
+}
+
+impl<A, B> ValidatorOr<A, B> {
+    /// See [`ValidatorAnd::new`].
+    pub fn new<const N: usize, R: ValidatorRet, F: FKScalar>(a: A, b: B) -> Self
+    where
+        A: Validator<N, R, F>,
+        B: Validator<N, R, F>,
+    {
+        Self(a, b)
+    }
+}
+
+impl<A> ValidatorNot<A> {
+    /// Construct a NOT combinator after a compile-time assertion that `A`
+    /// implements `Validator<N, (), F>`. `Not` is restricted to the unit
+    /// return type because inverting a scalar score isn't well-defined.
+    pub fn new<const N: usize, F: FKScalar>(a: A) -> Self
+    where
+        A: Validator<N, (), F>,
+    {
+        Self(a)
+    }
+}
+
+/// Blanket impls below cover every `(N, R, F)` triple that **both** member
+/// validators implement: a single generic `impl` over `R` and `F` (and `N`
+/// since validators are const-generic over DOF) means monomorphization
+/// fires the impl for every shared signature without manual enumeration.
 impl<const N: usize, F: FKScalar, R: ValidatorRet, A, B> Validator<N, R, F>
     for ValidatorAnd<A, B>
 where
@@ -317,6 +365,67 @@ impl<const N: usize, F: FKScalar> Validator<N, (), F> for JointValidator<N, F> {
     ) -> DekeResult<()> {
         for q in qs {
             self.validate(*q, _ctx)?;
+        }
+        Ok(())
+    }
+}
+
+/// Cross-precision entry point: f32-storage `JointValidator` accepting f64
+/// inputs. The input is narrowed to f32 at the boundary so the same limits
+/// govern both precisions; comparison is done in storage precision.
+impl<const N: usize> Validator<N, (), f64> for JointValidator<N, f32> {
+    type Context<'ctx> = ();
+
+    #[inline]
+    fn validate<'ctx, E: Into<DekeError>, Q: SRobotQLike<N, E, f64>>(
+        &self,
+        q: Q,
+        ctx: &Self::Context<'ctx>,
+    ) -> DekeResult<()> {
+        let q64 = q.to_srobotq().map_err(Into::into)?;
+        let q32: SRobotQ<N, f32> = q64.into();
+        <Self as Validator<N, (), f32>>::validate(self, q32, ctx)
+    }
+
+    #[inline]
+    fn validate_motion<'ctx>(
+        &self,
+        qs: &[SRobotQ<N, f64>],
+        ctx: &Self::Context<'ctx>,
+    ) -> DekeResult<()> {
+        for q in qs {
+            let q32: SRobotQ<N, f32> = (*q).into();
+            <Self as Validator<N, (), f32>>::validate(self, q32, ctx)?;
+        }
+        Ok(())
+    }
+}
+
+/// Cross-precision entry point: f64-storage `JointValidator` accepting f32
+/// inputs. The f32 input is widened to f64 (lossless) before comparison.
+impl<const N: usize> Validator<N, (), f32> for JointValidator<N, f64> {
+    type Context<'ctx> = ();
+
+    #[inline]
+    fn validate<'ctx, E: Into<DekeError>, Q: SRobotQLike<N, E, f32>>(
+        &self,
+        q: Q,
+        ctx: &Self::Context<'ctx>,
+    ) -> DekeResult<()> {
+        let q32 = q.to_srobotq().map_err(Into::into)?;
+        let q64: SRobotQ<N, f64> = q32.into();
+        <Self as Validator<N, (), f64>>::validate(self, q64, ctx)
+    }
+
+    #[inline]
+    fn validate_motion<'ctx>(
+        &self,
+        qs: &[SRobotQ<N, f32>],
+        ctx: &Self::Context<'ctx>,
+    ) -> DekeResult<()> {
+        for q in qs {
+            let q64: SRobotQ<N, f64> = (*q).into();
+            <Self as Validator<N, (), f64>>::validate(self, q64, ctx)?;
         }
         Ok(())
     }

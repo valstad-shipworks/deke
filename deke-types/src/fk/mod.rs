@@ -113,6 +113,30 @@ pub trait FKChain<const N: usize, F: FKScalar = f32>: Clone + Send + Sync {
 
     fn fk(&self, q: &SRobotQ<N, F>) -> Result<[AAffine3<F>; N], Self::Error>;
     fn fk_end(&self, q: &SRobotQ<N, F>) -> Result<AAffine3<F>, Self::Error>;
+
+    /// Compute base transform, per-link frames, and the end-effector frame
+    /// in one call. Consumers that need all three (collision validators,
+    /// visualizers) should prefer this over invoking [`base_tf`], [`fk`],
+    /// and [`fk_end`] separately.
+    ///
+    /// The default implementation simply chains the three calls; chains
+    /// where the work overlaps (e.g. `fk_end` repeats the joint
+    /// accumulation done by `fk`, or wrappers like
+    /// [`TransformedFK`]/[`PrismaticFK`] that compose an inner chain)
+    /// override this to share the inner computation.
+    ///
+    /// [`base_tf`]: FKChain::base_tf
+    /// [`fk`]: FKChain::fk
+    /// [`fk_end`]: FKChain::fk_end
+    fn all_fk(
+        &self,
+        q: &SRobotQ<N, F>,
+    ) -> Result<(AAffine3<F>, [AAffine3<F>; N], AAffine3<F>), Self::Error> {
+        let base = self.base_tf();
+        let frames = self.fk(q)?;
+        let end = self.fk_end(q)?;
+        Ok((base, frames, end))
+    }
     /// Returns joint rotation axes and axis-origin positions in world frame at
     /// configuration `q`, plus the end-effector position.
     fn joint_axes_positions(

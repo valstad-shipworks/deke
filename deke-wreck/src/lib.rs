@@ -47,6 +47,35 @@ impl BodyScratch {
 
 thread_local! {
     static SCRATCH_BODIES: RefCell<Vec<BodyScratch>> = const { RefCell::new(Vec::new()) };
+    static SCRATCH_EXTRAS: RefCell<Vec<Collider>> = const { RefCell::new(Vec::new()) };
+}
+
+/// World-frame transform of the body identified by `mounted_on` using the
+/// same index convention as [`CollisionFilter::allows`]: `0..N` link, `N`
+/// EE, `N + 1` base. Returns `None` for any other index (e.g. the static
+/// world body), in which case the collider is taken as already in the
+/// world frame.
+///
+/// The EE uses `ee_tf` (from [`FKChain::fk_end`]) rather than
+/// `transforms[N - 1]`: chains with a tool/suffix offset (e.g. trailing
+/// fixed joints in a URDF, [`deke_types::TransformedFK`] with a suffix)
+/// place the EE at a frame distinct from the last joint.
+#[inline]
+fn mounted_tf<const N: usize>(
+    mounted_on: usize,
+    transforms: &[Affine3A; N],
+    ee_tf: Affine3A,
+    base_tf: Affine3A,
+) -> Option<Affine3A> {
+    if mounted_on < N {
+        Some(transforms[mounted_on])
+    } else if mounted_on == N {
+        Some(ee_tf)
+    } else if mounted_on == N + 1 {
+        Some(base_tf)
+    } else {
+        None
+    }
 }
 
 /// Iterator over a body's sub-colliders, yielding either the scratch (moved)
@@ -169,12 +198,16 @@ pub struct Attachment<const N: usize> {
     pub filter: CollisionFilter<N>,
     /// Optional owning body index. When this `Attachment` is used as an
     /// *extra* (`WreckValidatorContext::extra_attachments`), the validator
-    /// skips the body whose index equals `mounted_on` so the extra can't
-    /// collide with the body it's physically bolted to (e.g. a payload
-    /// mounted on the EE should not report collision against the EE or its
-    /// own gripper). Has no effect for attachments installed directly on a
+    /// (1) skips the body whose index equals `mounted_on` so the extra
+    /// can't collide with the body it's physically bolted to (e.g. a
+    /// payload mounted on the EE should not report collision against the
+    /// EE or its own gripper), and (2) interprets [`Attachment::collision`]
+    /// as living in that body's local frame and applies the body's
+    /// world-frame FK transform before checking collisions. When
+    /// `mounted_on` is `None`, the collider is taken as already in the
+    /// world frame. Has no effect for attachments installed directly on a
     /// [`CollisionBody`] (that body already skips its own sub-colliders by
-    /// construction).
+    /// construction and transforms its attachments via FK).
     ///
     /// Index convention matches [`CollisionFilter::allows`]: `0..N` links,
     /// `N` EE, `N + 1` base. Use [`ee_idx`] / [`base_idx`] for clarity.
@@ -344,10 +377,10 @@ impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
         q: &SRobotQ<N>,
         ctx: &WreckValidatorContext<'_, N>,
     ) -> DekeResult<()> {
-        let transforms = self.fk.fk(q).map_err(Into::into)?;
-        let base_tf = self.fk.base_tf();
+        let (base_tf, transforms, ee_tf) = self.fk.all_fk(q).map_err(Into::into)?;
 
         SCRATCH_BODIES.with_borrow_mut(|scratch| {
+            SCRATCH_EXTRAS.with_borrow_mut(|extras_scratch| {
             if scratch.len() < N + 2 {
                 scratch.resize_with(N + 2, BodyScratch::default);
             }
@@ -355,15 +388,25 @@ impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
             for i in 0..N {
                 scratch[i].refresh(&self.links[i], transforms[i]);
             }
-            scratch[N].refresh(&self.ee, transforms[N - 1]);
+            scratch[N].refresh(&self.ee, ee_tf);
             if let Some(base) = &self.base {
                 scratch[N + 1].refresh(base, base_tf);
             }
 
-            for i in 0..N {
-                check_body_env(&self.links[i], Some(&scratch[i]), i, ctx)?;
+            extras_scratch.resize_with(ctx.extra_attachments.len(), Collider::default);
+            for (dst, src) in extras_scratch.iter_mut().zip(ctx.extra_attachments.iter()) {
+                dst.clone_from(&src.collision);
+                if let Some(idx) = src.mounted_on {
+                    if let Some(tf) = mounted_tf::<N>(idx, &transforms, ee_tf, base_tf) {
+                        dst.transform(tf);
+                    }
+                }
             }
-            check_body_env(&self.ee, Some(&scratch[N]), N, ctx)?;
+
+            for i in 0..N {
+                check_body_env(&self.links[i], Some(&scratch[i]), i, ctx, extras_scratch)?;
+            }
+            check_body_env(&self.ee, Some(&scratch[N]), N, ctx, extras_scratch)?;
 
             if ctx.self_collisions {
                 for i in 0..N {
@@ -434,6 +477,7 @@ impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
             }
 
             Ok(())
+            })
         })
     }
 }
@@ -444,6 +488,7 @@ fn check_body_env<const N: usize>(
     scratch: Option<&BodyScratch>,
     body_idx: usize,
     ctx: &WreckValidatorContext<'_, N>,
+    extras_world: &[Collider],
 ) -> DekeResult<()> {
     for (collider, token, filter) in sub_colliders(body, scratch) {
         if !filter.obstacles {
@@ -452,14 +497,14 @@ fn check_body_env<const N: usize>(
         if collider.collides_other(ctx.environment) {
             return Err(DekeError::EnvironmentCollision(token, token));
         }
-        for extra in ctx.extra_attachments {
+        for (extra, extra_world) in ctx.extra_attachments.iter().zip(extras_world.iter()) {
             if matches!(extra.mounted_on, Some(idx) if idx == body_idx) {
                 continue;
             }
             if !extra.filter.allows(body_idx) {
                 continue;
             }
-            if collider.collides_other(&extra.collision) {
+            if collider.collides_other(extra_world) {
                 return Err(DekeError::EnvironmentCollision(token, extra.token));
             }
         }
@@ -532,8 +577,7 @@ impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
         &self,
         q: &SRobotQ<N>,
     ) -> DekeResult<Vec<SelfCollisionDetail>> {
-        let transforms = self.fk.fk(q).map_err(Into::into)?;
-        let base_tf = self.fk.base_tf();
+        let (base_tf, transforms, ee_tf) = self.fk.all_fk(q).map_err(Into::into)?;
 
         SCRATCH_BODIES.with_borrow_mut(|scratch| {
             if scratch.len() < N + 2 {
@@ -542,7 +586,7 @@ impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
             for i in 0..N {
                 scratch[i].refresh(&self.links[i], transforms[i]);
             }
-            scratch[N].refresh(&self.ee, transforms[N - 1]);
+            scratch[N].refresh(&self.ee, ee_tf);
             if let Some(base) = &self.base {
                 scratch[N + 1].refresh(base, base_tf);
             }
@@ -691,7 +735,7 @@ impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
     /// the world frame. Base is placed at [`FKChain::base_tf`]; the world
     /// body is passed through without transformation.
     pub fn debug_bodies(&self, q: &SRobotQ<N>) -> DekeResult<Collider> {
-        let transforms = self.fk.fk(q).map_err(Into::into)?;
+        let (base_tf, transforms, ee_tf) = self.fk.all_fk(q).map_err(Into::into)?;
         let mut out = Collider::default();
 
         let mut push_body = |body: &CollisionBody<N>, tf: Option<Affine3A>| {
@@ -711,14 +755,13 @@ impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
             }
         };
 
-        let base_tf = self.fk.base_tf();
         if let Some(base) = &self.base {
             push_body(base, Some(base_tf));
         }
         for i in 0..N {
             push_body(&self.links[i], Some(transforms[i]));
         }
-        push_body(&self.ee, Some(transforms[N - 1]));
+        push_body(&self.ee, Some(ee_tf));
         if let Some(world) = &self.world {
             push_body(world, None);
         }

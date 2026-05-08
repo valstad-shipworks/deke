@@ -103,6 +103,32 @@ impl<const M: usize, const N: usize, F: FKScalar, FK: FKChain<N, F>> FKChain<M, 
         ))
     }
 
+    fn all_fk(
+        &self,
+        q: &SRobotQ<M, F>,
+    ) -> Result<(AAffine3<F>, [AAffine3<F>; M], AAffine3<F>), Self::Error> {
+        let (q_p, inner_q) = self.split_q(q);
+        let offset = self.axis * q_p;
+        let (inner_base, inner_frames, inner_end) = self.inner.all_fk(&inner_q)?;
+
+        let mut frames = [AAffine3::<F>::IDENTITY; M];
+        frames[0] = AAffine3::<F>::from_translation(offset);
+        for i in 0..N {
+            let f = inner_frames[i];
+            frames[i + 1] = AAffine3::<F>::from_mat3_translation(
+                f.matrix3(),
+                f.translation() + offset,
+            );
+        }
+
+        let end = AAffine3::<F>::from_mat3_translation(
+            inner_end.matrix3(),
+            inner_end.translation() + offset,
+        );
+
+        Ok((inner_base, frames, end))
+    }
+
     fn joint_axes_positions(
         &self,
         q: &SRobotQ<M, F>,

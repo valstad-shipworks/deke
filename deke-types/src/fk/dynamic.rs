@@ -127,6 +127,16 @@ macro_rules! dynamic_fk {
                     }
                 }
 
+                fn all_fk(&self, q: &SRobotQ<$n, f32>) -> Result<(Affine3A, [Affine3A; $n], Affine3A), Self::Error> {
+                    match self {
+                        Self::$variant(chain) => FKChain::<$n, f32>::all_fk(chain, q).map_err(Into::into),
+                        _ => Err(DekeError::ShapeMismatch {
+                            expected: self.dof(),
+                            found: $n,
+                        }),
+                    }
+                }
+
                 fn joint_axes_positions(&self, q: &SRobotQ<$n, f32>) -> Result<([Vec3A; $n], [Vec3A; $n], Vec3A), Self::Error> {
                     match self {
                         Self::$variant(chain) => FKChain::<$n, f32>::joint_axes_positions(chain, q).map_err(Into::into),
@@ -173,6 +183,10 @@ trait ErasedFK<const N: usize, F: FKScalar>: Send + Sync {
     fn base_tf(&self) -> super::AAffine3<F>;
     fn fk(&self, q: &SRobotQ<N, F>) -> Result<[super::AAffine3<F>; N], DekeError>;
     fn fk_end(&self, q: &SRobotQ<N, F>) -> Result<super::AAffine3<F>, DekeError>;
+    fn all_fk(
+        &self,
+        q: &SRobotQ<N, F>,
+    ) -> Result<(super::AAffine3<F>, [super::AAffine3<F>; N], super::AAffine3<F>), DekeError>;
     fn joint_axes_positions(
         &self,
         q: &SRobotQ<N, F>,
@@ -191,6 +205,13 @@ impl<const N: usize, F: FKScalar, FK: FKChain<N, F> + 'static> ErasedFK<N, F> fo
 
     fn fk_end(&self, q: &SRobotQ<N, F>) -> Result<super::AAffine3<F>, DekeError> {
         FKChain::fk_end(self, q).map_err(Into::into)
+    }
+
+    fn all_fk(
+        &self,
+        q: &SRobotQ<N, F>,
+    ) -> Result<(super::AAffine3<F>, [super::AAffine3<F>; N], super::AAffine3<F>), DekeError> {
+        FKChain::all_fk(self, q).map_err(Into::into)
     }
 
     fn joint_axes_positions(
@@ -232,6 +253,13 @@ impl<const N: usize, F: FKScalar> FKChain<N, F> for BoxFK<N, F> {
 
     fn fk_end(&self, q: &SRobotQ<N, F>) -> Result<super::AAffine3<F>, DekeError> {
         self.0.fk_end(q)
+    }
+
+    fn all_fk(
+        &self,
+        q: &SRobotQ<N, F>,
+    ) -> Result<(super::AAffine3<F>, [super::AAffine3<F>; N], super::AAffine3<F>), DekeError> {
+        self.0.all_fk(q)
     }
 
     fn joint_axes_positions(
