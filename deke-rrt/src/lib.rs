@@ -9,6 +9,9 @@ mod rrtc;
 pub mod scurve;
 mod tree;
 
+#[cfg(feature = "valuable")]
+mod valuable_impls;
+
 pub use aorrtc::AorrtcSettings;
 pub use krrtc::KrrtcSettings;
 pub use randomizer::{DekeRand, DekeRng, HaltonRand, RandomizerType};

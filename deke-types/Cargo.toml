@@ -7,12 +7,17 @@ authors = ["Bowan Foryt <bowan@valstad.com>"]
 description = "Basse shared types for the Deke project."
 repository = "https://github.com/valstad-shipworks/deke"
 
+[features]
+default = []
+valuable = ["dep:valuable", "glam-traits-ext/Valuable"]
+
 [dependencies]
 approx = "0.5.1"
 const_soft_float = "0.1.4"
 glam = "0.32.1"
-glam-traits-ext = { version = "0.32.2", features = ["approx"] }
+glam-traits-ext = { version = "0.32.3", features = ["approx"] }
 ndarray = {version = "0.17.2", features = ["approx"]}
 num-traits = "0.2.19"
 thiserror = "2.0.18"
 wide = "1.2.0"
+valuable = { version = "0.1", default-features = false, features = ["alloc"], optional = true }

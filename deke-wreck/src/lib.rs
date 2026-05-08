@@ -1,5 +1,8 @@
 mod dynamic;
 
+#[cfg(feature = "valuable")]
+mod valuable_impls;
+
 use std::cell::RefCell;
 
 pub use dynamic::DynamicWreckValidator;

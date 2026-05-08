@@ -22,6 +22,9 @@ pub mod path_derivatives;
 pub mod resample;
 pub mod retimer;
 
+#[cfg(feature = "valuable")]
+mod valuable_impls;
+
 pub use constraints::{
     BoundaryConditions, DensificationOptions, JointLimits, SolverOptions, TcpLimits,
     Topp3Tcp6Constraints,

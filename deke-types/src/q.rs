@@ -954,3 +954,27 @@ const _: () = {
         assert_srobotq_like::<N, DekeError, f64, &[f64]>();
     }
 };
+
+#[cfg(feature = "valuable")]
+mod valuable_impl {
+    use super::SRobotQ;
+    use ::valuable::{Slice, Valuable, Value, Visit};
+
+    macro_rules! impl_valuable {
+        ($f:ty, $variant:ident) => {
+            impl<const N: usize> Valuable for SRobotQ<N, $f> {
+                #[inline]
+                fn as_value(&self) -> Value<'_> {
+                    Value::Listable(&self.0)
+                }
+                #[inline]
+                fn visit(&self, visit: &mut dyn Visit) {
+                    visit.visit_primitive_slice(Slice::$variant(&self.0));
+                }
+            }
+        };
+    }
+
+    impl_valuable!(f32, F32);
+    impl_valuable!(f64, F64);
+}

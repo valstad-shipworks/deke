@@ -478,6 +478,46 @@ impl<const N: usize> TryFrom<RobotPath<f32>> for SRobotPath<N, f64> {
     }
 }
 
+#[cfg(feature = "valuable")]
+mod valuable_impl {
+    use super::SRobotPath;
+    use ::valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
+
+    const FIELDS: &[NamedField<'static>] = &[
+        NamedField::new("first"),
+        NamedField::new("last"),
+        NamedField::new("waypoints"),
+    ];
+
+    macro_rules! impl_valuable {
+        ($f:ty) => {
+            impl<const N: usize> Valuable for SRobotPath<N, $f> {
+                #[inline]
+                fn as_value(&self) -> Value<'_> {
+                    Value::Structable(self)
+                }
+                fn visit(&self, visit: &mut dyn Visit) {
+                    let values = [
+                        self.first.as_value(),
+                        self.last.as_value(),
+                        self.waypoints.as_value(),
+                    ];
+                    visit.visit_named_fields(&NamedValues::new(FIELDS, &values));
+                }
+            }
+
+            impl<const N: usize> Structable for SRobotPath<N, $f> {
+                fn definition(&self) -> StructDef<'_> {
+                    StructDef::new_static("SRobotPath", Fields::Named(FIELDS))
+                }
+            }
+        };
+    }
+
+    impl_valuable!(f32);
+    impl_valuable!(f64);
+}
+
 fn srdp_mark<const N: usize, F: Float>(
     pts: &[SRobotQ<N, F>],
     start: usize,
