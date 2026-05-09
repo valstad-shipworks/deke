@@ -1,8 +1,8 @@
 use deke_types::{DekeError, DekeResult, SRobotPath, SRobotQ, Validator};
 
-use crate::RrtDiagnostic;
 use crate::randomizer::{DekeRng, RandomizerType};
 use crate::tree::RrtTree;
+use crate::{ExtensionStats, RrtDiagnostic, RrtTermination};
 
 #[derive(Debug, Clone, Copy)]
 pub struct RrtcSettings<const N: usize> {
@@ -118,6 +118,26 @@ pub(crate) fn validate_edge<const N: usize, V: Validator<N, (), f64>>(
         points.push(*from + (*to - *from) * t);
     }
     validator.validate_motion(&points, ctx)
+}
+
+/// Same as [`validate_edge`] but increments the stats counters. The wrappers
+/// in `aorrtc` and `krrtc` use this when running the main extend/connect
+/// loop; smoothing passes call the unwrapped [`validate_edge`] so refinement
+/// work isn't conflated with planning failures.
+pub(crate) fn validate_edge_stats<const N: usize, V: Validator<N, (), f64>>(
+    from: &SRobotQ<N, f64>,
+    to: &SRobotQ<N, f64>,
+    resolution: f64,
+    validator: &V,
+    ctx: &V::Context<'_>,
+    stats: &mut ExtensionStats,
+) -> DekeResult<()> {
+    stats.edge_validations += 1;
+    let r = validate_edge(from, to, resolution, validator, ctx);
+    if r.is_err() {
+        stats.edge_validation_failures += 1;
+    }
+    r
 }
 
 pub(crate) fn shortcut<const N: usize, V: Validator<N, (), f64>>(
@@ -289,7 +309,10 @@ pub(crate) fn solve<const N: usize, V: Validator<N, (), f64>, R: DekeRng<N>>(
         c
     };
 
+    let mut stats = ExtensionStats::default();
+    let mut closest_approach = f64::INFINITY;
     let direct_dist = weighted_distance(start, goal, &dof_coeffs);
+
     if direct_dist < 1e-10 {
         return (
             Ok(SRobotPath::from_two(*start, *start)),
@@ -299,10 +322,16 @@ pub(crate) fn solve<const N: usize, V: Validator<N, (), f64>, R: DekeRng<N>>(
                 goal_tree_size: 1,
                 path_cost: 0.0,
                 elapsed_ns: timer.elapsed().as_nanos(),
+                termination: RrtTermination::DegenerateStartGoal,
+                extension_stats: stats,
+                c_min: direct_dist,
+                closest_approach: 0.0,
+                anytime: None,
             },
         );
     }
 
+    stats.edge_validations += 1;
     if validate_edge(start, goal, settings.resolution, validator, ctx).is_ok() {
         return (
             Ok(SRobotPath::from_two(*start, *goal)),
@@ -312,8 +341,15 @@ pub(crate) fn solve<const N: usize, V: Validator<N, (), f64>, R: DekeRng<N>>(
                 goal_tree_size: 1,
                 path_cost: direct_dist,
                 elapsed_ns: timer.elapsed().as_nanos(),
+                termination: RrtTermination::DirectConnection,
+                extension_stats: stats,
+                c_min: direct_dist,
+                closest_approach: 0.0,
+                anytime: None,
             },
         );
+    } else {
+        stats.edge_validation_failures += 1;
     }
 
     let mut start_tree = RrtTree::with_capacity(&dof_coeffs, settings.max_samples / 2);
@@ -323,13 +359,18 @@ pub(crate) fn solve<const N: usize, V: Validator<N, (), f64>, R: DekeRng<N>>(
     goal_tree.add(*goal, 0, settings.radius, 0.0);
 
     let mut extend_start = true;
+    let mut termination = RrtTermination::MaxIterationsExceeded;
+    let mut completed_iterations = settings.max_iterations;
 
     for iteration in 0..settings.max_iterations {
         if start_tree.len() + goal_tree.len() >= settings.max_samples {
+            termination = RrtTermination::MaxSamplesExceeded;
+            completed_iterations = iteration;
             break;
         }
 
         let q_rand = sample_uniform(rng, &settings.joint_lower, &settings.joint_upper);
+        stats.extension_attempts += 1;
 
         let result = if extend_start {
             extend_and_connect(
@@ -340,6 +381,8 @@ pub(crate) fn solve<const N: usize, V: Validator<N, (), f64>, R: DekeRng<N>>(
                 ctx,
                 settings,
                 &dof_coeffs,
+                &mut stats,
+                &mut closest_approach,
             )
         } else {
             extend_and_connect(
@@ -350,6 +393,8 @@ pub(crate) fn solve<const N: usize, V: Validator<N, (), f64>, R: DekeRng<N>>(
                 ctx,
                 settings,
                 &dof_coeffs,
+                &mut stats,
+                &mut closest_approach,
             )
         };
 
@@ -400,6 +445,11 @@ pub(crate) fn solve<const N: usize, V: Validator<N, (), f64>, R: DekeRng<N>>(
                 goal_tree_size: goal_tree.len(),
                 path_cost: cost,
                 elapsed_ns: timer.elapsed().as_nanos(),
+                termination: RrtTermination::Solved,
+                extension_stats: stats,
+                c_min: direct_dist,
+                closest_approach: 0.0,
+                anytime: None,
             };
             return (SRobotPath::try_new(waypoints), diag);
         }
@@ -421,11 +471,16 @@ pub(crate) fn solve<const N: usize, V: Validator<N, (), f64>, R: DekeRng<N>>(
     (
         Err(DekeError::OutOfIterations),
         RrtDiagnostic {
-            iterations: settings.max_iterations,
+            iterations: completed_iterations,
             start_tree_size: start_tree.len(),
             goal_tree_size: goal_tree.len(),
             path_cost: f64::INFINITY,
             elapsed_ns: timer.elapsed().as_nanos(),
+            termination,
+            extension_stats: stats,
+            c_min: direct_dist,
+            closest_approach,
+            anytime: None,
         },
     )
 }
@@ -438,6 +493,8 @@ fn extend_and_connect<const N: usize, V: Validator<N, (), f64>>(
     ctx: &V::Context<'_>,
     settings: &RrtcSettings<N>,
     coeffs: &[f64; N],
+    stats: &mut ExtensionStats,
+    closest_approach: &mut f64,
 ) -> Option<(usize, usize)> {
     let (near_idx, near_dist) = tree_a.nearest(q_rand);
 
@@ -447,13 +504,14 @@ fn extend_and_connect<const N: usize, V: Validator<N, (), f64>>(
             near_idx,
             (r * (1.0 - settings.alpha)).max(settings.min_radius),
         );
+        stats.dynamic_domain_rejections += 1;
         return None;
     }
 
     let q_near = *tree_a.node(near_idx);
     let q_new = steer(&q_near, q_rand, settings.range, coeffs);
 
-    if validate_edge(&q_near, &q_new, settings.resolution, validator, ctx).is_err() {
+    if validate_edge_stats(&q_near, &q_new, settings.resolution, validator, ctx, stats).is_err() {
         if settings.dynamic_domain {
             let r = tree_a.radius(near_idx);
             tree_a.set_radius(
@@ -465,25 +523,33 @@ fn extend_and_connect<const N: usize, V: Validator<N, (), f64>>(
     }
 
     let new_a_idx = tree_a.add(q_new, near_idx, settings.radius, 0.0);
+    stats.successful_extensions += 1;
 
     if settings.dynamic_domain {
         let r = tree_a.radius(near_idx);
         tree_a.set_radius(near_idx, r * (1.0 + settings.alpha));
     }
 
-    let (mut connect_idx, _) = tree_b.nearest(&q_new);
+    let (mut connect_idx, gap_to_other) = tree_b.nearest(&q_new);
+    if gap_to_other < *closest_approach {
+        *closest_approach = gap_to_other;
+    }
+    stats.connect_attempts += 1;
 
     loop {
         let q_connect = *tree_b.node(connect_idx);
         let dist = weighted_distance(&q_connect, &q_new, coeffs);
 
         if dist < 1e-6 {
+            stats.connect_successes += 1;
             return Some((new_a_idx, connect_idx));
         }
 
         let q_step = steer(&q_connect, &q_new, settings.range, coeffs);
 
-        if validate_edge(&q_connect, &q_step, settings.resolution, validator, ctx).is_err() {
+        if validate_edge_stats(&q_connect, &q_step, settings.resolution, validator, ctx, stats)
+            .is_err()
+        {
             return None;
         }
 
@@ -495,6 +561,7 @@ fn extend_and_connect<const N: usize, V: Validator<N, (), f64>>(
         };
 
         if reached {
+            stats.connect_successes += 1;
             return Some((new_a_idx, step_idx));
         }
 

@@ -7,9 +7,131 @@ use ::valuable::{
 };
 
 use crate::{
-    AorrtcSettings, JointKinLimits, KinematicLimits, KrrtcSettings, RandomizerType,
-    RrtDiagnostic, RrtcSettings,
+    AnytimeInfo, AorrtcSettings, ExtensionStats, JointKinLimits, KinematicLimits, KrrtcSettings,
+    RandomizerType, RrtDiagnostic, RrtTermination, RrtcSettings,
 };
+
+// ---------------------------------------------------------------------------
+// RrtTermination
+// ---------------------------------------------------------------------------
+
+const TERMINATION_VARIANTS: &[VariantDef<'static>] = &[
+    VariantDef::new("NotStarted", Fields::Unnamed(0)),
+    VariantDef::new("DegenerateStartGoal", Fields::Unnamed(0)),
+    VariantDef::new("DirectConnection", Fields::Unnamed(0)),
+    VariantDef::new("Solved", Fields::Unnamed(0)),
+    VariantDef::new("MaxIterationsExceeded", Fields::Unnamed(0)),
+    VariantDef::new("MaxSamplesExceeded", Fields::Unnamed(0)),
+    VariantDef::new("Stalled", Fields::Unnamed(0)),
+    VariantDef::new("OptimalReached", Fields::Unnamed(0)),
+    VariantDef::new("InputInvalid", Fields::Unnamed(0)),
+    VariantDef::new("NoInitialPath", Fields::Unnamed(0)),
+];
+
+impl Valuable for RrtTermination {
+    #[inline]
+    fn as_value(&self) -> Value<'_> {
+        Value::Enumerable(self)
+    }
+    fn visit(&self, visit: &mut dyn Visit) {
+        visit.visit_unnamed_fields(&[]);
+    }
+}
+
+impl Enumerable for RrtTermination {
+    fn definition(&self) -> EnumDef<'_> {
+        EnumDef::new_static("RrtTermination", TERMINATION_VARIANTS)
+    }
+    fn variant(&self) -> Variant<'_> {
+        let idx = match self {
+            Self::NotStarted => 0,
+            Self::DegenerateStartGoal => 1,
+            Self::DirectConnection => 2,
+            Self::Solved => 3,
+            Self::MaxIterationsExceeded => 4,
+            Self::MaxSamplesExceeded => 5,
+            Self::Stalled => 6,
+            Self::OptimalReached => 7,
+            Self::InputInvalid => 8,
+            Self::NoInitialPath => 9,
+        };
+        Variant::Static(&TERMINATION_VARIANTS[idx])
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ExtensionStats
+// ---------------------------------------------------------------------------
+
+const EXTENSION_STATS_FIELDS: &[NamedField<'static>] = &[
+    NamedField::new("extension_attempts"),
+    NamedField::new("dynamic_domain_rejections"),
+    NamedField::new("edge_validations"),
+    NamedField::new("edge_validation_failures"),
+    NamedField::new("successful_extensions"),
+    NamedField::new("connect_attempts"),
+    NamedField::new("connect_successes"),
+];
+
+impl Valuable for ExtensionStats {
+    #[inline]
+    fn as_value(&self) -> Value<'_> {
+        Value::Structable(self)
+    }
+    fn visit(&self, visit: &mut dyn Visit) {
+        let values = [
+            self.extension_attempts.as_value(),
+            self.dynamic_domain_rejections.as_value(),
+            self.edge_validations.as_value(),
+            self.edge_validation_failures.as_value(),
+            self.successful_extensions.as_value(),
+            self.connect_attempts.as_value(),
+            self.connect_successes.as_value(),
+        ];
+        visit.visit_named_fields(&NamedValues::new(EXTENSION_STATS_FIELDS, &values));
+    }
+}
+
+impl Structable for ExtensionStats {
+    fn definition(&self) -> StructDef<'_> {
+        StructDef::new_static("ExtensionStats", Fields::Named(EXTENSION_STATS_FIELDS))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// AnytimeInfo
+// ---------------------------------------------------------------------------
+
+const ANYTIME_INFO_FIELDS: &[NamedField<'static>] = &[
+    NamedField::new("initial_cost"),
+    NamedField::new("initial_iterations"),
+    NamedField::new("improvements"),
+    NamedField::new("iters_since_last_improvement"),
+    NamedField::new("optimality_ratio"),
+];
+
+impl Valuable for AnytimeInfo {
+    #[inline]
+    fn as_value(&self) -> Value<'_> {
+        Value::Structable(self)
+    }
+    fn visit(&self, visit: &mut dyn Visit) {
+        let values = [
+            self.initial_cost.as_value(),
+            self.initial_iterations.as_value(),
+            self.improvements.as_value(),
+            self.iters_since_last_improvement.as_value(),
+            self.optimality_ratio.as_value(),
+        ];
+        visit.visit_named_fields(&NamedValues::new(ANYTIME_INFO_FIELDS, &values));
+    }
+}
+
+impl Structable for AnytimeInfo {
+    fn definition(&self) -> StructDef<'_> {
+        StructDef::new_static("AnytimeInfo", Fields::Named(ANYTIME_INFO_FIELDS))
+    }
+}
 
 // ---------------------------------------------------------------------------
 // RrtDiagnostic
@@ -21,6 +143,11 @@ const RRT_DIAG_FIELDS: &[NamedField<'static>] = &[
     NamedField::new("goal_tree_size"),
     NamedField::new("path_cost"),
     NamedField::new("elapsed_ns"),
+    NamedField::new("termination"),
+    NamedField::new("extension_stats"),
+    NamedField::new("c_min"),
+    NamedField::new("closest_approach"),
+    NamedField::new("anytime"),
 ];
 
 impl Valuable for RrtDiagnostic {
@@ -29,12 +156,21 @@ impl Valuable for RrtDiagnostic {
         Value::Structable(self)
     }
     fn visit(&self, visit: &mut dyn Visit) {
+        let anytime_value = match &self.anytime {
+            Some(a) => a.as_value(),
+            None => Value::Unit,
+        };
         let values = [
             self.iterations.as_value(),
             self.start_tree_size.as_value(),
             self.goal_tree_size.as_value(),
             self.path_cost.as_value(),
             self.elapsed_ns.as_value(),
+            self.termination.as_value(),
+            self.extension_stats.as_value(),
+            self.c_min.as_value(),
+            self.closest_approach.as_value(),
+            anytime_value,
         ];
         visit.visit_named_fields(&NamedValues::new(RRT_DIAG_FIELDS, &values));
     }

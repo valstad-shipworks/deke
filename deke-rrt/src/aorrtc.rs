@@ -1,12 +1,12 @@
 use deke_types::{DekeResult, SRobotPath, SRobotQ, Validator};
 
-use crate::RrtDiagnostic;
 use crate::randomizer::{DekeRng, RandomizerType};
 use crate::rrtc::{
     RrtcSettings, path_cost, reduce, sample_uniform, shortcut, smooth_bspline,
-    solve as rrtc_solve, validate_edge, weighted_distance,
+    solve as rrtc_solve, validate_edge_stats, weighted_distance,
 };
 use crate::tree::RrtTree;
+use crate::{AnytimeInfo, RrtDiagnostic, RrtTermination};
 
 #[derive(Debug, Clone, Copy)]
 pub struct AorrtcSettings<const N: usize> {
@@ -284,207 +284,263 @@ pub(crate) fn solve<const N: usize, V: Validator<N, (), f64>, S: DekeRng<N>, A: 
 
     let initial_path = match initial_result {
         Ok(path) => path,
-        Err(e) => return (Err(e), initial_diag),
+        Err(e) => {
+            // Surface the failed initial RRTC stats verbatim, but mark it
+            // as a no-initial-path failure so callers can distinguish "the
+            // RRTC could not even seed AORRTC" from a stalled refinement.
+            let mut diag = initial_diag;
+            diag.termination = RrtTermination::NoInitialPath;
+            diag.anytime = Some(AnytimeInfo {
+                initial_cost: f64::INFINITY,
+                initial_iterations: diag.iterations,
+                improvements: 0,
+                iters_since_last_improvement: 0,
+                optimality_ratio: f64::INFINITY,
+            });
+            return (Err(e), diag);
+        }
     };
+
+    // Carry RRTC's stats forward so the final diagnostic reflects work done
+    // in *both* phases.
+    let mut stats = initial_diag.extension_stats;
+    let mut closest_approach = initial_diag.closest_approach;
+    let initial_iterations = initial_diag.iterations;
 
     let mut best_waypoints: Vec<SRobotQ<N, f64>> = initial_path.iter().copied().collect();
     let mut best_cost = path_cost(&best_waypoints, &dof_coeffs);
+    let initial_cost = best_cost;
 
     let c_min = weighted_distance(start, goal, &dof_coeffs);
-    if best_cost <= c_min + 1e-8 {
-        return (
-            Ok(initial_path),
-            RrtDiagnostic {
-                iterations: initial_diag.iterations,
-                start_tree_size: initial_diag.start_tree_size,
-                goal_tree_size: initial_diag.goal_tree_size,
-                path_cost: best_cost,
-                elapsed_ns: timer.elapsed().as_nanos(),
-            },
-        );
-    }
-
-    let mut phs = Phs::new(start, goal, &dof_coeffs);
-    phs.set_cost(best_cost);
-    let mut total_iterations = initial_diag.iterations;
+    let mut total_iterations = initial_iterations;
     let mut iters_since_improvement = 0usize;
+    let mut improvements = 0usize;
+    #[allow(unused_assignments)]
+    let mut termination = RrtTermination::MaxIterationsExceeded;
 
-    loop {
-        if total_iterations >= settings.max_iterations {
-            break;
-        }
-        if iters_since_improvement >= settings.stall_iterations {
-            break;
-        }
+    if best_cost <= c_min + 1e-8 {
+        termination = RrtTermination::OptimalReached;
+    } else {
+        let mut phs = Phs::new(start, goal, &dof_coeffs);
+        phs.set_cost(best_cost);
 
-        let mut start_tree = RrtTree::with_capacity(&dof_coeffs, settings.max_samples / 2);
-        let mut goal_tree = RrtTree::with_capacity(&dof_coeffs, settings.max_samples / 2);
-
-        start_tree.add(*start, 0, settings.rrtc.radius, 0.0);
-        goal_tree.add(*goal, 0, settings.rrtc.radius, 0.0);
-
-        for inner in 0..settings.max_samples {
+        'outer: loop {
             if total_iterations >= settings.max_iterations {
+                termination = RrtTermination::MaxIterationsExceeded;
                 break;
             }
             if iters_since_improvement >= settings.stall_iterations {
+                termination = RrtTermination::Stalled;
                 break;
             }
-            if start_tree.len() + goal_tree.len() >= settings.max_samples {
-                break;
-            }
-            total_iterations += 1;
-            iters_since_improvement += 1;
 
-            let q_rand = if settings.use_phs {
-                phs.sample(
-                    sample_rng,
-                    aux_rng,
-                    &settings.rrtc.joint_lower,
-                    &settings.rrtc.joint_upper,
-                )
-            } else {
-                sample_uniform(
-                    sample_rng,
-                    &settings.rrtc.joint_lower,
-                    &settings.rrtc.joint_upper,
-                )
-            };
+            let mut start_tree = RrtTree::with_capacity(&dof_coeffs, settings.max_samples / 2);
+            let mut goal_tree = RrtTree::with_capacity(&dof_coeffs, settings.max_samples / 2);
 
-            let extend_start = inner % 2 == 0;
-            let (root_q, target_q) = if extend_start {
-                (start, goal)
-            } else {
-                (goal, start)
-            };
-            let g_hat = weighted_distance(&q_rand, root_q, &dof_coeffs);
-            let h_hat = weighted_distance(&q_rand, target_q, &dof_coeffs);
-            let f_hat = g_hat + h_hat;
-            let c_range = (best_cost - f_hat).max(0.0);
-            let c_rand = aux_rng.next_f64() * c_range + g_hat;
+            start_tree.add(*start, 0, settings.rrtc.radius, 0.0);
+            goal_tree.add(*goal, 0, settings.rrtc.radius, 0.0);
 
-            let (tree_a, tree_b) = if extend_start {
-                (&mut start_tree, &mut goal_tree)
-            } else {
-                (&mut goal_tree, &mut start_tree)
-            };
+            for inner in 0..settings.max_samples {
+                if total_iterations >= settings.max_iterations {
+                    termination = RrtTermination::MaxIterationsExceeded;
+                    break 'outer;
+                }
+                if iters_since_improvement >= settings.stall_iterations {
+                    termination = RrtTermination::Stalled;
+                    break 'outer;
+                }
+                if start_tree.len() + goal_tree.len() >= settings.max_samples {
+                    break;
+                }
+                total_iterations += 1;
+                iters_since_improvement += 1;
+                stats.extension_attempts += 1;
 
-            let (near_idx, near_dist) = tree_a.find_nearest_ao(&q_rand, c_rand);
+                let q_rand = if settings.use_phs {
+                    phs.sample(
+                        sample_rng,
+                        aux_rng,
+                        &settings.rrtc.joint_lower,
+                        &settings.rrtc.joint_upper,
+                    )
+                } else {
+                    sample_uniform(
+                        sample_rng,
+                        &settings.rrtc.joint_lower,
+                        &settings.rrtc.joint_upper,
+                    )
+                };
 
-            if settings.rrtc.dynamic_domain && near_dist > tree_a.radius(near_idx) {
-                let r = tree_a.radius(near_idx);
-                tree_a.set_radius(
-                    near_idx,
-                    (r * (1.0 - settings.rrtc.alpha)).max(settings.rrtc.min_radius),
-                );
-                continue;
-            }
+                let extend_start = inner % 2 == 0;
+                let (root_q, target_q) = if extend_start {
+                    (start, goal)
+                } else {
+                    (goal, start)
+                };
+                let g_hat = weighted_distance(&q_rand, root_q, &dof_coeffs);
+                let h_hat = weighted_distance(&q_rand, target_q, &dof_coeffs);
+                let f_hat = g_hat + h_hat;
+                let c_range = (best_cost - f_hat).max(0.0);
+                let c_rand = aux_rng.next_f64() * c_range + g_hat;
 
-            let q_near = *tree_a.node(near_idx);
-            let q_new = steer(&q_near, &q_rand, settings.rrtc.range, &dof_coeffs);
+                let (tree_a, tree_b) = if extend_start {
+                    (&mut start_tree, &mut goal_tree)
+                } else {
+                    (&mut goal_tree, &mut start_tree)
+                };
 
-            if validate_edge(&q_near, &q_new, settings.rrtc.resolution, validator, ctx).is_err() {
-                if settings.rrtc.dynamic_domain {
+                let (near_idx, near_dist) = tree_a.find_nearest_ao(&q_rand, c_rand);
+
+                if settings.rrtc.dynamic_domain && near_dist > tree_a.radius(near_idx) {
                     let r = tree_a.radius(near_idx);
                     tree_a.set_radius(
                         near_idx,
                         (r * (1.0 - settings.rrtc.alpha)).max(settings.rrtc.min_radius),
                     );
+                    stats.dynamic_domain_rejections += 1;
+                    continue;
                 }
-                continue;
-            }
 
-            let mut best_parent = near_idx;
-            let mut new_cost =
-                tree_a.cost(near_idx) + weighted_distance(&q_near, &q_new, &dof_coeffs);
+                let q_near = *tree_a.node(near_idx);
+                let q_new = steer(&q_near, &q_rand, settings.rrtc.range, &dof_coeffs);
 
-            if settings.cost_bound_resamples > 0 {
-                let g_hat_new = weighted_distance(&q_new, root_q, &dof_coeffs);
-                for _ in 0..settings.cost_bound_resamples {
-                    let c_range = (new_cost - g_hat_new).max(0.0);
-                    if c_range == 0.0 {
+                if validate_edge_stats(
+                    &q_near,
+                    &q_new,
+                    settings.rrtc.resolution,
+                    validator,
+                    ctx,
+                    &mut stats,
+                )
+                .is_err()
+                {
+                    if settings.rrtc.dynamic_domain {
+                        let r = tree_a.radius(near_idx);
+                        tree_a.set_radius(
+                            near_idx,
+                            (r * (1.0 - settings.rrtc.alpha)).max(settings.rrtc.min_radius),
+                        );
+                    }
+                    continue;
+                }
+
+                let mut best_parent = near_idx;
+                let mut new_cost =
+                    tree_a.cost(near_idx) + weighted_distance(&q_near, &q_new, &dof_coeffs);
+
+                if settings.cost_bound_resamples > 0 {
+                    let g_hat_new = weighted_distance(&q_new, root_q, &dof_coeffs);
+                    for _ in 0..settings.cost_bound_resamples {
+                        let c_range = (new_cost - g_hat_new).max(0.0);
+                        if c_range == 0.0 {
+                            break;
+                        }
+                        let c_rand = aux_rng.next_f64() * c_range + g_hat_new;
+                        let (cand_idx, cand_dist) = tree_a.find_nearest_ao(&q_new, c_rand);
+                        let cand_cost = tree_a.cost(cand_idx) + cand_dist;
+                        if cand_idx == best_parent || cand_cost >= new_cost {
+                            break;
+                        }
+                        let q_cand = *tree_a.node(cand_idx);
+                        if validate_edge_stats(
+                            &q_cand,
+                            &q_new,
+                            settings.rrtc.resolution,
+                            validator,
+                            ctx,
+                            &mut stats,
+                        )
+                        .is_ok()
+                        {
+                            best_parent = cand_idx;
+                            new_cost = cand_cost;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+
+                let new_idx = tree_a.add(q_new, best_parent, settings.rrtc.radius, new_cost);
+                stats.successful_extensions += 1;
+
+                if settings.rrtc.dynamic_domain {
+                    let r = tree_a.radius(near_idx);
+                    tree_a.set_radius(near_idx, r * (1.0 + settings.rrtc.alpha));
+                }
+
+                let (connect_near, connect_dist) =
+                    tree_b.find_nearest_ao(&q_new, best_cost - new_cost);
+                let connect_cost = tree_b.cost(connect_near);
+
+                if new_cost + connect_dist + connect_cost >= best_cost {
+                    continue;
+                }
+
+                stats.connect_attempts += 1;
+                let mut cur_idx = connect_near;
+
+                let mut connected = false;
+                loop {
+                    let q_cur = *tree_b.node(cur_idx);
+                    let dist = weighted_distance(&q_cur, &q_new, &dof_coeffs);
+
+                    if dist < 1e-6 {
+                        connected = true;
                         break;
                     }
-                    let c_rand = aux_rng.next_f64() * c_range + g_hat_new;
-                    let (cand_idx, cand_dist) = tree_a.find_nearest_ao(&q_new, c_rand);
-                    let cand_cost = tree_a.cost(cand_idx) + cand_dist;
-                    if cand_idx == best_parent || cand_cost >= new_cost {
+
+                    let q_step = steer(&q_cur, &q_new, settings.rrtc.range, &dof_coeffs);
+
+                    if validate_edge_stats(
+                        &q_cur,
+                        &q_step,
+                        settings.rrtc.resolution,
+                        validator,
+                        ctx,
+                        &mut stats,
+                    )
+                    .is_err()
+                    {
                         break;
                     }
-                    let q_cand = *tree_a.node(cand_idx);
-                    if validate_edge(&q_cand, &q_new, settings.rrtc.resolution, validator, ctx).is_ok() {
-                        best_parent = cand_idx;
-                        new_cost = cand_cost;
+
+                    let step_cost =
+                        tree_b.cost(cur_idx) + weighted_distance(&q_cur, &q_step, &dof_coeffs);
+                    let reached = weighted_distance(&q_step, &q_new, &dof_coeffs) < 1e-6;
+                    let added_q = if reached { q_new } else { q_step };
+                    cur_idx = tree_b.add(added_q, cur_idx, settings.rrtc.radius, step_cost);
+
+                    if reached {
+                        connected = true;
+                        break;
+                    }
+                }
+
+                if connected {
+                    stats.connect_successes += 1;
+                    let (ta, tb) = if extend_start {
+                        (&start_tree as &RrtTree<N>, &goal_tree as &RrtTree<N>)
                     } else {
+                        (&goal_tree as &RrtTree<N>, &start_tree as &RrtTree<N>)
+                    };
+                    let waypoints = reconstruct(ta, new_idx, tb, cur_idx, extend_start);
+                    let actual_cost = path_cost(&waypoints, &dof_coeffs);
+                    if actual_cost < best_cost {
+                        best_cost = actual_cost;
+                        best_waypoints = waypoints;
+                        phs.set_cost(best_cost);
+                        iters_since_improvement = 0;
+                        improvements += 1;
+                        closest_approach = 0.0;
                         break;
                     }
                 }
             }
 
-            let new_idx = tree_a.add(q_new, best_parent, settings.rrtc.radius, new_cost);
-
-            if settings.rrtc.dynamic_domain {
-                let r = tree_a.radius(near_idx);
-                tree_a.set_radius(near_idx, r * (1.0 + settings.rrtc.alpha));
+            if best_cost <= c_min + 1e-8 {
+                termination = RrtTermination::OptimalReached;
+                break;
             }
-
-            let (connect_near, connect_dist) = tree_b.find_nearest_ao(&q_new, best_cost - new_cost);
-            let connect_cost = tree_b.cost(connect_near);
-
-            if new_cost + connect_dist + connect_cost >= best_cost {
-                continue;
-            }
-
-            let mut cur_idx = connect_near;
-
-            let mut connected = false;
-            loop {
-                let q_cur = *tree_b.node(cur_idx);
-                let dist = weighted_distance(&q_cur, &q_new, &dof_coeffs);
-
-                if dist < 1e-6 {
-                    connected = true;
-                    break;
-                }
-
-                let q_step = steer(&q_cur, &q_new, settings.rrtc.range, &dof_coeffs);
-
-                if validate_edge(&q_cur, &q_step, settings.rrtc.resolution, validator, ctx).is_err() {
-                    break;
-                }
-
-                let step_cost =
-                    tree_b.cost(cur_idx) + weighted_distance(&q_cur, &q_step, &dof_coeffs);
-                let reached = weighted_distance(&q_step, &q_new, &dof_coeffs) < 1e-6;
-                let added_q = if reached { q_new } else { q_step };
-                cur_idx = tree_b.add(added_q, cur_idx, settings.rrtc.radius, step_cost);
-
-                if reached {
-                    connected = true;
-                    break;
-                }
-            }
-
-            if connected {
-                let (ta, tb) = if extend_start {
-                    (&start_tree as &RrtTree<N>, &goal_tree as &RrtTree<N>)
-                } else {
-                    (&goal_tree as &RrtTree<N>, &start_tree as &RrtTree<N>)
-                };
-                let waypoints = reconstruct(ta, new_idx, tb, cur_idx, extend_start);
-                let actual_cost = path_cost(&waypoints, &dof_coeffs);
-                if actual_cost < best_cost {
-                    best_cost = actual_cost;
-                    best_waypoints = waypoints;
-                    phs.set_cost(best_cost);
-                    iters_since_improvement = 0;
-                    break;
-                }
-            }
-        }
-
-        if best_cost <= c_min + 1e-8 {
-            break;
         }
     }
 
@@ -523,14 +579,51 @@ pub(crate) fn solve<const N: usize, V: Validator<N, (), f64>, S: DekeRng<N>, A: 
     best_cost = path_cost(&best_waypoints, &dof_coeffs);
     let final_path = SRobotPath::try_new(best_waypoints);
 
+    let optimality_ratio = if c_min > 1e-12 {
+        best_cost / c_min
+    } else if best_cost.abs() < 1e-12 {
+        1.0
+    } else {
+        f64::INFINITY
+    };
+
+    // The final phase here is "we found *some* path." Override the inner
+    // termination to `Solved` only if we ran out of budget without ever
+    // entering the refinement loop (degenerate / direct-connection cases
+    // were already short-circuited above).
+    let outcome = match termination {
+        RrtTermination::MaxIterationsExceeded
+            if best_cost <= initial_cost && total_iterations == initial_iterations =>
+        {
+            // We never entered the refinement loop; the initial RRTC's own
+            // termination is more informative.
+            initial_diag.termination
+        }
+        other => other,
+    };
+
     (
         final_path,
         RrtDiagnostic {
             iterations: total_iterations,
-            start_tree_size: 0,
-            goal_tree_size: 0,
+            // Refinement uses ephemeral trees — surfacing tree sizes here
+            // would be misleading. Report the initial-phase tree sizes which
+            // describe the actual seed solution.
+            start_tree_size: initial_diag.start_tree_size,
+            goal_tree_size: initial_diag.goal_tree_size,
             path_cost: best_cost,
             elapsed_ns: timer.elapsed().as_nanos(),
+            termination: outcome,
+            extension_stats: stats,
+            c_min,
+            closest_approach,
+            anytime: Some(AnytimeInfo {
+                initial_cost,
+                initial_iterations,
+                improvements,
+                iters_since_last_improvement: iters_since_improvement,
+                optimality_ratio,
+            }),
         },
     )
 }

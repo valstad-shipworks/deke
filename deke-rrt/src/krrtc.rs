@@ -1,13 +1,13 @@
 use deke_types::{DekeError, DekeResult, SRobotPath, SRobotQ, Validator};
 
-use crate::RrtDiagnostic;
 use crate::randomizer::{DekeRng, RandomizerType};
-use crate::rrtc::{sample_uniform, validate_edge};
+use crate::rrtc::{sample_uniform, validate_edge, validate_edge_stats};
 use crate::scurve::{
     KinematicLimits, direction_cosine, kinematic_interpolate, kinematic_path_cost,
     time_optimal_cost,
 };
 use crate::tree::RrtTree;
+use crate::{ExtensionStats, RrtDiagnostic, RrtTermination};
 
 #[derive(Debug, Clone, Copy)]
 pub struct KrrtcSettings<const N: usize> {
@@ -309,7 +309,10 @@ pub(crate) fn solve<const N: usize, V: Validator<N, (), f64>, R: DekeRng<N>>(
     let timer = std::time::Instant::now();
     let coeffs = settings.kin_limits.velocity_coeffs();
 
+    let mut stats = ExtensionStats::default();
+    let mut closest_approach = f64::INFINITY;
     let direct_cost = time_optimal_cost(start, goal, &settings.kin_limits);
+
     if direct_cost < 1e-10 {
         return (
             Ok(SRobotPath::from_two(*start, *start)),
@@ -319,10 +322,16 @@ pub(crate) fn solve<const N: usize, V: Validator<N, (), f64>, R: DekeRng<N>>(
                 goal_tree_size: 1,
                 path_cost: 0.0,
                 elapsed_ns: timer.elapsed().as_nanos(),
+                termination: RrtTermination::DegenerateStartGoal,
+                extension_stats: stats,
+                c_min: direct_cost,
+                closest_approach: 0.0,
+                anytime: None,
             },
         );
     }
 
+    stats.edge_validations += 1;
     if validate_edge(start, goal, settings.resolution, validator, ctx).is_ok() {
         return (
             Ok(SRobotPath::from_two(*start, *goal)),
@@ -332,8 +341,15 @@ pub(crate) fn solve<const N: usize, V: Validator<N, (), f64>, R: DekeRng<N>>(
                 goal_tree_size: 1,
                 path_cost: direct_cost,
                 elapsed_ns: timer.elapsed().as_nanos(),
+                termination: RrtTermination::DirectConnection,
+                extension_stats: stats,
+                c_min: direct_cost,
+                closest_approach: 0.0,
+                anytime: None,
             },
         );
+    } else {
+        stats.edge_validation_failures += 1;
     }
 
     let mut start_tree = RrtTree::with_capacity(&coeffs, settings.max_samples / 2);
@@ -343,13 +359,18 @@ pub(crate) fn solve<const N: usize, V: Validator<N, (), f64>, R: DekeRng<N>>(
     goal_tree.add(*goal, 0, settings.radius, 0.0);
 
     let mut extend_start = true;
+    let mut termination = RrtTermination::MaxIterationsExceeded;
+    let mut completed_iterations = settings.max_iterations;
 
     for iteration in 0..settings.max_iterations {
         if start_tree.len() + goal_tree.len() >= settings.max_samples {
+            termination = RrtTermination::MaxSamplesExceeded;
+            completed_iterations = iteration;
             break;
         }
 
         let q_rand = sample_uniform(rng, &settings.joint_lower, &settings.joint_upper);
+        stats.extension_attempts += 1;
 
         let result = if extend_start {
             extend_and_connect(
@@ -359,6 +380,8 @@ pub(crate) fn solve<const N: usize, V: Validator<N, (), f64>, R: DekeRng<N>>(
                 validator,
                 ctx,
                 settings,
+                &mut stats,
+                &mut closest_approach,
             )
         } else {
             extend_and_connect(
@@ -368,6 +391,8 @@ pub(crate) fn solve<const N: usize, V: Validator<N, (), f64>, R: DekeRng<N>>(
                 validator,
                 ctx,
                 settings,
+                &mut stats,
+                &mut closest_approach,
             )
         };
 
@@ -409,6 +434,11 @@ pub(crate) fn solve<const N: usize, V: Validator<N, (), f64>, R: DekeRng<N>>(
                 goal_tree_size: goal_tree.len(),
                 path_cost: cost,
                 elapsed_ns: timer.elapsed().as_nanos(),
+                termination: RrtTermination::Solved,
+                extension_stats: stats,
+                c_min: direct_cost,
+                closest_approach: 0.0,
+                anytime: None,
             };
             return (SRobotPath::try_new(waypoints), diag);
         }
@@ -430,11 +460,16 @@ pub(crate) fn solve<const N: usize, V: Validator<N, (), f64>, R: DekeRng<N>>(
     (
         Err(DekeError::OutOfIterations),
         RrtDiagnostic {
-            iterations: settings.max_iterations,
+            iterations: completed_iterations,
             start_tree_size: start_tree.len(),
             goal_tree_size: goal_tree.len(),
             path_cost: f64::INFINITY,
             elapsed_ns: timer.elapsed().as_nanos(),
+            termination,
+            extension_stats: stats,
+            c_min: direct_cost,
+            closest_approach,
+            anytime: None,
         },
     )
 }
@@ -446,6 +481,8 @@ fn extend_and_connect<const N: usize, V: Validator<N, (), f64>>(
     validator: &V,
     ctx: &V::Context<'_>,
     settings: &KrrtcSettings<N>,
+    stats: &mut ExtensionStats,
+    closest_approach: &mut f64,
 ) -> Option<(usize, usize)> {
     let (near_idx, near_dist) = tree_a.nearest(q_rand);
 
@@ -455,13 +492,14 @@ fn extend_and_connect<const N: usize, V: Validator<N, (), f64>>(
             near_idx,
             (r * (1.0 - settings.alpha)).max(settings.min_radius),
         );
+        stats.dynamic_domain_rejections += 1;
         return None;
     }
 
     let q_near = *tree_a.node(near_idx);
     let q_new = kinematic_steer(&q_near, q_rand, settings.range, &settings.kin_limits);
 
-    if validate_edge(&q_near, &q_new, settings.resolution, validator, ctx).is_err() {
+    if validate_edge_stats(&q_near, &q_new, settings.resolution, validator, ctx, stats).is_err() {
         if settings.dynamic_domain {
             let r = tree_a.radius(near_idx);
             tree_a.set_radius(
@@ -473,25 +511,33 @@ fn extend_and_connect<const N: usize, V: Validator<N, (), f64>>(
     }
 
     let new_a_idx = tree_a.add(q_new, near_idx, settings.radius, 0.0);
+    stats.successful_extensions += 1;
 
     if settings.dynamic_domain {
         let r = tree_a.radius(near_idx);
         tree_a.set_radius(near_idx, r * (1.0 + settings.alpha));
     }
 
-    let (mut connect_idx, _) = tree_b.nearest(&q_new);
+    let (mut connect_idx, gap_to_other) = tree_b.nearest(&q_new);
+    if gap_to_other < *closest_approach {
+        *closest_approach = gap_to_other;
+    }
+    stats.connect_attempts += 1;
 
     loop {
         let q_connect = *tree_b.node(connect_idx);
         let dist = time_optimal_cost(&q_connect, &q_new, &settings.kin_limits);
 
         if dist < 1e-6 {
+            stats.connect_successes += 1;
             return Some((new_a_idx, connect_idx));
         }
 
         let q_step = kinematic_steer(&q_connect, &q_new, settings.range, &settings.kin_limits);
 
-        if validate_edge(&q_connect, &q_step, settings.resolution, validator, ctx).is_err() {
+        if validate_edge_stats(&q_connect, &q_step, settings.resolution, validator, ctx, stats)
+            .is_err()
+        {
             return None;
         }
 
@@ -503,6 +549,7 @@ fn extend_and_connect<const N: usize, V: Validator<N, (), f64>>(
         };
 
         if reached {
+            stats.connect_successes += 1;
             return Some((new_a_idx, step_idx));
         }
 
