@@ -123,7 +123,10 @@ impl Default for SolverOptions {
     fn default() -> Self {
         Self {
             tolerance: 1e-6,
-            max_iterations: 500,
+            // Bumped from 500 because the analytical-spline path derivatives produce a
+            // smoother but more interesting constraint geometry than the FD ones, and the
+            // 6-DOF curved-path test case lands around 250–550 iterations to converge.
+            max_iterations: 1500,
             timeout: None,
             diagnostics: false,
         }

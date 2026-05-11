@@ -3,9 +3,16 @@ use glam_traits_ext::{TAffine3, TVec3};
 
 /// Constant geometric path data needed by the retimer NLP.
 ///
-/// Holds the cumulative arc length `s[k]`, the segment lengths `ds[k]`, and finite-difference
-/// approximations to the first, second and third derivatives of the joint-space path `q(s)`
-/// and the tool-center-point path `p(s)` at each densified waypoint.
+/// Holds the cumulative arc length `s[k]`, the segment lengths `ds[k]`, and analytical
+/// derivatives of the joint-space path `q(s)` and the tool-center-point path `p(s)` evaluated
+/// at each densified waypoint. The derivatives are read off a chord-length-parameterised
+/// natural cubic spline, not finite differences — that keeps `ppp`/`qppp` bounded at corners of
+/// a densified polyline rather than spiking, which is what the NLP needs to stay feasible.
+///
+/// For a natural cubic spline the fourth derivative is identically zero in the interior of
+/// every segment, so `pppp`/`qppp` would normally be omitted; we keep `pppp` as a zero-filled
+/// vector matching the length of `pp`/`ppp` so downstream code (constraints, diagnostics) can
+/// reference it uniformly.
 #[derive(Debug, Clone)]
 pub struct PathDerivatives<const N: usize> {
     pub waypoints: Vec<SRobotQ<N, f64>>,
@@ -91,9 +98,7 @@ impl<const N: usize> PathDerivatives<N> {
 
         let wps_arr: Vec<[f64; N]> = densified.iter().map(|wp| wp.0).collect();
 
-        let qp = fd_first::<N>(&wps_arr, &ds);
-        let qpp = fd_second::<N>(&wps_arr, &ds);
-        let qppp = fd_third_of_second::<N>(&qpp, &ds);
+        let (qp, qpp, qppp) = spline_derivatives::<N>(&wps_arr, &ds);
 
         let (tcp, pp, ppp, pppp) = if let Some(fk) = fk {
             let mut tcp = Vec::with_capacity(m);
@@ -102,9 +107,8 @@ impl<const N: usize> PathDerivatives<N> {
                 let t = pose.translation();
                 tcp.push([t.x(), t.y(), t.z()]);
             }
-            let pp = fd_first::<3>(&tcp, &ds);
-            let ppp = fd_second::<3>(&tcp, &ds);
-            let pppp = fd_third_of_second::<3>(&ppp, &ds);
+            let (pp, ppp, _pppp) = spline_derivatives::<3>(&tcp, &ds);
+            let pppp = vec![[0.0_f64; 3]; m];
             (tcp, pp, ppp, pppp)
         } else {
             (Vec::new(), Vec::new(), Vec::new(), Vec::new())
@@ -176,61 +180,131 @@ impl<const N: usize> FKChain<N, f64> for NeverFK<N> {
     }
 }
 
-fn fd_first<const D: usize>(f: &[[f64; D]], ds: &[f64]) -> Vec<[f64; D]> {
-    let m = f.len();
-    let mut out = vec![[0.0_f64; D]; m];
+/// Analytical 1st, 2nd, and 3rd derivatives at every knot of a chord-length-parameterised
+/// natural cubic spline through `y[0..m]` with knot spacing `ds[0..m-1]`.
+///
+/// Each dimension is fitted independently. With natural boundary conditions M_0 = M_{m-1} = 0,
+/// the 2nd derivative is exactly `M_k` at each knot, the 1st derivative is continuous (C^1) and
+/// read from either adjacent segment, and the 3rd derivative is piecewise constant per segment;
+/// at interior knots we average the two adjacent segment values, at the boundaries we use the
+/// single available segment value.
+fn spline_derivatives<const D: usize>(
+    y: &[[f64; D]],
+    ds: &[f64],
+) -> (Vec<[f64; D]>, Vec<[f64; D]>, Vec<[f64; D]>) {
+    let m = y.len();
+    let mut yp = vec![[0.0_f64; D]; m];
+    let mut ypp = vec![[0.0_f64; D]; m];
+    let mut yppp = vec![[0.0_f64; D]; m];
+
     if m < 2 {
-        return out;
+        return (yp, ypp, yppp);
     }
-    for j in 0..D {
-        out[0][j] = (f[1][j] - f[0][j]) / ds[0];
-        out[m - 1][j] = (f[m - 1][j] - f[m - 2][j]) / ds[m - 2];
+
+    if m == 2 {
+        let h = ds[0];
+        for d in 0..D {
+            let slope = (y[1][d] - y[0][d]) / h;
+            yp[0][d] = slope;
+            yp[1][d] = slope;
+        }
+        return (yp, ypp, yppp);
     }
-    for k in 1..m - 1 {
-        let span = ds[k - 1] + ds[k];
-        for j in 0..D {
-            out[k][j] = (f[k + 1][j] - f[k - 1][j]) / span;
+
+    let big_m = solve_natural_cubic::<D>(y, ds);
+
+    for k in 0..m {
+        ypp[k] = big_m[k];
+    }
+
+    for k in 0..m - 1 {
+        let h = ds[k];
+        for d in 0..D {
+            yp[k][d] = -big_m[k][d] * h / 2.0 + (y[k + 1][d] - y[k][d]) / h
+                - (big_m[k + 1][d] - big_m[k][d]) * h / 6.0;
         }
     }
-    out
+    {
+        let k = m - 2;
+        let h = ds[k];
+        for d in 0..D {
+            yp[m - 1][d] = big_m[k + 1][d] * h / 2.0
+                + (y[k + 1][d] - y[k][d]) / h
+                - (big_m[k + 1][d] - big_m[k][d]) * h / 6.0;
+        }
+    }
+
+    for d in 0..D {
+        yppp[0][d] = (big_m[1][d] - big_m[0][d]) / ds[0];
+        yppp[m - 1][d] = (big_m[m - 1][d] - big_m[m - 2][d]) / ds[m - 2];
+    }
+    for k in 1..m - 1 {
+        for d in 0..D {
+            let left = (big_m[k][d] - big_m[k - 1][d]) / ds[k - 1];
+            let right = (big_m[k + 1][d] - big_m[k][d]) / ds[k];
+            yppp[k][d] = 0.5 * (left + right);
+        }
+    }
+
+    (yp, ypp, yppp)
 }
 
-fn fd_second<const D: usize>(f: &[[f64; D]], ds: &[f64]) -> Vec<[f64; D]> {
-    let m = f.len();
-    let mut out = vec![[0.0_f64; D]; m];
-    if m < 3 {
-        return out;
+/// Solves the natural-cubic-spline tridiagonal system per dimension and returns the second
+/// derivative M_k at each of the `m` knots. `m` must be >= 3; smaller cases are handled by the
+/// caller.
+fn solve_natural_cubic<const D: usize>(y: &[[f64; D]], ds: &[f64]) -> Vec<[f64; D]> {
+    let m = y.len();
+    let mut big_m = vec![[0.0_f64; D]; m];
+    let n = m - 2;
+    if n == 0 {
+        return big_m;
     }
-    for k in 1..m - 1 {
-        let h0 = ds[k - 1];
-        let h1 = ds[k];
-        let scale = 2.0 / (h0 + h1);
-        for j in 0..D {
-            let right = (f[k + 1][j] - f[k][j]) / h1;
-            let left = (f[k][j] - f[k - 1][j]) / h0;
-            out[k][j] = scale * (right - left);
-        }
-    }
-    out[0] = out[1];
-    out[m - 1] = out[m - 2];
-    out
-}
 
-fn fd_third_of_second<const D: usize>(qpp: &[[f64; D]], ds: &[f64]) -> Vec<[f64; D]> {
-    let m = qpp.len();
-    let mut out = vec![[0.0_f64; D]; m];
-    if m < 3 {
-        return out;
+    let mut diag = vec![0.0_f64; n];
+    let mut sub = vec![0.0_f64; n];
+    let mut sup = vec![0.0_f64; n];
+    for i in 0..n {
+        let h_left = ds[i];
+        let h_right = ds[i + 1];
+        diag[i] = 2.0 * (h_left + h_right);
+        sub[i] = h_left;
+        sup[i] = h_right;
     }
-    for k in 1..m - 1 {
-        let span = ds[k - 1] + ds[k];
-        for j in 0..D {
-            out[k][j] = (qpp[k + 1][j] - qpp[k - 1][j]) / span;
+
+    let mut c_prime = vec![0.0_f64; n];
+    let mut rhs = vec![0.0_f64; n];
+    let mut d_prime = vec![0.0_f64; n];
+
+    for d in 0..D {
+        for i in 0..n {
+            let h_left = ds[i];
+            let h_right = ds[i + 1];
+            rhs[i] = 6.0
+                * ((y[i + 2][d] - y[i + 1][d]) / h_right
+                    - (y[i + 1][d] - y[i][d]) / h_left);
+        }
+
+        c_prime[0] = sup[0] / diag[0];
+        d_prime[0] = rhs[0] / diag[0];
+        for i in 1..n {
+            let denom = diag[i] - sub[i] * c_prime[i - 1];
+            if i < n - 1 {
+                c_prime[i] = sup[i] / denom;
+            }
+            d_prime[i] = (rhs[i] - sub[i] * d_prime[i - 1]) / denom;
+        }
+
+        let mut x = vec![0.0_f64; n];
+        x[n - 1] = d_prime[n - 1];
+        for i in (0..n - 1).rev() {
+            x[i] = d_prime[i] - c_prime[i] * x[i + 1];
+        }
+        for i in 0..n {
+            big_m[i + 1][d] = x[i];
         }
     }
-    out[0] = out[1];
-    out[m - 1] = out[m - 2];
-    out
+
+    big_m
 }
 
 #[cfg(test)]
@@ -238,35 +312,52 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fd_first_linear_uniform() {
-        // f(s) = 2s on uniform grid with ds=0.5 → f' = 2 everywhere
+    fn spline_linear_data_recovers_slope() {
         let f: Vec<[f64; 1]> = (0..5).map(|i| [2.0 * i as f64 * 0.5]).collect();
         let ds = vec![0.5; 4];
-        let fp = fd_first::<1>(&f, &ds);
-        for v in fp {
-            assert!((v[0] - 2.0).abs() < 1e-9, "got {}", v[0]);
+        let (yp, ypp, yppp) = spline_derivatives::<1>(&f, &ds);
+        for v in &yp {
+            assert!((v[0] - 2.0).abs() < 1e-9, "yp = {}", v[0]);
+        }
+        for v in &ypp {
+            assert!(v[0].abs() < 1e-9, "ypp = {}", v[0]);
+        }
+        for v in &yppp {
+            assert!(v[0].abs() < 1e-9, "yppp = {}", v[0]);
         }
     }
 
     #[test]
-    fn fd_second_quadratic_uniform() {
-        // f(s) = s^2 on uniform grid; f'' = 2 everywhere (interior exact, endpoints copied)
-        let ds = vec![0.25_f64; 8];
-        let f: Vec<[f64; 1]> = (0..9).map(|i| [(i as f64 * 0.25).powi(2)]).collect();
-        let fpp = fd_second::<1>(&f, &ds);
-        for v in fpp {
-            assert!((v[0] - 2.0).abs() < 1e-9, "got {}", v[0]);
+    fn spline_quadratic_interior_second_derivative_bounded() {
+        // f(s) = s^2 on a uniform grid. The natural cubic spline does NOT reproduce f
+        // exactly (its second derivative is pinned to zero at the boundaries), but the
+        // interior M_k must stay bounded near f''=2 — and that's all we need for a stable
+        // NLP signal. Compare to the FD approach which gave exactly 2 everywhere.
+        let ds = vec![0.25_f64; 16];
+        let f: Vec<[f64; 1]> = (0..17).map(|i| [(i as f64 * 0.25).powi(2)]).collect();
+        let (_yp, ypp, _yppp) = spline_derivatives::<1>(&f, &ds);
+        // Interior samples (away from boundary) should be close to 2.
+        for k in 4..13 {
+            assert!(
+                (ypp[k][0] - 2.0).abs() < 0.5,
+                "ypp[{}] = {} not near 2",
+                k,
+                ypp[k][0]
+            );
         }
     }
 
     #[test]
-    fn fd_third_is_zero_for_quadratic() {
-        let ds = vec![0.25_f64; 8];
-        let f: Vec<[f64; 1]> = (0..9).map(|i| [(i as f64 * 0.25).powi(2)]).collect();
-        let fpp = fd_second::<1>(&f, &ds);
-        let fppp = fd_third_of_second::<1>(&fpp, &ds);
-        for v in fppp {
-            assert!(v[0].abs() < 1e-9, "got {}", v[0]);
-        }
+    fn spline_two_waypoints_handled() {
+        let f: Vec<[f64; 1]> = vec![[0.0], [1.0]];
+        let ds = vec![1.0];
+        let (yp, ypp, yppp) = spline_derivatives::<1>(&f, &ds);
+        assert_eq!(yp.len(), 2);
+        assert!((yp[0][0] - 1.0).abs() < 1e-12);
+        assert!((yp[1][0] - 1.0).abs() < 1e-12);
+        assert!(ypp[0][0].abs() < 1e-12);
+        assert!(ypp[1][0].abs() < 1e-12);
+        assert!(yppp[0][0].abs() < 1e-12);
+        assert!(yppp[1][0].abs() < 1e-12);
     }
 }

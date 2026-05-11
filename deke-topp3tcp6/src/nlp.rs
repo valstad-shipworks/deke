@@ -24,6 +24,13 @@ pub struct Solution {
     pub solve_time: Duration,
 }
 
+/// Drop the per-sample TCP velocity upper bound (`sd_k ≤ v_max/|pp_k|`) at any waypoint whose
+/// path tangent is below this fraction of the maximum |pp|² across the path. At those
+/// locally-stationary samples the bound would otherwise inflate to a huge value (e.g.
+/// wrist-only rotation, |pp| ≈ 0 → upper ≈ 1e9) and wreck the variable scaling. Picked to be
+/// well below typical curvature variation but well above floating-point noise.
+const PP_RELATIVE_CUTOFF: f64 = 1e-6;
+
 pub fn build_and_solve<const N: usize>(
     deriv: &PathDerivatives<N>,
     constraints: &Topp3Tcp6Constraints<N>,
@@ -47,6 +54,23 @@ pub fn build_and_solve<const N: usize>(
 
     let tcp_active = deriv.has_tcp() && !constraints.tcp.is_disabled();
 
+    let pp_cutoff_sq = if tcp_active {
+        let mut max_sq = 0.0_f64;
+        for pp in &deriv.pp {
+            let s = pp[0] * pp[0] + pp[1] * pp[1] + pp[2] * pp[2];
+            if s > max_sq {
+                max_sq = s;
+            }
+        }
+        if max_sq > 0.0 {
+            PP_RELATIVE_CUTOFF * max_sq
+        } else {
+            0.0
+        }
+    } else {
+        0.0
+    };
+
     for k in 0..m {
         let sd_k = sd[k];
         subject_to!(problem, sd_k >= 0.0);
@@ -54,7 +78,7 @@ pub fn build_and_solve<const N: usize>(
         if tcp_active && constraints.tcp.v_max.is_finite() && constraints.tcp.v_max > 0.0 {
             let pp = &deriv.pp[k];
             let pp_norm_sq = pp[0] * pp[0] + pp[1] * pp[1] + pp[2] * pp[2];
-            if pp_norm_sq > 1e-18 {
+            if pp_norm_sq > pp_cutoff_sq {
                 let upper = constraints.tcp.v_max / pp_norm_sq.sqrt();
                 subject_to!(problem, sd_k <= upper);
             }
@@ -116,6 +140,12 @@ pub fn build_and_solve<const N: usize>(
         let seg_idx = if k < seg { k } else { seg - 1 };
         let sddd_k = sddd[seg_idx];
 
+        // The TCP a/j constraints at the very first and last sample are fully determined by the
+        // boundary equalities on sd, sdd (and by the implicit determination of sddd through the
+        // integrator). Adding them anyway just creates spurious KKT activity at the boundary
+        // that the IPM restoration phase trips over.
+        let at_boundary = k == 0 || k == m - 1;
+
         for j in lock..N {
             let qp_j = deriv.qp[k][j];
             let qpp_j = deriv.qpp[k][j];
@@ -150,33 +180,44 @@ pub fn build_and_solve<const N: usize>(
             }
         }
 
-        if tcp_active && constraints.tcp.a_max.is_finite() && constraints.tcp.a_max > 0.0 {
-            let a_bound_sq = constraints.tcp.a_max * constraints.tcp.a_max;
+        // TCP a/j are scaled into the unit ball: ||a_vec/a_max||² ≤ 1 instead of
+        // ||a_vec||² ≤ a_max². The quadratic LHS otherwise ranges across a_max²/j_max²
+        // (e.g. 40000), and that wrecks the Hessian conditioning in interior-point methods.
+        if tcp_active
+            && !at_boundary
+            && constraints.tcp.a_max.is_finite()
+            && constraints.tcp.a_max > 0.0
+        {
+            let inv = 1.0 / constraints.tcp.a_max;
             let ppp = &deriv.ppp[k];
             let pp = &deriv.pp[k];
-            let c0 = ppp[0] * sd_k * sd_k + pp[0] * sdd_k;
-            let c1 = ppp[1] * sd_k * sd_k + pp[1] * sdd_k;
-            let c2 = ppp[2] * sd_k * sd_k + pp[2] * sdd_k;
+            let c0 = (ppp[0] * inv) * sd_k * sd_k + (pp[0] * inv) * sdd_k;
+            let c1 = (ppp[1] * inv) * sd_k * sd_k + (pp[1] * inv) * sdd_k;
+            let c2 = (ppp[2] * inv) * sd_k * sd_k + (pp[2] * inv) * sdd_k;
             let sum_sq = c0 * c0 + c1 * c1 + c2 * c2;
-            subject_to!(problem, sum_sq <= a_bound_sq);
+            subject_to!(problem, sum_sq <= 1.0);
         }
 
-        if tcp_active && constraints.tcp.j_max.is_finite() && constraints.tcp.j_max > 0.0 {
-            let j_bound_sq = constraints.tcp.j_max * constraints.tcp.j_max;
+        if tcp_active
+            && !at_boundary
+            && constraints.tcp.j_max.is_finite()
+            && constraints.tcp.j_max > 0.0
+        {
+            let inv = 1.0 / constraints.tcp.j_max;
             let pppp = &deriv.pppp[k];
             let ppp = &deriv.ppp[k];
             let pp = &deriv.pp[k];
-            let c0 = pppp[0] * sd_k * sd_k * sd_k
-                + 3.0 * ppp[0] * sd_k * sdd_k
-                + pp[0] * sddd_k;
-            let c1 = pppp[1] * sd_k * sd_k * sd_k
-                + 3.0 * ppp[1] * sd_k * sdd_k
-                + pp[1] * sddd_k;
-            let c2 = pppp[2] * sd_k * sd_k * sd_k
-                + 3.0 * ppp[2] * sd_k * sdd_k
-                + pp[2] * sddd_k;
+            let c0 = (pppp[0] * inv) * sd_k * sd_k * sd_k
+                + (3.0 * ppp[0] * inv) * sd_k * sdd_k
+                + (pp[0] * inv) * sddd_k;
+            let c1 = (pppp[1] * inv) * sd_k * sd_k * sd_k
+                + (3.0 * ppp[1] * inv) * sd_k * sdd_k
+                + (pp[1] * inv) * sddd_k;
+            let c2 = (pppp[2] * inv) * sd_k * sd_k * sd_k
+                + (3.0 * ppp[2] * inv) * sd_k * sdd_k
+                + (pp[2] * inv) * sddd_k;
             let sum_sq = c0 * c0 + c1 * c1 + c2 * c2;
-            subject_to!(problem, sum_sq <= j_bound_sq);
+            subject_to!(problem, sum_sq <= 1.0);
         }
     }
 
@@ -186,7 +227,7 @@ pub fn build_and_solve<const N: usize>(
     }
     problem.minimize(total);
 
-    apply_initial_guess(&sd, &sdd, &sddd, &dt, deriv, constraints, start, end);
+    apply_initial_guess(&sd, &sdd, &sddd, &dt, deriv, constraints, start, end, pp_cutoff_sq);
 
     let iter_counter = Arc::new(AtomicI32::new(0));
     let ic = iter_counter.clone();
@@ -237,6 +278,7 @@ fn apply_initial_guess<'a, const N: usize>(
     constraints: &Topp3Tcp6Constraints<N>,
     start: ProjectedBoundary,
     end: ProjectedBoundary,
+    pp_cutoff_sq: f64,
 ) {
     let m = deriv.num_waypoints();
     let seg = deriv.num_segments();
@@ -263,7 +305,7 @@ fn apply_initial_guess<'a, const N: usize>(
         {
             let pp = &deriv.pp[k];
             let pn_sq = pp[0] * pp[0] + pp[1] * pp[1] + pp[2] * pp[2];
-            if pn_sq > 1e-18 {
+            if pn_sq > pp_cutoff_sq {
                 let bound = constraints.tcp.v_max / pn_sq.sqrt();
                 if bound < cap {
                     cap = bound;
