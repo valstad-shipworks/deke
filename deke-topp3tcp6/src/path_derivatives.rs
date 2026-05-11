@@ -5,14 +5,17 @@ use glam_traits_ext::{TAffine3, TVec3};
 ///
 /// Holds the cumulative arc length `s[k]`, the segment lengths `ds[k]`, and analytical
 /// derivatives of the joint-space path `q(s)` and the tool-center-point path `p(s)` evaluated
-/// at each densified waypoint. The derivatives are read off a chord-length-parameterised
-/// natural cubic spline, not finite differences — that keeps `ppp`/`qppp` bounded at corners of
-/// a densified polyline rather than spiking, which is what the NLP needs to stay feasible.
+/// at each densified waypoint. Derivatives come from a chord-length-parameterised PCHIP
+/// (Fritsch-Carlson monotone cubic Hermite) interpolant, not finite differences and not a
+/// natural cubic spline — natural cubic spline overshoots near polyline corners (driving
+/// `ppp` to large values right where the TCP a/j constraints are tightest), and FD spikes are
+/// even worse. PCHIP is C¹ rather than C², but its monotonicity-preserving slopes keep
+/// derivatives bounded at corners.
 ///
-/// For a natural cubic spline the fourth derivative is identically zero in the interior of
-/// every segment, so `pppp`/`qppp` would normally be omitted; we keep `pppp` as a zero-filled
-/// vector matching the length of `pp`/`ppp` so downstream code (constraints, diagnostics) can
-/// reference it uniformly.
+/// The fourth derivative is identically zero in the interior of every PCHIP segment (still
+/// cubic), so `pppp` would normally be omitted; we keep it as a zero-filled vector matching
+/// the length of `pp`/`ppp` so downstream code (constraints, diagnostics) can reference it
+/// uniformly.
 #[derive(Debug, Clone)]
 pub struct PathDerivatives<const N: usize> {
     pub waypoints: Vec<SRobotQ<N, f64>>,
@@ -181,13 +184,18 @@ impl<const N: usize> FKChain<N, f64> for NeverFK<N> {
 }
 
 /// Analytical 1st, 2nd, and 3rd derivatives at every knot of a chord-length-parameterised
-/// natural cubic spline through `y[0..m]` with knot spacing `ds[0..m-1]`.
+/// PCHIP (Piecewise Cubic Hermite Interpolating Polynomial) through `y[0..m]` with knot
+/// spacing `ds[0..m-1]`.
 ///
-/// Each dimension is fitted independently. With natural boundary conditions M_0 = M_{m-1} = 0,
-/// the 2nd derivative is exactly `M_k` at each knot, the 1st derivative is continuous (C^1) and
-/// read from either adjacent segment, and the 3rd derivative is piecewise constant per segment;
-/// at interior knots we average the two adjacent segment values, at the boundaries we use the
-/// single available segment value.
+/// We use Fritsch-Carlson monotone slopes — that's the whole point: a natural cubic spline
+/// through a polyline (joint-space waypoint list) overshoots near corners because it
+/// enforces C² continuity, and the overshoot lands exactly where the TCP a/j constraints
+/// are tightest. PCHIP gives up C² (it's only C¹) but in exchange forbids overshoot per
+/// segment. The 2nd derivative is discontinuous at knots; we average the two adjacent
+/// segment values to land on a single value per knot. The 3rd derivative is piecewise
+/// constant per segment; same averaging at interior knots.
+///
+/// Per-dimension; each output dimension fitted independently.
 fn spline_derivatives<const D: usize>(
     y: &[[f64; D]],
     ds: &[f64],
@@ -211,37 +219,61 @@ fn spline_derivatives<const D: usize>(
         return (yp, ypp, yppp);
     }
 
-    let big_m = solve_natural_cubic::<D>(y, ds);
-
-    for k in 0..m {
-        ypp[k] = big_m[k];
-    }
-
+    let mut delta = vec![[0.0_f64; D]; m - 1];
     for k in 0..m - 1 {
-        let h = ds[k];
+        let inv_h = 1.0 / ds[k];
         for d in 0..D {
-            yp[k][d] = -big_m[k][d] * h / 2.0 + (y[k + 1][d] - y[k][d]) / h
-                - (big_m[k + 1][d] - big_m[k][d]) * h / 6.0;
-        }
-    }
-    {
-        let k = m - 2;
-        let h = ds[k];
-        for d in 0..D {
-            yp[m - 1][d] = big_m[k + 1][d] * h / 2.0
-                + (y[k + 1][d] - y[k][d]) / h
-                - (big_m[k + 1][d] - big_m[k][d]) * h / 6.0;
+            delta[k][d] = (y[k + 1][d] - y[k][d]) * inv_h;
         }
     }
 
+    let slopes = pchip_slopes::<D>(&delta, ds);
+    yp.copy_from_slice(&slopes);
+
+    // ypp on segment k at t=0: (6·Δ_k - 4·d_k - 2·d_{k+1}) / h_k
+    // ypp on segment k at t=1: (-6·Δ_k + 2·d_k + 4·d_{k+1}) / h_k
     for d in 0..D {
-        yppp[0][d] = (big_m[1][d] - big_m[0][d]) / ds[0];
-        yppp[m - 1][d] = (big_m[m - 1][d] - big_m[m - 2][d]) / ds[m - 2];
+        ypp[0][d] = (6.0 * delta[0][d] - 4.0 * slopes[0][d] - 2.0 * slopes[1][d]) / ds[0];
+        ypp[m - 1][d] = (-6.0 * delta[m - 2][d]
+            + 2.0 * slopes[m - 2][d]
+            + 4.0 * slopes[m - 1][d])
+            / ds[m - 2];
     }
     for k in 1..m - 1 {
+        let h_l = ds[k - 1];
+        let h_r = ds[k];
         for d in 0..D {
-            let left = (big_m[k][d] - big_m[k - 1][d]) / ds[k - 1];
-            let right = (big_m[k + 1][d] - big_m[k][d]) / ds[k];
+            let left = (-6.0 * delta[k - 1][d]
+                + 2.0 * slopes[k - 1][d]
+                + 4.0 * slopes[k][d])
+                / h_l;
+            let right = (6.0 * delta[k][d]
+                - 4.0 * slopes[k][d]
+                - 2.0 * slopes[k + 1][d])
+                / h_r;
+            ypp[k][d] = 0.5 * (left + right);
+        }
+    }
+
+    // yppp on segment k: (-12·Δ_k + 6·(d_k + d_{k+1})) / h_k²  (constant per segment)
+    for d in 0..D {
+        let h0 = ds[0];
+        yppp[0][d] = (-12.0 * delta[0][d] + 6.0 * (slopes[0][d] + slopes[1][d])) / (h0 * h0);
+        let hl = ds[m - 2];
+        yppp[m - 1][d] = (-12.0 * delta[m - 2][d]
+            + 6.0 * (slopes[m - 2][d] + slopes[m - 1][d]))
+            / (hl * hl);
+    }
+    for k in 1..m - 1 {
+        let h_l = ds[k - 1];
+        let h_r = ds[k];
+        for d in 0..D {
+            let left = (-12.0 * delta[k - 1][d]
+                + 6.0 * (slopes[k - 1][d] + slopes[k][d]))
+                / (h_l * h_l);
+            let right = (-12.0 * delta[k][d]
+                + 6.0 * (slopes[k][d] + slopes[k + 1][d]))
+                / (h_r * h_r);
             yppp[k][d] = 0.5 * (left + right);
         }
     }
@@ -249,62 +281,138 @@ fn spline_derivatives<const D: usize>(
     (yp, ypp, yppp)
 }
 
-/// Solves the natural-cubic-spline tridiagonal system per dimension and returns the second
-/// derivative M_k at each of the `m` knots. `m` must be >= 3; smaller cases are handled by the
-/// caller.
-fn solve_natural_cubic<const D: usize>(y: &[[f64; D]], ds: &[f64]) -> Vec<[f64; D]> {
-    let m = y.len();
-    let mut big_m = vec![[0.0_f64; D]; m];
-    let n = m - 2;
-    if n == 0 {
-        return big_m;
+/// Fritsch-Carlson PCHIP slopes at each knot, per dimension. Interior slopes use the
+/// weighted harmonic mean of the secant slopes when those secants share a sign, and zero
+/// at extrema (sign change or zero secant). Boundary slopes use the standard three-point
+/// asymmetric formula with the two limiter checks recommended by Fritsch & Carlson —
+/// (i) zero out slopes that point against the adjacent secant, (ii) cap to 3× the secant
+/// to keep the cubic monotone on the boundary segment.
+///
+/// `delta[k]` must be `(y[k+1] - y[k]) / ds[k]`. `m = delta.len() + 1` is implicit.
+fn pchip_slopes<const D: usize>(delta: &[[f64; D]], ds: &[f64]) -> Vec<[f64; D]> {
+    let segs = delta.len();
+    let m = segs + 1;
+    let mut slopes = vec![[0.0_f64; D]; m];
+    if segs == 0 {
+        return slopes;
+    }
+    if segs == 1 {
+        slopes[0] = delta[0];
+        slopes[1] = delta[0];
+        return slopes;
     }
 
-    let mut diag = vec![0.0_f64; n];
-    let mut sub = vec![0.0_f64; n];
-    let mut sup = vec![0.0_f64; n];
-    for i in 0..n {
-        let h_left = ds[i];
-        let h_right = ds[i + 1];
-        diag[i] = 2.0 * (h_left + h_right);
-        sub[i] = h_left;
-        sup[i] = h_right;
-    }
-
-    let mut c_prime = vec![0.0_f64; n];
-    let mut rhs = vec![0.0_f64; n];
-    let mut d_prime = vec![0.0_f64; n];
-
-    for d in 0..D {
-        for i in 0..n {
-            let h_left = ds[i];
-            let h_right = ds[i + 1];
-            rhs[i] = 6.0
-                * ((y[i + 2][d] - y[i + 1][d]) / h_right
-                    - (y[i + 1][d] - y[i][d]) / h_left);
-        }
-
-        c_prime[0] = sup[0] / diag[0];
-        d_prime[0] = rhs[0] / diag[0];
-        for i in 1..n {
-            let denom = diag[i] - sub[i] * c_prime[i - 1];
-            if i < n - 1 {
-                c_prime[i] = sup[i] / denom;
+    // Per-dimension max-secant magnitude. Used below to distinguish a "real" extremum
+    // (sign change between large secants) from a "smooth small flip" (sign change between
+    // small secants on a smoothly oscillating curve, e.g. one of many sin/cos extrema).
+    // PCHIP's standard "slope = 0 on sign change" rule is right for the former and
+    // overly-conservative for the latter: it creates a pseudo-corner at every smooth
+    // extremum on a long sinusoidal path, which the IPM has to grind through.
+    let mut max_abs = [0.0_f64; D];
+    for k in 0..segs {
+        for d in 0..D {
+            let a = delta[k][d].abs();
+            if a > max_abs[d] {
+                max_abs[d] = a;
             }
-            d_prime[i] = (rhs[i] - sub[i] * d_prime[i - 1]) / denom;
         }
+    }
+    let small_flip_thresh: [f64; D] = {
+        let mut out = [0.0_f64; D];
+        for d in 0..D {
+            out[d] = 0.05 * max_abs[d];
+        }
+        out
+    };
 
-        let mut x = vec![0.0_f64; n];
-        x[n - 1] = d_prime[n - 1];
-        for i in (0..n - 1).rev() {
-            x[i] = d_prime[i] - c_prime[i] * x[i + 1];
-        }
-        for i in 0..n {
-            big_m[i + 1][d] = x[i];
+    for k in 1..m - 1 {
+        let h_l = ds[k - 1];
+        let h_r = ds[k];
+        let w1 = 2.0 * h_r + h_l;
+        let w2 = h_r + 2.0 * h_l;
+        for d in 0..D {
+            let dl = delta[k - 1][d];
+            let dr = delta[k][d];
+            slopes[k][d] = if dl * dr <= 0.0 {
+                let small_flip = dl.abs().max(dr.abs()) < small_flip_thresh[d];
+                if small_flip {
+                    // Smooth small-amplitude flip — use centered FD so the resulting
+                    // cubic stays close to the actual smooth curve. We give up strict
+                    // monotonicity on the two adjacent segments (the cubic may overshoot
+                    // by O(small_flip_thresh × h)), which is a tiny relative overshoot
+                    // and not where the constraint pressure actually lives.
+                    let span = h_l + h_r;
+                    (dl * h_l + dr * h_r) / span
+                } else {
+                    // Real extremum or corner — slope must be 0 to keep the cubic monotone
+                    // on both adjacent segments.
+                    0.0
+                }
+            } else {
+                // Weighted harmonic mean. Both `dl` and `dr` strictly positive or strictly
+                // negative here, so neither denominator term blows up.
+                (w1 + w2) / (w1 / dl + w2 / dr)
+            };
         }
     }
 
-    big_m
+    // Boundary slopes: three-point asymmetric formula with two limiter checks.
+    for d in 0..D {
+        slopes[0][d] = boundary_slope(ds[0], ds[1], delta[0][d], delta[1][d]);
+        slopes[m - 1][d] = boundary_slope(
+            ds[segs - 1],
+            ds[segs - 2],
+            delta[segs - 1][d],
+            delta[segs - 2][d],
+        );
+    }
+
+    // Defensive fallback for sharp directional corners. PCHIP zeros the per-dimension
+    // slope at every extremum; when *every* dimension simultaneously has a zero secant on
+    // one side (a sharp corner where one set of joints stops and a different set starts),
+    // the entire `qp` vector goes to zero. The chord-length parameter is still advancing,
+    // so the resulting path-derivative inequality `qp_j·sd ≤ v_max` is vacuous in every
+    // joint and the NLP's constraint Jacobian goes rank-deficient — Sleipnir's KKT
+    // factorization then reads past the end of an Eigen vector and aborts the process.
+    // Replace those samples with the centered-FD slope `(y[k+1] − y[k−1]) / (s[k+1] − s[k−1])`,
+    // which gives a meaningful averaged direction at the cost of giving up local
+    // monotonicity on the two adjacent segments — a much better trade than crashing.
+    let max_norm_sq = slopes
+        .iter()
+        .map(|s| s.iter().map(|x| x * x).sum::<f64>())
+        .fold(0.0_f64, f64::max);
+    if max_norm_sq > 0.0 {
+        let threshold_sq = 1e-12 * max_norm_sq;
+        for k in 1..m - 1 {
+            let norm_sq: f64 = slopes[k].iter().map(|x| x * x).sum();
+            if norm_sq < threshold_sq {
+                let span = ds[k - 1] + ds[k];
+                for d in 0..D {
+                    // delta[k-1] · ds[k-1] = y[k] - y[k-1];
+                    // delta[k]   · ds[k]   = y[k+1] - y[k].
+                    // Centered FD = ((y[k+1] - y[k-1])) / span.
+                    let dy = delta[k - 1][d] * ds[k - 1] + delta[k][d] * ds[k];
+                    slopes[k][d] = dy / span;
+                }
+            }
+        }
+    }
+
+    slopes
+}
+
+/// PCHIP boundary slope: three-point asymmetric formula with the Fritsch-Carlson limiters.
+/// `h_near, h_far` are the two segment widths next to the boundary; `d_near, d_far` are
+/// the corresponding secant slopes.
+fn boundary_slope(h_near: f64, h_far: f64, d_near: f64, d_far: f64) -> f64 {
+    let raw = ((2.0 * h_near + h_far) * d_near - h_near * d_far) / (h_near + h_far);
+    if raw * d_near <= 0.0 {
+        0.0
+    } else if d_near * d_far <= 0.0 && raw.abs() > 3.0 * d_near.abs() {
+        3.0 * d_near
+    } else {
+        raw
+    }
 }
 
 #[cfg(test)]

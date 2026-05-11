@@ -2,7 +2,8 @@
 
 use std::f64::consts::FRAC_PI_2;
 
-use deke_types::{DHChain, DHJoint, JointValidator, SRobotQ};
+use deke_types::glam::DVec3;
+use deke_types::{DHChain, DHJoint, JointValidator, PrismaticFK, SRobotQ};
 
 /// UR5-ish 6-DOF DH chain — used in every multi-DOF test so that TCP metrics are realistic.
 pub fn dh_6dof() -> DHChain<6, f64> {
@@ -23,6 +24,14 @@ pub fn dh_1dof() -> DHChain<1, f64> {
         d: 0.0,
         theta_offset: 0.0,
     }])
+}
+
+/// 7-DOF chain: a prismatic rail (q[0]) along world +X carrying a UR5-ish 6-DOF arm.
+/// Models the common "mobile base + arm" or "vertical lift + arm" setup. The redundancy
+/// is deliberate — TCP velocity has a null-space (the rail can shift while the arm
+/// counter-rotates) which exercises the relative-|pp| cutoff in the NLP.
+pub fn dh_7dof_prismatic() -> PrismaticFK<7, 6, f64, DHChain<6, f64>> {
+    PrismaticFK::<7, 6, f64, _>::new(dh_6dof(), DVec3::X, /* q_index_first */ true)
 }
 
 pub fn wide_validator<const N: usize>() -> JointValidator<N, f64> {

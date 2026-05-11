@@ -71,6 +71,30 @@ pub fn build_and_solve<const N: usize>(
         0.0
     };
 
+    // Per-joint relative-magnitude cutoff for `qp_j`. The joint v upper bound is
+    // `sd_k ≤ v_max / |qp_j|`; when `|qp_j|` is tiny but non-zero (a "slow section" where
+    // the joint is *barely* moving relative to the rest of the path), this bound inflates
+    // to 1/|qp_j| · v_max ≈ 1e9, and the corresponding constraint row's Jacobian gradient
+    // (`1/|qp_j|`) makes the IPM's KKT matrix wildly ill-conditioned. Anything below
+    // `1e-6 × max|qp_j|` on a per-joint basis is treated as "not really moving" and the
+    // constraint is dropped.
+    let mut qp_max_abs = [0.0_f64; N];
+    for k in 0..m {
+        for j in 0..N {
+            let a = deriv.qp[k][j].abs();
+            if a > qp_max_abs[j] {
+                qp_max_abs[j] = a;
+            }
+        }
+    }
+    let qp_cutoffs: [f64; N] = {
+        let mut out = [0.0_f64; N];
+        for j in 0..N {
+            out[j] = (1e-6 * qp_max_abs[j]).max(1e-12);
+        }
+        out
+    };
+
     for k in 0..m {
         let sd_k = sd[k];
         subject_to!(problem, sd_k >= 0.0);
@@ -86,7 +110,7 @@ pub fn build_and_solve<const N: usize>(
 
         for j in lock..N {
             let qp_j = deriv.qp[k][j];
-            if qp_j.abs() < 1e-12 {
+            if qp_j.abs() < qp_cutoffs[j] {
                 continue;
             }
             let v_max = constraints.joint.v_max.0[j];
@@ -162,6 +186,26 @@ pub fn build_and_solve<const N: usize>(
         }
     }
 
+    // Per-sample degenerate-corner detector. A "degenerate" sample is one where the path
+    // tangent `qp` is essentially zero in *every* joint — i.e. the chord-length parameter
+    // is still advancing through this point but the joint-space velocity direction is
+    // undefined (turning points of a zigzag, 180° reversals). Joint a/j constraints
+    // computed against `qp_j = 0` have a zero gradient w.r.t. `sdd`/`sddd` and trip up
+    // Sleipnir's KKT factorization. We detect these samples relative to the max ‖qp‖ on
+    // the path and skip their joint-side constraints entirely; the integrator chain alone
+    // keeps `sd[k]` and `sdd[k]` well-determined.
+    let mut max_qp_norm_sq = 0.0_f64;
+    for k in 0..m {
+        let mut n = 0.0_f64;
+        for j in lock..N {
+            n += deriv.qp[k][j] * deriv.qp[k][j];
+        }
+        if n > max_qp_norm_sq {
+            max_qp_norm_sq = n;
+        }
+    }
+    let degenerate_qp_threshold_sq = 1e-12 * max_qp_norm_sq;
+
     for k in 0..m {
         let sd_k = sd[k];
         let sdd_k = sdd[k];
@@ -174,37 +218,44 @@ pub fn build_and_solve<const N: usize>(
         // that the IPM restoration phase trips over.
         let at_boundary = k == 0 || k == m - 1;
 
-        for j in lock..N {
-            let qp_j = deriv.qp[k][j];
-            let qpp_j = deriv.qpp[k][j];
-            let qppp_j = deriv.qppp[k][j];
-            let v_max = constraints.joint.v_max.0[j];
-            let a_max = constraints.joint.a_max.0[j];
-            let j_max = constraints.joint.j_max.0[j];
+        let qp_norm_sq: f64 = (lock..N)
+            .map(|j| deriv.qp[k][j] * deriv.qp[k][j])
+            .sum();
+        let qp_degenerate = qp_norm_sq <= degenerate_qp_threshold_sq;
 
-            if v_max.is_finite() && v_max > 0.0 && qp_j.abs() > 1e-12 {
-                let expr = qp_j * sd_k;
-                subject_to!(problem, expr <= v_max);
-                let neg = -qp_j * sd_k;
-                subject_to!(problem, neg <= v_max);
-            }
+        if !qp_degenerate {
+            for j in lock..N {
+                let qp_j = deriv.qp[k][j];
+                let qpp_j = deriv.qpp[k][j];
+                let qppp_j = deriv.qppp[k][j];
+                let v_max = constraints.joint.v_max.0[j];
+                let a_max = constraints.joint.a_max.0[j];
+                let j_max = constraints.joint.j_max.0[j];
 
-            if a_max.is_finite() && a_max > 0.0 {
-                let expr = qpp_j * sd_k * sd_k + qp_j * sdd_k;
-                subject_to!(problem, expr <= a_max);
-                let neg = -qpp_j * sd_k * sd_k - qp_j * sdd_k;
-                subject_to!(problem, neg <= a_max);
-            }
+                if v_max.is_finite() && v_max > 0.0 && qp_j.abs() > qp_cutoffs[j] {
+                    let expr = qp_j * sd_k;
+                    subject_to!(problem, expr <= v_max);
+                    let neg = -qp_j * sd_k;
+                    subject_to!(problem, neg <= v_max);
+                }
 
-            if j_max.is_finite() && j_max > 0.0 {
-                let expr = qppp_j * sd_k * sd_k * sd_k
-                    + 3.0 * qpp_j * sd_k * sdd_k
-                    + qp_j * sddd_k;
-                subject_to!(problem, expr <= j_max);
-                let neg = -qppp_j * sd_k * sd_k * sd_k
-                    - 3.0 * qpp_j * sd_k * sdd_k
-                    - qp_j * sddd_k;
-                subject_to!(problem, neg <= j_max);
+                if a_max.is_finite() && a_max > 0.0 {
+                    let expr = qpp_j * sd_k * sd_k + qp_j * sdd_k;
+                    subject_to!(problem, expr <= a_max);
+                    let neg = -qpp_j * sd_k * sd_k - qp_j * sdd_k;
+                    subject_to!(problem, neg <= a_max);
+                }
+
+                if j_max.is_finite() && j_max > 0.0 {
+                    let expr = qppp_j * sd_k * sd_k * sd_k
+                        + 3.0 * qpp_j * sd_k * sdd_k
+                        + qp_j * sddd_k;
+                    subject_to!(problem, expr <= j_max);
+                    let neg = -qppp_j * sd_k * sd_k * sd_k
+                        - 3.0 * qpp_j * sd_k * sdd_k
+                        - qp_j * sddd_k;
+                    subject_to!(problem, neg <= j_max);
+                }
             }
         }
 

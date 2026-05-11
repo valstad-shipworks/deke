@@ -128,10 +128,12 @@ fn densify_path<const N: usize>(
     path: &SRobotPath<N, f64>,
     opts: &crate::constraints::DensificationOptions,
 ) -> DekeResult<SRobotPath<N, f64>> {
+    let merged = merge_near_duplicates(path, opts.min_segment_fraction)?;
+
     let mut p = if let Some(step) = opts.max_segment_step {
-        path.densify(step)
+        merged.densify(step)
     } else {
-        path.clone()
+        merged
     };
 
     if p.len() < opts.min_samples {
@@ -155,6 +157,73 @@ fn densify_path<const N: usize>(
     }
 
     Ok(p)
+}
+
+/// Drops interior waypoints whose chord distance to the previously-kept waypoint is below
+/// `max(relative_threshold × mean_segment_length, ABSOLUTE_FLOOR)`. The first and last
+/// waypoints are always kept; if the last waypoint is itself within the threshold of the
+/// previous interior keep, that interior waypoint is dropped in favor of the user-requested
+/// endpoint. A `relative_threshold` of 0 disables merging.
+///
+/// We use the mean rather than the median because a path with a "quasi-stationary"
+/// section (a few normal segments + several deliberate tiny ones) has a tiny median and
+/// a relative-to-median threshold then can't see the tiny segments. The mean is dragged
+/// down too but stays at least order(of the largest segments / total count) — enough to
+/// catch the tinies. The absolute floor (1e-5) catches "all segments are tiny" pathological
+/// inputs that would otherwise be unfilterable.
+fn merge_near_duplicates<const N: usize>(
+    path: &SRobotPath<N, f64>,
+    relative_threshold: f64,
+) -> DekeResult<SRobotPath<N, f64>> {
+    const ABSOLUTE_FLOOR: f64 = 1e-5;
+    let m = path.len();
+    if m < 3 || relative_threshold <= 0.0 {
+        return Ok(path.clone());
+    }
+
+    let mut total = 0.0_f64;
+    for k in 0..m - 1 {
+        total += chord_distance::<N>(path.get(k).unwrap(), path.get(k + 1).unwrap());
+    }
+    let mean_seg = total / (m - 1) as f64;
+    let threshold = (mean_seg * relative_threshold).max(ABSOLUTE_FLOOR);
+
+    let mut kept_indices: Vec<usize> = Vec::with_capacity(m);
+    kept_indices.push(0);
+    for k in 1..m - 1 {
+        let last_idx = *kept_indices.last().unwrap();
+        let last = path.get(last_idx).unwrap();
+        let cur = path.get(k).unwrap();
+        if chord_distance::<N>(last, cur) >= threshold {
+            kept_indices.push(k);
+        }
+    }
+    let last_idx = *kept_indices.last().unwrap();
+    let last_kept = path.get(last_idx).unwrap();
+    let final_wp = path.get(m - 1).unwrap();
+    if chord_distance::<N>(last_kept, final_wp) < threshold && kept_indices.len() > 1 {
+        // Last interior keep is too close to the user's final waypoint; drop the interior one.
+        kept_indices.pop();
+    }
+    kept_indices.push(m - 1);
+
+    let kept: Vec<_> = kept_indices
+        .iter()
+        .map(|&i| *path.get(i).unwrap())
+        .collect();
+    SRobotPath::try_new(kept)
+}
+
+fn chord_distance<const N: usize>(
+    a: &deke_types::SRobotQ<N, f64>,
+    b: &deke_types::SRobotQ<N, f64>,
+) -> f64 {
+    let mut sq = 0.0_f64;
+    for j in 0..N {
+        let d = b.0[j] - a.0[j];
+        sq += d * d;
+    }
+    sq.sqrt()
 }
 
 fn infer_limiting_group<const N: usize>(
