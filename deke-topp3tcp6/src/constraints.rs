@@ -117,18 +117,22 @@ pub struct SolverOptions {
     pub max_iterations: i32,
     pub timeout: Option<Duration>,
     pub diagnostics: bool,
+    /// Half-width of the slack box on the start/end velocity and acceleration boundary
+    /// "equalities". The retimer enforces `|sd[0] - start.sd| ≤ boundary_slack` (and three
+    /// more like it) instead of hard `sd[0] == start.sd`, because the IPM behaves badly when
+    /// rest-to-rest equalities pin variables to exactly zero at the cone tip — a small slack
+    /// box gives the line search room without observable change in output. Defaults to 1e-4.
+    pub boundary_slack: f64,
 }
 
 impl Default for SolverOptions {
     fn default() -> Self {
         Self {
             tolerance: 1e-6,
-            // Bumped from 500 because the analytical-spline path derivatives produce a
-            // smoother but more interesting constraint geometry than the FD ones, and the
-            // 6-DOF curved-path test case lands around 250–550 iterations to converge.
             max_iterations: 1500,
             timeout: None,
             diagnostics: false,
+            boundary_slack: 1e-4,
         }
     }
 }

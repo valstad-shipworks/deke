@@ -124,14 +124,42 @@ pub fn build_and_solve<const N: usize>(
     }
 
     {
+        // Soft boundary box: |sd[0] - start.sd| ≤ slack (and three more like it). Hard
+        // equalities pin variables to exactly zero at rest-to-rest, which is the cone tip
+        // of every TCP constraint — the IPM line search hates that. A tiny slack box
+        // (default 1e-4) gives Newton room to step without observable output drift; the
+        // resampler still reads the boundary off the user's request, not the variable.
+        let slack = constraints.solver.boundary_slack.max(0.0);
         let sd_0 = sd[0];
         let sdd_0 = sdd[0];
         let sd_f = sd[m - 1];
         let sdd_f = sdd[m - 1];
-        subject_to!(problem, sd_0 == start.sd);
-        subject_to!(problem, sdd_0 == start.sdd);
-        subject_to!(problem, sd_f == end.sd);
-        subject_to!(problem, sdd_f == end.sdd);
+        if slack == 0.0 {
+            subject_to!(problem, sd_0 == start.sd);
+            subject_to!(problem, sdd_0 == start.sdd);
+            subject_to!(problem, sd_f == end.sd);
+            subject_to!(problem, sdd_f == end.sdd);
+        } else {
+            let up_sd0 = sd_0 - start.sd;
+            subject_to!(problem, up_sd0 <= slack);
+            let lo_sd0 = -sd_0 + start.sd;
+            subject_to!(problem, lo_sd0 <= slack);
+
+            let up_sdd0 = sdd_0 - start.sdd;
+            subject_to!(problem, up_sdd0 <= slack);
+            let lo_sdd0 = -sdd_0 + start.sdd;
+            subject_to!(problem, lo_sdd0 <= slack);
+
+            let up_sdf = sd_f - end.sd;
+            subject_to!(problem, up_sdf <= slack);
+            let lo_sdf = -sd_f + end.sd;
+            subject_to!(problem, lo_sdf <= slack);
+
+            let up_sddf = sdd_f - end.sdd;
+            subject_to!(problem, up_sddf <= slack);
+            let lo_sddf = -sdd_f + end.sdd;
+            subject_to!(problem, lo_sddf <= slack);
+        }
     }
 
     for k in 0..m {
@@ -269,6 +297,21 @@ pub fn build_and_solve<const N: usize>(
     })
 }
 
+/// Builds an initial guess that exactly satisfies the per-segment integrator and
+/// `ds`-equality constraints, and the start-side boundary equalities. The end-side
+/// boundary on `sdd` is generally not satisfied — by design, the forward propagation
+/// can't be told to hit both endpoints simultaneously without a global solve, and the
+/// boundary slack box [`crate::SolverOptions::boundary_slack`] is sized to absorb the
+/// residual.
+///
+/// Algorithm:
+/// 1. Pick a smooth target `sd` profile: sinusoidal ramp from `start.sd` up to a flat
+///    cruise speed (≈70% of the most restrictive sample-wise velocity cap), then a
+///    matching sinusoidal ramp down to `end.sd`.
+/// 2. Forward-propagate. For each segment, given `(sd[k], sd[k+1], sdd[k], ds[k])`, solve
+///    the integrator equalities exactly for `(dt[k], sddd[k])` using the closed-form
+///    quadratic `(1/6)·sdd[k]·dt² + ((2/3)·sd[k] + (1/3)·sd[k+1])·dt − ds[k] = 0`. Then
+///    propagate `sdd[k+1] = sdd[k] + sddd[k]·dt[k]`.
 fn apply_initial_guess<'a, const N: usize>(
     sd: &[hafgufa::Variable<'a>],
     sdd: &[hafgufa::Variable<'a>],
@@ -284,18 +327,15 @@ fn apply_initial_guess<'a, const N: usize>(
     let seg = deriv.num_segments();
     let lock = constraints.locked_prefix.min(N);
 
-    let mut sd_guess = vec![0.0_f64; m];
+    let mut cap = vec![1.0_f64; m];
     for k in 0..m {
-        let mut cap = f64::INFINITY;
+        let mut c = f64::INFINITY;
         for j in lock..N {
             let q = deriv.qp[k][j].abs();
             if q > 1e-9 {
                 let v = constraints.joint.v_max.0[j];
                 if v.is_finite() && v > 0.0 {
-                    let bound = v / q;
-                    if bound < cap {
-                        cap = bound;
-                    }
+                    c = c.min(v / q);
                 }
             }
         }
@@ -306,30 +346,85 @@ fn apply_initial_guess<'a, const N: usize>(
             let pp = &deriv.pp[k];
             let pn_sq = pp[0] * pp[0] + pp[1] * pp[1] + pp[2] * pp[2];
             if pn_sq > pp_cutoff_sq {
-                let bound = constraints.tcp.v_max / pn_sq.sqrt();
-                if bound < cap {
-                    cap = bound;
-                }
+                c = c.min(constraints.tcp.v_max / pn_sq.sqrt());
             }
         }
-        if !cap.is_finite() {
-            cap = 1.0;
+        if !c.is_finite() {
+            c = 1.0;
         }
-        sd_guess[k] = (cap * 0.7).max(1e-3);
+        cap[k] = (c * 0.7).max(1e-3);
     }
-    sd_guess[0] = start.sd.max(1e-6);
-    sd_guess[m - 1] = end.sd.max(1e-6);
+
+    let cruise = cap
+        .iter()
+        .copied()
+        .fold(f64::INFINITY, f64::min)
+        .max(1e-3);
+
+    let start_sd = start.sd.max(0.0);
+    let end_sd = end.sd.max(0.0);
+
+    // Ramp count: span enough samples that the sd transition doesn't demand huge sddd.
+    // m/4 with a floor of 2 and a ceiling at half the path keeps it stable across both
+    // very short (m=2..10) and very long (m=200+) densifications.
+    let ramp = ((m / 4).max(2)).min((m.saturating_sub(1)) / 2);
+
+    let mut sd_guess = vec![cruise; m];
+    if ramp == 0 {
+        sd_guess[0] = start_sd;
+        if m > 1 {
+            sd_guess[m - 1] = end_sd;
+        }
+    } else {
+        let pi = std::f64::consts::PI;
+        for k in 0..=ramp.min(m - 1) {
+            let factor = 0.5 * (1.0 - (pi * k as f64 / ramp as f64).cos());
+            sd_guess[k] = start_sd + (cruise - start_sd) * factor;
+        }
+        for k in (m.saturating_sub(ramp + 1))..m {
+            let j = m - 1 - k;
+            let factor = 0.5 * (1.0 - (pi * j as f64 / ramp as f64).cos());
+            let blended = end_sd + (cruise - end_sd) * factor;
+            // Don't reduce below the ramp-up value — keep cruise wherever the two ramps
+            // would overlap.
+            if blended < sd_guess[k] {
+                sd_guess[k] = blended;
+            }
+        }
+        sd_guess[0] = start_sd;
+        sd_guess[m - 1] = end_sd;
+    }
+    for k in 0..m {
+        if sd_guess[k] > cap[k] {
+            sd_guess[k] = cap[k];
+        }
+        if sd_guess[k] < 0.0 {
+            sd_guess[k] = 0.0;
+        }
+    }
 
     let mut sdd_guess = vec![0.0_f64; m];
     sdd_guess[0] = start.sdd;
-    sdd_guess[m - 1] = end.sdd;
+    let mut sddd_guess = vec![0.0_f64; seg];
+    let mut dt_guess = vec![1e-5_f64; seg];
 
-    let sddd_guess = vec![0.0_f64; seg];
-
-    let mut dt_guess = vec![0.0_f64; seg];
     for k in 0..seg {
-        let sd_avg = 0.5 * (sd_guess[k] + sd_guess[k + 1]);
-        dt_guess[k] = (deriv.ds[k] / sd_avg.max(1e-6)).max(1e-5);
+        let v0 = sd_guess[k].max(0.0);
+        let v1 = sd_guess[k + 1].max(0.0);
+        let a0 = sdd_guess[k];
+        let ds_k = deriv.ds[k];
+
+        let big_a = a0 / 6.0;
+        let big_b = (2.0 / 3.0) * v0 + (1.0 / 3.0) * v1;
+        let big_c = -ds_k;
+
+        let dt_k = solve_segment_dt(big_a, big_b, big_c, v0, v1, ds_k);
+        let j_k = 2.0 * (v1 - v0 - a0 * dt_k) / (dt_k * dt_k);
+        let a1 = a0 + j_k * dt_k;
+
+        dt_guess[k] = dt_k.max(1e-5);
+        sddd_guess[k] = j_k;
+        sdd_guess[k + 1] = a1;
     }
 
     for k in 0..m {
@@ -340,4 +435,37 @@ fn apply_initial_guess<'a, const N: usize>(
         sddd[k].set_value(sddd_guess[k]);
         dt[k].set_value(dt_guess[k]);
     }
+}
+
+/// Solves `(1/6)·a·u² + b·u + c = 0` for the smallest positive real root `u = dt`, with
+/// graceful fallbacks for degenerate cases (`a ≈ 0`, no real roots, no positive root).
+/// `v0, v1, ds_k` are used only to compute a trapezoidal fallback when the closed form
+/// can't return a usable root.
+fn solve_segment_dt(a: f64, b: f64, c: f64, v0: f64, v1: f64, ds_k: f64) -> f64 {
+    let fallback = || {
+        let avg = (0.5 * (v0 + v1)).max(1e-6);
+        (ds_k / avg).max(1e-5)
+    };
+
+    if a.abs() < 1e-12 * (b.abs() + 1.0) {
+        if b.abs() < 1e-9 {
+            return fallback();
+        }
+        let u = -c / b;
+        return if u > 1e-9 { u } else { fallback() };
+    }
+
+    let disc = b * b - 4.0 * a * c;
+    if disc < 0.0 {
+        return fallback();
+    }
+    let sqd = disc.sqrt();
+    let u1 = (-b + sqd) / (2.0 * a);
+    let u2 = (-b - sqd) / (2.0 * a);
+    let best = [u1, u2]
+        .iter()
+        .copied()
+        .filter(|&u| u > 1e-9 && u.is_finite())
+        .fold(f64::INFINITY, f64::min);
+    if best.is_finite() { best } else { fallback() }
 }
