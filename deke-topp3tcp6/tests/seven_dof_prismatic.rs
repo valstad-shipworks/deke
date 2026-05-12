@@ -18,11 +18,11 @@ fn seven_dof_curved_with_tcp_solves_and_is_feasible() {
     let path = SRobotPath::<7, f64>::try_new(waypoints).unwrap();
 
     let mut cfg = Topp3Tcp6Constraints::<7>::symmetric(1.5, 8.0, 400.0);
-    cfg.tcp = TcpLimits {
+    cfg.tcp = Some(TcpLimits {
         v_max: 1.0,
         a_max: 10.0,
         j_max: 500.0,
-    };
+    });
     let mut validator = common::wide_validator::<7>();
 
     let (result, diag) = Topp3Tcp6.retime(&cfg, &path, &fk, &mut validator, &());
@@ -80,11 +80,11 @@ fn seven_dof_rail_dominant_motion() {
     let path = SRobotPath::<7, f64>::try_new(waypoints).unwrap();
 
     let mut cfg = Topp3Tcp6Constraints::<7>::symmetric(2.0, 10.0, 500.0);
-    cfg.tcp = TcpLimits {
+    cfg.tcp = Some(TcpLimits {
         v_max: 0.5,
         a_max: 5.0,
         j_max: 250.0,
-    };
+    });
     cfg.solver.max_iterations = 3_000;
     let mut validator = common::wide_validator::<7>();
 

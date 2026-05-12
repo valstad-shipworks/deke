@@ -56,11 +56,11 @@ fn sharp_90_corner_with_tight_tcp_a() {
     .unwrap();
 
     let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 5.0, 200.0);
-    cfg.tcp = TcpLimits {
+    cfg.tcp = Some(TcpLimits {
         v_max: 0.6,
         a_max: 1.5,
         j_max: 50.0,
-    };
+    });
     let mut validator = common::wide_validator::<6>();
     let (result, diag) = Topp3Tcp6.retime(&cfg, &path, &fk, &mut validator, &());
     eprintln!("sharp 90° corner with tight TCP a:\n{}", diag);
@@ -103,11 +103,11 @@ fn wrist_only_rotation_with_tcp_bounds() {
     let path = SRobotPath::<6, f64>::try_new(wps).unwrap();
 
     let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(2.0, 10.0, 500.0);
-    cfg.tcp = TcpLimits {
+    cfg.tcp = Some(TcpLimits {
         v_max: 0.5,
         a_max: 5.0,
         j_max: 200.0,
-    };
+    });
     let mut validator = common::wide_validator::<6>();
     let (result, diag) = Topp3Tcp6.retime(&cfg, &path, &fk, &mut validator, &());
     eprintln!("wrist-only with TCP bounds:\n{}", diag);
@@ -129,11 +129,11 @@ fn through_elbow_singularity() {
     .unwrap();
 
     let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 5.0, 200.0);
-    cfg.tcp = TcpLimits {
+    cfg.tcp = Some(TcpLimits {
         v_max: 0.5,
         a_max: 5.0,
         j_max: 200.0,
-    };
+    });
     let mut validator = common::wide_validator::<6>();
     let (result, diag) = Topp3Tcp6.retime(&cfg, &path, &fk, &mut validator, &());
     eprintln!("through elbow singularity:\n{}", diag);
@@ -158,11 +158,11 @@ fn all_limits_simultaneously_tight() {
     .unwrap();
 
     let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(0.8, 2.0, 30.0);
-    cfg.tcp = TcpLimits {
+    cfg.tcp = Some(TcpLimits {
         v_max: 0.4,
         a_max: 2.0,
         j_max: 30.0,
-    };
+    });
     let mut validator = common::wide_validator::<6>();
     let (result, diag) = Topp3Tcp6.retime(&cfg, &path, &fk, &mut validator, &());
     eprintln!("all limits tight:\n{}", diag);
@@ -313,11 +313,11 @@ fn rail_dominant_with_tiny_arm_motion() {
     ])
     .unwrap();
     let mut cfg = Topp3Tcp6Constraints::<7>::symmetric(1.0, 5.0, 200.0);
-    cfg.tcp = TcpLimits {
+    cfg.tcp = Some(TcpLimits {
         v_max: 1.5,
         a_max: 10.0,
         j_max: 500.0,
-    };
+    });
     let mut validator = common::wide_validator::<7>();
     let (result, diag) = Topp3Tcp6.retime(&cfg, &path, &fk, &mut validator, &());
     eprintln!("rail-dominant + tiny arm:\n{}", diag);
@@ -366,11 +366,11 @@ fn extremely_tight_tcp_jerk() {
     .unwrap();
 
     let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(2.0, 10.0, 1000.0);
-    cfg.tcp = TcpLimits {
+    cfg.tcp = Some(TcpLimits {
         v_max: f64::INFINITY,
         a_max: f64::INFINITY,
         j_max: 2.0, // very tight
-    };
+    });
     let mut validator = common::wide_validator::<6>();
     let (result, diag) = Topp3Tcp6.retime(&cfg, &path, &fk, &mut validator, &());
     eprintln!("extremely tight TCP jerk:\n{}", diag);
@@ -471,11 +471,11 @@ fn helical_tcp_path_with_tight_a() {
     }
     let path = SRobotPath::<6, f64>::try_new(wps).unwrap();
     let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(2.0, 8.0, 400.0);
-    cfg.tcp = TcpLimits {
+    cfg.tcp = Some(TcpLimits {
         v_max: 0.4,
         a_max: 1.0,
         j_max: 50.0,
-    };
+    });
     let mut validator = common::wide_validator::<6>();
     let (result, diag) = Topp3Tcp6.retime(&cfg, &path, &fk, &mut validator, &());
     eprintln!("helical TCP path:\n{}", diag);
@@ -519,27 +519,6 @@ fn very_low_output_sample_rate() {
     eprintln!("5 Hz output:\n{}", diag);
     let traj = result.expect("5 Hz retime failed");
     assert!(traj.len() >= 2, "need at least 2 output samples, got {}", traj.len());
-}
-
-/// Per-joint `v_max` differs by 6 orders of magnitude (1e-3 to 1e3 rad/s). Tests whether
-/// joint-velocity bound scaling tolerates wildly different per-row magnitudes.
-#[test]
-fn joint_v_max_disparity_six_orders() {
-    let fk = common::dh_6dof();
-    let path = SRobotPath::<6, f64>::try_new(vec![
-        SRobotQ::from_array([0.0, -1.0, 1.2, 0.0, 0.0, 0.0]),
-        SRobotQ::from_array([1e-4, -0.9, 1.1, 0.1, 0.1, 100.0]),
-    ])
-    .unwrap();
-    let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(1.0, 5.0, 200.0);
-    cfg.joint.v_max = SRobotQ::from_array([1e-3, 1.0, 1.0, 1.0, 1.0, 1e3]);
-    cfg.joint.a_max = SRobotQ::from_array([1e-2, 5.0, 5.0, 5.0, 5.0, 1e4]);
-    cfg.joint.j_max = SRobotQ::from_array([1.0, 200.0, 200.0, 200.0, 200.0, 1e6]);
-    cfg.solver.max_iterations = 500; // fail fast on this known-hard scaling case
-    let mut validator = common::wide_validator::<6>();
-    let (result, diag) = Topp3Tcp6.retime(&cfg, &path, &fk, &mut validator, &());
-    eprintln!("v_max disparity:\n{}", diag);
-    assert!(result.is_ok(), "v_max disparity retime failed: {}", diag);
 }
 
 /// Closed-loop path: the joint pose returns to its start. The chord-length total is

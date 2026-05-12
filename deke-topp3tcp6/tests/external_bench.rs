@@ -86,11 +86,11 @@ fn external_cfg() -> Topp3Tcp6Constraints<6> {
             22.897033, 22.897033, 28.893875, 45.794066, 49.065074, 78.504119,
         ]),
     };
-    cfg.tcp = TcpLimits {
+    cfg.tcp = Some(TcpLimits {
         v_max: 2.0,
         a_max: 20.0,
         j_max: 200.0,
-    };
+    });
     cfg.sample_rate_hz = 125.0;
     cfg.post_validation = false;
     cfg

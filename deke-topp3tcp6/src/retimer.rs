@@ -10,7 +10,7 @@ use crate::diagnostic::{
     DerivativeStats, LimitingGroup, PathStats, PeakLocation, SolveStatus, TcpStats,
     Topp3Tcp6Diagnostic,
 };
-use crate::nlp::{Solution, build_and_solve};
+use crate::nlp::{Solution, build_and_solve, build_and_solve_warm};
 use crate::path_derivatives::PathDerivatives;
 use crate::resample::resample_to_uniform;
 
@@ -57,7 +57,7 @@ impl<const N: usize> Retimer<N, f64> for Topp3Tcp6 {
         populate_path_geometry::<N>(&mut diag.path_stats, &densified);
 
         let t_deriv = Instant::now();
-        let tcp_disabled = constraints.tcp.is_disabled();
+        let tcp_disabled = constraints.tcp.is_none();
         let deriv = match if tcp_disabled {
             PathDerivatives::<N>::new_without_tcp(&densified)
         } else {
@@ -98,7 +98,22 @@ impl<const N: usize> Retimer<N, f64> for Topp3Tcp6 {
             return (Err(err), diag);
         }
 
-        let solution = match build_and_solve::<N>(&deriv, constraints, start, end) {
+        // Two-stage warm-start path. When TCP constraints are active and the user has
+        // it enabled, first solve the TCP-disabled problem (joint constraints +
+        // integrator only) to get a feasible (sd, sdd, sddd, dt) iterate, then run the
+        // TCP-enabled solve from that warm start. Stage 1 is cheap (smaller constraint
+        // set) and Stage 2 typically converges in <50 iter from the warm point —
+        // significantly faster *and* more robust than single-stage on hard paths
+        // (8wp/50wp shapes that previously consumed any iter budget then bailed).
+        let solution_result = if !tcp_disabled
+            && deriv.has_tcp()
+            && constraints.solver.two_stage_warm_start
+        {
+            two_stage_solve::<N>(&densified, &deriv, fk, constraints, start, end)
+        } else {
+            build_and_solve::<N>(&deriv, constraints, start, end)
+        };
+        let solution = match solution_result {
             Ok(s) => s,
             Err(e) => {
                 diag.message = Some(format!("{}", e));
@@ -384,10 +399,12 @@ fn infer_limiting_group<const N: usize>(
                     worst = (a - a_max, LimitingGroup::JointAcceleration, k);
                 }
             }
-            if deriv.has_tcp() {
+            if let Some(tcp) = constraints.tcp
+                && deriv.has_tcp()
+            {
                 let pp = &deriv.pp[k];
                 let tcp_v = (pp[0] * pp[0] + pp[1] * pp[1] + pp[2] * pp[2]).sqrt() * sd;
-                let tcp_v_max = constraints.tcp.v_max;
+                let tcp_v_max = tcp.v_max;
                 if tcp_v_max.is_finite() && tcp_v - tcp_v_max > worst.0 {
                     worst = (tcp_v - tcp_v_max, LimitingGroup::TcpVelocity, k);
                 }
@@ -429,9 +446,12 @@ fn populate_analytical_peaks<const N: usize>(
     let jv_max: Vec<f64> = (0..N).map(|j| constraints.joint.v_max.0[j]).collect();
     let ja_max: Vec<f64> = (0..N).map(|j| constraints.joint.a_max.0[j]).collect();
     let jj_max: Vec<f64> = (0..N).map(|j| constraints.joint.j_max.0[j]).collect();
-    let tv_max = constraints.tcp.v_max;
-    let ta_max = constraints.tcp.a_max;
-    let tj_max = constraints.tcp.j_max;
+    // TCP limits are optional; when absent we never call the update helper against these
+    // so the actual value doesn't matter — sentinel infinities mean `update_util` no-ops.
+    let (tv_max, ta_max, tj_max) = match constraints.tcp {
+        Some(tcp) => (tcp.v_max, tcp.a_max, tcp.j_max),
+        None => (f64::INFINITY, f64::INFINITY, f64::INFINITY),
+    };
 
     let update_util = |cur: &mut f64, val: f64, limit: f64| {
         if limit.is_finite() && limit > 0.0 {
@@ -552,4 +572,59 @@ fn populate_analytical_peaks<const N: usize>(
         joint: None,
     };
     diag.average_utilization = if m > 0 { util_sum / m as f64 } else { 0.0 };
+}
+
+/// Two-stage solve: first run with TCP disabled to get a feasible warm-start, then run
+/// with TCP enabled seeded from the stage-1 solution. Returns the stage-2 result.
+///
+/// On hard paths the stage-1 solution is in a feasible neighborhood of the full
+/// problem's optimum, so stage 2 typically converges in tens of iterations (vs the
+/// IPM grinding through max-iter limit then bailing out from a synthetic initial guess).
+/// Total wall time is comparable to or better than single-stage even on easy paths
+/// because stage 1 is small (no quadratic TCP constraints, no FK calls) and stage 2
+/// converges fast from the warm start.
+fn two_stage_solve<const N: usize>(
+    densified: &SRobotPath<N, f64>,
+    deriv_with_tcp: &PathDerivatives<N>,
+    fk: &impl FKChain<N, f64>,
+    constraints: &Topp3Tcp6Constraints<N>,
+    start: crate::boundary::ProjectedBoundary,
+    end: crate::boundary::ProjectedBoundary,
+) -> DekeResult<Solution> {
+    let _ = fk; // FK already consumed by deriv_with_tcp; passed through for clarity at call site.
+
+    // Stage 1: TCP-disabled derivatives + TCP-disabled constraints.
+    let deriv_no_tcp = PathDerivatives::<N>::new_without_tcp(densified)?;
+    let mut cfg_no_tcp = constraints.clone();
+    cfg_no_tcp.tcp = None;
+    // Avoid recursion: stage 1 must not itself try to two-stage.
+    cfg_no_tcp.solver.two_stage_warm_start = false;
+
+    // Re-project boundaries against TCP-free derivatives. The qp/qpp values are the same
+    // (they come from joint waypoints, not FK), but recomputing keeps it explicit.
+    let start_no_tcp = crate::boundary::project::<N>(
+        &constraints.boundary.v_start,
+        &constraints.boundary.a_start,
+        &deriv_no_tcp.qp[0],
+        &deriv_no_tcp.qpp[0],
+    );
+    let end_idx = deriv_no_tcp.num_waypoints() - 1;
+    let end_no_tcp = crate::boundary::project::<N>(
+        &constraints.boundary.v_end,
+        &constraints.boundary.a_end,
+        &deriv_no_tcp.qp[end_idx],
+        &deriv_no_tcp.qpp[end_idx],
+    );
+
+    let stage1 = build_and_solve::<N>(&deriv_no_tcp, &cfg_no_tcp, start_no_tcp, end_no_tcp)?;
+    if !matches!(stage1.status, SolveStatus::Success) {
+        // Stage 1 failed — fall back to single-stage on the full problem. The stage-1
+        // failure usually means the path is joint-infeasible, in which case stage 2
+        // will fail too, but at least the user gets a meaningful diagnostic.
+        return build_and_solve::<N>(deriv_with_tcp, constraints, start, end);
+    }
+
+    // Stage 2: TCP-enabled with the stage-1 solution as warm start.
+    let stage2 = build_and_solve_warm::<N>(deriv_with_tcp, constraints, start, end, &stage1)?;
+    Ok(stage2)
 }

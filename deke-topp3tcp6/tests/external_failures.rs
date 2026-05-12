@@ -24,10 +24,13 @@
 //!   `boundary_slack_usage.end_sdd` near `boundary_slack`.
 //! - **Path geometry** → `path_stats.segment_length_ratio` huge.
 
-use deke_topp3tcp6::{SolveStatus, TcpLimits, Topp3Tcp6, Topp3Tcp6Constraints};
-use deke_types::{
-    JointValidator, Retimer, SRobotPath, SRobotQ, URDFChain, URDFJoint,
+use deke_topp3tcp6::nlp::{build_and_solve, build_and_solve_warm};
+use deke_topp3tcp6::path_derivatives::PathDerivatives;
+use deke_topp3tcp6::{
+    SolveStatus, TcpLimits, Topp3Tcp6, Topp3Tcp6Constraints,
 };
+use deke_topp3tcp6::boundary;
+use deke_types::{JointValidator, Retimer, SRobotPath, SRobotQ, URDFChain, URDFJoint};
 
 // ----------------------------------------------------------------------------
 // FK chain — copied verbatim from the user's other project
@@ -119,11 +122,11 @@ fn external_cfg() -> Topp3Tcp6Constraints<6> {
             22.897033, 22.897033, 28.893875, 45.794066, 49.065074, 78.504119,
         ]),
     };
-    cfg.tcp = TcpLimits {
+    cfg.tcp = Some(TcpLimits {
         v_max: 2.0,
         a_max: 20.0,
         j_max: 200.0,
-    };
+    });
     cfg.sample_rate_hz = 125.0;
     cfg.post_validation = false;
     cfg
@@ -188,11 +191,11 @@ fn traj_template() {
     ];
 
     let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 5.0, 200.0);
-    cfg.tcp = TcpLimits {
+    cfg.tcp = Some(TcpLimits {
         v_max: f64::INFINITY,
         a_max: f64::INFINITY,
         j_max: f64::INFINITY,
-    };
+    });
     cfg.sample_rate_hz = 125.0;
     // cfg.boundary = ...;
     // cfg.locked_prefix = 0;
@@ -650,4 +653,228 @@ fn external_23wp_feas_restore_slow() {
     cfg.solver.max_iterations = 600;
     let ok = run_external_traj("external_23wp_feas_restore_slow", waypoints, cfg);
     assert!(ok, "still failing — check diagnostic above");
+}
+
+// ----------------------------------------------------------------------------
+// Two-stage warm-start experiments
+//
+// Hypothesis: for paths where the IPM stalls in a bad basin (e.g. `external_8wp`,
+// `bench_p2p_*`), solving the TCP-disabled version first gives a feasible warm start
+// that lets the TCP-enabled solve converge from a known-feasible point.
+// ----------------------------------------------------------------------------
+
+/// Run the two-stage solve on the given waypoints + cfg. Stage 1: TCP disabled (joint
+/// constraints + integrator only). Stage 2: TCP enabled, seeded with stage 1's
+/// `Solution`. Reports the diagnostic for each stage. Returns true iff stage 2 (the
+/// "real" TCP-enabled retime) succeeds.
+fn two_stage_solve(
+    name: &str,
+    waypoints: Vec<SRobotQ<6, f64>>,
+    cfg: &Topp3Tcp6Constraints<6>,
+) -> bool {
+    let fk = external_chain();
+    let path = SRobotPath::<6, f64>::try_new(waypoints).unwrap();
+
+    // --- densify exactly as the retimer would so stage 1 and 2 see the same path ---
+    let densified = {
+        let mut p = path.densify(cfg.densification.max_segment_step.unwrap_or(0.05));
+        if p.len() < cfg.densification.min_samples {
+            let n = cfg.densification.min_samples.max(2);
+            let mut wps = Vec::with_capacity(n);
+            for i in 0..n {
+                let t = i as f64 / (n - 1) as f64;
+                wps.push(p.sample(t).unwrap_or(*p.first()));
+            }
+            p = SRobotPath::try_new(wps).unwrap();
+        }
+        if p.len() > cfg.densification.max_samples {
+            let n = cfg.densification.max_samples.max(2);
+            let mut wps = Vec::with_capacity(n);
+            for i in 0..n {
+                let t = i as f64 / (n - 1) as f64;
+                wps.push(p.sample(t).unwrap_or(*p.first()));
+            }
+            p = SRobotPath::try_new(wps).unwrap();
+        }
+        p
+    };
+
+    // --- stage 1: TCP disabled ---
+    let deriv_no_tcp = PathDerivatives::<6>::new_without_tcp(&densified).unwrap();
+    let start_no_tcp = boundary::project::<6>(
+        &cfg.boundary.v_start,
+        &cfg.boundary.a_start,
+        &deriv_no_tcp.qp[0],
+        &deriv_no_tcp.qpp[0],
+    );
+    let end_no_tcp = boundary::project::<6>(
+        &cfg.boundary.v_end,
+        &cfg.boundary.a_end,
+        &deriv_no_tcp.qp[deriv_no_tcp.num_waypoints() - 1],
+        &deriv_no_tcp.qpp[deriv_no_tcp.num_waypoints() - 1],
+    );
+
+    let mut cfg_no_tcp = cfg.clone();
+    cfg_no_tcp.tcp = None;
+
+    let stage1 = build_and_solve(&deriv_no_tcp, &cfg_no_tcp, start_no_tcp, end_no_tcp).unwrap();
+    eprintln!(
+        "[{}] stage 1 (no TCP): status={:?} iter={} solve={:.3}s",
+        name,
+        stage1.status,
+        stage1.iterations,
+        stage1.solve_time.as_secs_f64()
+    );
+    if !matches!(stage1.status, SolveStatus::Success) {
+        eprintln!("  stage 1 failed; not running stage 2");
+        return false;
+    }
+
+    // --- stage 2: TCP enabled, warm-started from stage 1 ---
+    let deriv = PathDerivatives::<6>::new(&densified, &fk).unwrap();
+    let start = boundary::project::<6>(
+        &cfg.boundary.v_start,
+        &cfg.boundary.a_start,
+        &deriv.qp[0],
+        &deriv.qpp[0],
+    );
+    let end = boundary::project::<6>(
+        &cfg.boundary.v_end,
+        &cfg.boundary.a_end,
+        &deriv.qp[deriv.num_waypoints() - 1],
+        &deriv.qpp[deriv.num_waypoints() - 1],
+    );
+    let stage2 = build_and_solve_warm(&deriv, cfg, start, end, &stage1).unwrap();
+    eprintln!(
+        "[{}] stage 2 (TCP, warm): status={:?} iter={} solve={:.3}s",
+        name,
+        stage2.status,
+        stage2.iterations,
+        stage2.solve_time.as_secs_f64()
+    );
+    matches!(stage2.status, SolveStatus::Success)
+}
+
+/// Smoke test the two-stage helper itself with a healthy path.
+#[test]
+fn two_stage_smoke() {
+    let waypoints = vec![
+        SRobotQ::from_array([0.0, -1.0, 1.2, 0.0, 0.0, 0.0]),
+        SRobotQ::from_array([0.3, -0.7, 0.9, 0.2, 0.1, 0.3]),
+    ];
+    let ok = two_stage_solve("two_stage_smoke", waypoints, &external_cfg());
+    assert!(ok, "two-stage smoke failed");
+}
+
+/// Try `external_8wp` (the stuck-basin failure that consumes any iter budget) with the
+/// two-stage warm-start strategy.
+#[test]
+fn two_stage_8wp() {
+    let waypoints = vec![
+        SRobotQ::from_array([-0.6364632544213349, 0.3802690502211359, -0.9972162375620871, -1.1558150171008872, 0.3874953228516746, 1.1660525739447671]),
+        SRobotQ::from_array([-0.721846280710852, 0.37576783004126607, -0.9307956849654027, -0.7378766433380558, 0.3050033760616249, 1.1802386380717917]),
+        SRobotQ::from_array([-0.7504928867152842, 0.3708009486130261, -0.9006694236872432, -0.5975635473851985, 0.27467197128185794, 1.1677764895126956]),
+        SRobotQ::from_array([-0.7502668817422785, 0.3626875882640009, -0.8878925771004293, -0.5771302319628522, 0.2635020161312982, 1.118628367931161]),
+        SRobotQ::from_array([-0.6057486690247245, 0.17619503374059908, -0.864866663660868, 0.39110067478216165, -0.16813003301110035, -0.8783368611747007]),
+        SRobotQ::from_array([-0.5815544282609763, 0.15464996057632047, -0.8760812096089616, 0.5296678139464301, -0.22625197515831497, -1.1552106572603036]),
+        SRobotQ::from_array([-0.5572599641132697, 0.13311599806229463, -0.8873891827746738, 0.668517912042139, -0.28417834246355345, -1.4324307081889254]),
+        SRobotQ::from_array([-0.4634180866210337, 0.25899651320682565, -0.9699935892427178, 1.158330849209562, -0.44912260485450173, -1.582155970300871]),
+    ];
+    let ok = two_stage_solve("two_stage_8wp", waypoints, &external_cfg());
+    // Don't assert success — this is exploratory. The eprintln tells the story.
+    let _ = ok;
+}
+
+/// `bench_multi_seg_50wp` — uses the same captured 50wp path from the bench.
+#[test]
+fn two_stage_50wp() {
+    let waypoints = bench_multi_seg_50wp_waypoints();
+    let ok = two_stage_solve("two_stage_50wp", waypoints, &external_cfg());
+    let _ = ok;
+}
+
+/// `bench_p2p_small` — the captured tight-jerk 2wp path.
+#[test]
+fn two_stage_p2p_small() {
+    let waypoints = vec![
+        SRobotQ::from_array([-1.1703483, -0.3139854, 0.1235649, -1.0546926, 0.1807552, -0.9767784]),
+        SRobotQ::from_array([-1.3687564, -0.4719839, 0.3012058, -1.1227008, 0.1640270, -0.9921301]),
+    ];
+    let ok = two_stage_solve("two_stage_p2p_small", waypoints, &external_cfg());
+    let _ = ok;
+}
+
+/// Diagnostic: loops two-stage solves through a small set of *different* paths
+/// (rotated through a 4-path cycle for ~80 invocations) to see whether varying the
+/// problem shape between calls is what triggers the SIGSEGV. If this crashes and
+/// `two_stage_repeat_one_path_100x` doesn't, the bug needs a shape-change between
+/// consecutive arenas.
+#[test]
+fn two_stage_repeat_varied_paths() {
+    let paths = vec![
+        // 2wp
+        vec![
+            SRobotQ::from_array([0.0, -1.0, 1.2, 0.0, 0.0, 0.0]),
+            SRobotQ::from_array([0.3, -0.7, 0.9, 0.2, 0.1, 0.3]),
+        ],
+        // 8wp captured
+        vec![
+            SRobotQ::from_array([-0.6364632544213349, 0.3802690502211359, -0.9972162375620871, -1.1558150171008872, 0.3874953228516746, 1.1660525739447671]),
+            SRobotQ::from_array([-0.721846280710852, 0.37576783004126607, -0.9307956849654027, -0.7378766433380558, 0.3050033760616249, 1.1802386380717917]),
+            SRobotQ::from_array([-0.7504928867152842, 0.3708009486130261, -0.9006694236872432, -0.5975635473851985, 0.27467197128185794, 1.1677764895126956]),
+            SRobotQ::from_array([-0.7502668817422785, 0.3626875882640009, -0.8878925771004293, -0.5771302319628522, 0.2635020161312982, 1.118628367931161]),
+            SRobotQ::from_array([-0.6057486690247245, 0.17619503374059908, -0.864866663660868, 0.39110067478216165, -0.16813003301110035, -0.8783368611747007]),
+            SRobotQ::from_array([-0.5815544282609763, 0.15464996057632047, -0.8760812096089616, 0.5296678139464301, -0.22625197515831497, -1.1552106572603036]),
+            SRobotQ::from_array([-0.5572599641132697, 0.13311599806229463, -0.8873891827746738, 0.668517912042139, -0.28417834246355345, -1.4324307081889254]),
+            SRobotQ::from_array([-0.4634180866210337, 0.25899651320682565, -0.9699935892427178, 1.158330849209562, -0.44912260485450173, -1.582155970300871]),
+        ],
+        // 3wp
+        vec![
+            SRobotQ::from_array([0.1, -1.1, 1.0, 0.0, 0.0, 0.0]),
+            SRobotQ::from_array([0.2, -0.9, 1.0, 0.1, 0.0, 0.1]),
+            SRobotQ::from_array([0.3, -0.7, 0.9, 0.2, 0.1, 0.2]),
+        ],
+        // 50wp captured (uses helper)
+        bench_multi_seg_50wp_waypoints(),
+    ];
+    let cfg = external_cfg();
+    let n_iter = 80;
+    let mut successes = 0_usize;
+    for i in 0..n_iter {
+        let wps = paths[i % paths.len()].clone();
+        let ok = two_stage_solve(&format!("varied #{i} idx={}", i % paths.len()), wps, &cfg);
+        if ok {
+            successes += 1;
+        }
+    }
+    eprintln!("two_stage_repeat_varied_paths: {successes}/{n_iter} succeeded");
+}
+
+/// Diagnostic: loops the *same* 8wp trajectory through two-stage 100 times in a tight
+/// loop. If this crashes, the bug isn't dataset-dependent — it's purely from rapid
+/// arena create/drop pairs. If it doesn't crash, the bug needs a particular sequence
+/// of paths to manifest. (Run with `--release` since the crash only reproduces there.)
+#[test]
+fn two_stage_repeat_one_path_100x() {
+    let waypoints = vec![
+        SRobotQ::from_array([-0.6364632544213349, 0.3802690502211359, -0.9972162375620871, -1.1558150171008872, 0.3874953228516746, 1.1660525739447671]),
+        SRobotQ::from_array([-0.721846280710852, 0.37576783004126607, -0.9307956849654027, -0.7378766433380558, 0.3050033760616249, 1.1802386380717917]),
+        SRobotQ::from_array([-0.7504928867152842, 0.3708009486130261, -0.9006694236872432, -0.5975635473851985, 0.27467197128185794, 1.1677764895126956]),
+        SRobotQ::from_array([-0.7502668817422785, 0.3626875882640009, -0.8878925771004293, -0.5771302319628522, 0.2635020161312982, 1.118628367931161]),
+        SRobotQ::from_array([-0.6057486690247245, 0.17619503374059908, -0.864866663660868, 0.39110067478216165, -0.16813003301110035, -0.8783368611747007]),
+        SRobotQ::from_array([-0.5815544282609763, 0.15464996057632047, -0.8760812096089616, 0.5296678139464301, -0.22625197515831497, -1.1552106572603036]),
+        SRobotQ::from_array([-0.5572599641132697, 0.13311599806229463, -0.8873891827746738, 0.668517912042139, -0.28417834246355345, -1.4324307081889254]),
+        SRobotQ::from_array([-0.4634180866210337, 0.25899651320682565, -0.9699935892427178, 1.158330849209562, -0.44912260485450173, -1.582155970300871]),
+    ];
+    let cfg = external_cfg();
+    let mut successes = 0_usize;
+    let n_iter = 100;
+    for i in 0..n_iter {
+        let ok = two_stage_solve(&format!("repeat #{i}"), waypoints.clone(), &cfg);
+        if ok {
+            successes += 1;
+        }
+    }
+    eprintln!("two_stage_repeat_one_path_100x: {successes}/{n_iter} succeeded");
+    assert!(successes >= n_iter - 1, "expected almost all to succeed");
 }

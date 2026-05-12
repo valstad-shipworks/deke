@@ -703,9 +703,13 @@ impl<const N: usize> Valuable for Topp3Tcp6Constraints<N> {
         Value::Structable(self)
     }
     fn visit(&self, visit: &mut dyn Visit) {
+        let tcp_value = match &self.tcp {
+            Some(t) => t.as_value(),
+            None => Value::Unit,
+        };
         let values = [
             self.joint.as_value(),
-            self.tcp.as_value(),
+            tcp_value,
             self.boundary.as_value(),
             self.densification.as_value(),
             self.solver.as_value(),

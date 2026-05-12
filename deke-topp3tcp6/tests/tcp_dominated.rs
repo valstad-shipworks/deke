@@ -12,11 +12,11 @@ fn tcp_velocity_is_limiting() {
 
     // Moderate joint limits, TCP velocity is the tight limit.
     let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(5.0, 30.0, 3_000.0);
-    cfg.tcp = TcpLimits {
+    cfg.tcp = Some(TcpLimits {
         v_max: 0.25,
         a_max: f64::INFINITY,
         j_max: f64::INFINITY,
-    };
+    });
     cfg.solver.max_iterations = 2_000;
 
     let mut validator = common::wide_validator::<6>();

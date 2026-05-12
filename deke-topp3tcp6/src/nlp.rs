@@ -53,6 +53,30 @@ pub fn build_and_solve<const N: usize>(
     start: ProjectedBoundary,
     end: ProjectedBoundary,
 ) -> DekeResult<Solution> {
+    build_and_solve_inner(deriv, constraints, start, end, None)
+}
+
+/// Like [`build_and_solve`] but seeds the IPM's initial point from `warm_start` instead
+/// of running [`apply_initial_guess`]. Useful for two-stage solves: solve the
+/// TCP-disabled problem first, then warm-start the TCP-enabled problem from that
+/// solution. The warm-start array lengths must match the new problem's `(m, seg)`.
+pub fn build_and_solve_warm<const N: usize>(
+    deriv: &PathDerivatives<N>,
+    constraints: &Topp3Tcp6Constraints<N>,
+    start: ProjectedBoundary,
+    end: ProjectedBoundary,
+    warm_start: &Solution,
+) -> DekeResult<Solution> {
+    build_and_solve_inner(deriv, constraints, start, end, Some(warm_start))
+}
+
+fn build_and_solve_inner<const N: usize>(
+    deriv: &PathDerivatives<N>,
+    constraints: &Topp3Tcp6Constraints<N>,
+    start: ProjectedBoundary,
+    end: ProjectedBoundary,
+    warm_start: Option<&Solution>,
+) -> DekeResult<Solution> {
     let m = deriv.num_waypoints();
     let seg = deriv.num_segments();
     if m < 2 || seg == 0 {
@@ -71,7 +95,7 @@ pub fn build_and_solve<const N: usize>(
     let sddd: Vec<_> = (0..seg).map(|_| problem.decision_variable()).collect();
     let dt: Vec<_> = (0..seg).map(|_| problem.decision_variable()).collect();
 
-    let tcp_active = deriv.has_tcp() && !constraints.tcp.is_disabled();
+    let tcp_active = deriv.has_tcp() && constraints.tcp.is_some();
 
     let pp_cutoff_sq = if tcp_active {
         let mut max_sq = 0.0_f64;
@@ -118,11 +142,15 @@ pub fn build_and_solve<const N: usize>(
         let sd_k = sd[k];
         subject_to!(problem, sd_k >= 0.0);
 
-        if tcp_active && constraints.tcp.v_max.is_finite() && constraints.tcp.v_max > 0.0 {
+        if let Some(tcp) = constraints.tcp
+            && tcp_active
+            && tcp.v_max.is_finite()
+            && tcp.v_max > 0.0
+        {
             let pp = &deriv.pp[k];
             let pp_norm_sq = pp[0] * pp[0] + pp[1] * pp[1] + pp[2] * pp[2];
             if pp_norm_sq > pp_cutoff_sq {
-                let upper = constraints.tcp.v_max / pp_norm_sq.sqrt();
+                let upper = tcp.v_max / pp_norm_sq.sqrt();
                 subject_to!(problem, sd_k <= upper);
                 counts.tcp_v += 1;
             }
@@ -303,12 +331,13 @@ pub fn build_and_solve<const N: usize>(
         // TCP a/j are scaled into the unit ball: ||a_vec/a_max||² ≤ 1 instead of
         // ||a_vec||² ≤ a_max². The quadratic LHS otherwise ranges across a_max²/j_max²
         // (e.g. 40000), and that wrecks the Hessian conditioning in interior-point methods.
-        if tcp_active
+        if let Some(tcp) = constraints.tcp
+            && tcp_active
             && !at_boundary
-            && constraints.tcp.a_max.is_finite()
-            && constraints.tcp.a_max > 0.0
+            && tcp.a_max.is_finite()
+            && tcp.a_max > 0.0
         {
-            let inv = 1.0 / constraints.tcp.a_max;
+            let inv = 1.0 / tcp.a_max;
             let ppp = &deriv.ppp[k];
             let pp = &deriv.pp[k];
             let c0 = (ppp[0] * inv) * sd_k * sd_k + (pp[0] * inv) * sdd_k;
@@ -319,12 +348,13 @@ pub fn build_and_solve<const N: usize>(
             counts.tcp_a += 1;
         }
 
-        if tcp_active
+        if let Some(tcp) = constraints.tcp
+            && tcp_active
             && !at_boundary
-            && constraints.tcp.j_max.is_finite()
-            && constraints.tcp.j_max > 0.0
+            && tcp.j_max.is_finite()
+            && tcp.j_max > 0.0
         {
-            let inv = 1.0 / constraints.tcp.j_max;
+            let inv = 1.0 / tcp.j_max;
             let pppp = &deriv.pppp[k];
             let ppp = &deriv.ppp[k];
             let pp = &deriv.pp[k];
@@ -349,9 +379,39 @@ pub fn build_and_solve<const N: usize>(
     }
     problem.minimize(total);
 
-    let initial_guess = apply_initial_guess(
-        &sd, &sdd, &sddd, &dt, deriv, constraints, start, end, pp_cutoff_sq,
-    );
+    let initial_guess = if let Some(ws) = warm_start {
+        // Two-stage warm start: copy variable values from the previous solution. Skip
+        // the synthetic initial-guess construction and the cruise-feasibility loop;
+        // the previous solve already produced a feasible iterate.
+        for k in 0..ws.sd.len().min(m) {
+            sd[k].set_value(ws.sd[k]);
+            sdd[k].set_value(ws.sdd[k]);
+        }
+        for k in 0..ws.sddd.len().min(seg) {
+            sddd[k].set_value(ws.sddd[k]);
+            dt[k].set_value(ws.dt[k].as_secs_f64().max(1e-5));
+        }
+        // Recompute end-residual stats against the new boundary projection.
+        let mut max_sddd = 0.0_f64;
+        let mut max_sddd_segment = 0_usize;
+        for k in 0..ws.sddd.len() {
+            let a = ws.sddd[k].abs();
+            if a > max_sddd {
+                max_sddd = a;
+                max_sddd_segment = k;
+            }
+        }
+        InitialGuessStats {
+            end_sd_residual: (ws.sd[m - 1] - end.sd).abs(),
+            end_sdd_residual: (ws.sdd[m - 1] - end.sdd).abs(),
+            max_sddd,
+            max_sddd_segment,
+        }
+    } else {
+        apply_initial_guess(
+            &sd, &sdd, &sddd, &dt, deriv, constraints, start, end, pp_cutoff_sq,
+        )
+    };
 
     let build_time = build_start.elapsed();
 
@@ -462,14 +522,15 @@ fn apply_initial_guess<'a, const N: usize>(
                 }
             }
         }
-        if deriv.has_tcp()
-            && constraints.tcp.v_max.is_finite()
-            && constraints.tcp.v_max > 0.0
+        if let Some(tcp) = constraints.tcp
+            && deriv.has_tcp()
+            && tcp.v_max.is_finite()
+            && tcp.v_max > 0.0
         {
             let pp = &deriv.pp[k];
             let pn_sq = pp[0] * pp[0] + pp[1] * pp[1] + pp[2] * pp[2];
             if pn_sq > pp_cutoff_sq {
-                c = c.min(constraints.tcp.v_max / pn_sq.sqrt());
+                c = c.min(tcp.v_max / pn_sq.sqrt());
             }
         }
         if !c.is_finite() {

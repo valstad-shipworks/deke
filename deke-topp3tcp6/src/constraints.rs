@@ -28,29 +28,16 @@ impl<const N: usize> JointLimits<N> {
 
 /// Scalar bounds on the translational component of the TCP (tool center point) trajectory.
 /// Rotational TCP bounds are out of scope for the v1 retimer.
+///
+/// Stored as `Option<TcpLimits>` on [`Topp3Tcp6Constraints`]: `None` means the retimer skips
+/// FK on every densified sample and skips every TCP constraint in the NLP. Individual axes
+/// can still be unbounded inside a `Some(..)` by setting the corresponding field to
+/// `f64::INFINITY` (or zero); only finite, positive values produce a constraint.
 #[derive(Debug, Clone, Copy)]
 pub struct TcpLimits {
     pub v_max: f64,
     pub a_max: f64,
     pub j_max: f64,
-}
-
-impl TcpLimits {
-    pub fn unbounded() -> Self {
-        Self {
-            v_max: f64::INFINITY,
-            a_max: f64::INFINITY,
-            j_max: f64::INFINITY,
-        }
-    }
-
-    /// Returns true if every bound is either zero or non-finite (infinity / NaN). In that case
-    /// the retimer can skip running forward kinematics on every densified waypoint and skip
-    /// every TCP constraint in the NLP, which is a big win for TCP-unconstrained problems.
-    pub fn is_disabled(&self) -> bool {
-        let inactive = |v: f64| v == 0.0 || !v.is_finite();
-        inactive(self.v_max) && inactive(self.a_max) && inactive(self.j_max)
-    }
 }
 
 /// Boundary conditions at the start and end of the trajectory.
@@ -136,6 +123,14 @@ pub struct SolverOptions {
     /// rest-to-rest equalities pin variables to exactly zero at the cone tip — a small slack
     /// box gives the line search room without observable change in output. Defaults to 1e-4.
     pub boundary_slack: f64,
+    /// When true and TCP constraints are active, the retimer first solves the
+    /// TCP-disabled version of the problem (joint constraints + integrator only) and uses
+    /// the resulting `(sd, sdd, sddd, dt)` as the warm-start initial guess for the
+    /// TCP-enabled solve. The first solve is cheap (smaller constraint set, no quadratic
+    /// TCP terms) and gives stage 2 a feasible iterate to start from — converting "IPM
+    /// stuck in bad basin" failures into ~30-iter convergences. Defaults to true; set
+    /// false to disable for benchmarking the single-stage baseline.
+    pub two_stage_warm_start: bool,
 }
 
 impl Default for SolverOptions {
@@ -152,6 +147,7 @@ impl Default for SolverOptions {
             timeout: None,
             diagnostics: false,
             boundary_slack: 1e-4,
+            two_stage_warm_start: true,
         }
     }
 }
@@ -160,7 +156,8 @@ impl Default for SolverOptions {
 #[derive(Debug, Clone)]
 pub struct Topp3Tcp6Constraints<const N: usize> {
     pub joint: JointLimits<N>,
-    pub tcp: TcpLimits,
+    /// `None` skips TCP entirely (no FK, no TCP rows in the NLP). `Some(..)` enables it.
+    pub tcp: Option<TcpLimits>,
     pub boundary: BoundaryConditions<N>,
     pub densification: DensificationOptions,
     pub solver: SolverOptions,
@@ -174,12 +171,12 @@ pub struct Topp3Tcp6Constraints<const N: usize> {
 }
 
 impl<const N: usize> Topp3Tcp6Constraints<N> {
-    /// Convenience constructor: unbounded TCP, symmetric joint limits, rest-to-rest boundary,
-    /// no locked joints, 250 Hz output.
+    /// Convenience constructor: no TCP constraints, symmetric joint limits, rest-to-rest
+    /// boundary, no locked joints, 125 Hz output.
     pub fn symmetric(v_max: f64, a_max: f64, j_max: f64) -> Self {
         Self {
             joint: JointLimits::symmetric(v_max, a_max, j_max),
-            tcp: TcpLimits::unbounded(),
+            tcp: None,
             boundary: BoundaryConditions::rest_to_rest(),
             densification: DensificationOptions::default(),
             solver: SolverOptions::default(),
