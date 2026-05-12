@@ -10,8 +10,10 @@ use ::valuable::{
 };
 
 use crate::{
-    BoundaryConditions, DensificationOptions, JointLimits, LimitingGroup, SolveStatus,
-    SolverOptions, TcpLimits, Topp3Tcp6Constraints, Topp3Tcp6Diagnostic,
+    BoundaryConditions, BoundarySlackUsage, ConstraintCounts, DensificationOptions,
+    DerivativeStats, InitialGuessStats, JointLimits, LimitingGroup, PathStats, PeakLocation,
+    PhaseTiming, SolveStatus, SolverOptions, TcpLimits, TcpStats, Topp3Tcp6Constraints,
+    Topp3Tcp6Diagnostic,
     boundary::ProjectedBoundary,
 };
 
@@ -142,7 +144,21 @@ const DIAG_FIELDS: &[NamedField<'static>] = &[
     NamedField::new("average_utilization"),
     NamedField::new("boundary_projection_residual"),
     NamedField::new("limiting_constraint"),
+    NamedField::new("limiting_sample"),
     NamedField::new("message"),
+    NamedField::new("path_stats"),
+    NamedField::new("derivative_stats"),
+    NamedField::new("tcp_stats"),
+    NamedField::new("peak_joint_velocity_at"),
+    NamedField::new("peak_joint_acceleration_at"),
+    NamedField::new("peak_joint_jerk_at"),
+    NamedField::new("peak_tcp_velocity_at"),
+    NamedField::new("peak_tcp_acceleration_at"),
+    NamedField::new("peak_tcp_jerk_at"),
+    NamedField::new("constraint_counts"),
+    NamedField::new("initial_guess"),
+    NamedField::new("boundary_slack_usage"),
+    NamedField::new("phase_timing"),
 ];
 
 impl Valuable for Topp3Tcp6Diagnostic {
@@ -155,6 +171,10 @@ impl Valuable for Topp3Tcp6Diagnostic {
         let total_secs = duration_secs(self.total_time);
         let limiting = match &self.limiting_constraint {
             Some(g) => g.as_value(),
+            None => Value::Unit,
+        };
+        let limiting_sample = match self.limiting_sample {
+            Some(s) => Value::U64(s as u64),
             None => Value::Unit,
         };
         let message = match &self.message {
@@ -177,7 +197,21 @@ impl Valuable for Topp3Tcp6Diagnostic {
             self.average_utilization.as_value(),
             self.boundary_projection_residual.as_value(),
             limiting,
+            limiting_sample,
             message,
+            self.path_stats.as_value(),
+            self.derivative_stats.as_value(),
+            self.tcp_stats.as_value(),
+            self.peak_joint_velocity_at.as_value(),
+            self.peak_joint_acceleration_at.as_value(),
+            self.peak_joint_jerk_at.as_value(),
+            self.peak_tcp_velocity_at.as_value(),
+            self.peak_tcp_acceleration_at.as_value(),
+            self.peak_tcp_jerk_at.as_value(),
+            self.constraint_counts.as_value(),
+            self.initial_guess.as_value(),
+            self.boundary_slack_usage.as_value(),
+            self.phase_timing.as_value(),
         ];
         visit.visit_named_fields(&NamedValues::new(DIAG_FIELDS, &values));
     }
@@ -186,6 +220,300 @@ impl Valuable for Topp3Tcp6Diagnostic {
 impl Structable for Topp3Tcp6Diagnostic {
     fn definition(&self) -> StructDef<'_> {
         StructDef::new_static("Topp3Tcp6Diagnostic", Fields::Named(DIAG_FIELDS))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PeakLocation
+// ---------------------------------------------------------------------------
+
+const PEAK_LOCATION_FIELDS: &[NamedField<'static>] = &[
+    NamedField::new("value"),
+    NamedField::new("sample"),
+    NamedField::new("joint"),
+];
+
+impl Valuable for PeakLocation {
+    #[inline]
+    fn as_value(&self) -> Value<'_> {
+        Value::Structable(self)
+    }
+    fn visit(&self, visit: &mut dyn Visit) {
+        let joint = match self.joint {
+            Some(j) => Value::U64(j as u64),
+            None => Value::Unit,
+        };
+        let values = [self.value.as_value(), self.sample.as_value(), joint];
+        visit.visit_named_fields(&NamedValues::new(PEAK_LOCATION_FIELDS, &values));
+    }
+}
+
+impl Structable for PeakLocation {
+    fn definition(&self) -> StructDef<'_> {
+        StructDef::new_static("PeakLocation", Fields::Named(PEAK_LOCATION_FIELDS))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PathStats
+// ---------------------------------------------------------------------------
+
+const PATH_STATS_FIELDS: &[NamedField<'static>] = &[
+    NamedField::new("input_waypoints"),
+    NamedField::new("merged_waypoints"),
+    NamedField::new("chord_length"),
+    NamedField::new("min_segment_length"),
+    NamedField::new("max_segment_length"),
+    NamedField::new("segment_length_ratio"),
+];
+
+impl Valuable for PathStats {
+    #[inline]
+    fn as_value(&self) -> Value<'_> {
+        Value::Structable(self)
+    }
+    fn visit(&self, visit: &mut dyn Visit) {
+        let values = [
+            self.input_waypoints.as_value(),
+            self.merged_waypoints.as_value(),
+            self.chord_length.as_value(),
+            self.min_segment_length.as_value(),
+            self.max_segment_length.as_value(),
+            self.segment_length_ratio.as_value(),
+        ];
+        visit.visit_named_fields(&NamedValues::new(PATH_STATS_FIELDS, &values));
+    }
+}
+
+impl Structable for PathStats {
+    fn definition(&self) -> StructDef<'_> {
+        StructDef::new_static("PathStats", Fields::Named(PATH_STATS_FIELDS))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DerivativeStats
+// ---------------------------------------------------------------------------
+
+const DERIVATIVE_STATS_FIELDS: &[NamedField<'static>] = &[
+    NamedField::new("max_abs_qpp"),
+    NamedField::new("max_abs_qpp_sample"),
+    NamedField::new("max_abs_qpp_joint"),
+    NamedField::new("max_abs_qppp"),
+    NamedField::new("max_abs_qppp_sample"),
+    NamedField::new("max_abs_qppp_joint"),
+    NamedField::new("min_qp_norm_relative_sq"),
+    NamedField::new("min_qp_norm_sample"),
+    NamedField::new("degenerate_qp_samples"),
+];
+
+impl Valuable for DerivativeStats {
+    #[inline]
+    fn as_value(&self) -> Value<'_> {
+        Value::Structable(self)
+    }
+    fn visit(&self, visit: &mut dyn Visit) {
+        let values = [
+            self.max_abs_qpp.as_value(),
+            self.max_abs_qpp_sample.as_value(),
+            self.max_abs_qpp_joint.as_value(),
+            self.max_abs_qppp.as_value(),
+            self.max_abs_qppp_sample.as_value(),
+            self.max_abs_qppp_joint.as_value(),
+            self.min_qp_norm_relative_sq.as_value(),
+            self.min_qp_norm_sample.as_value(),
+            self.degenerate_qp_samples.as_value(),
+        ];
+        visit.visit_named_fields(&NamedValues::new(DERIVATIVE_STATS_FIELDS, &values));
+    }
+}
+
+impl Structable for DerivativeStats {
+    fn definition(&self) -> StructDef<'_> {
+        StructDef::new_static("DerivativeStats", Fields::Named(DERIVATIVE_STATS_FIELDS))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// TcpStats
+// ---------------------------------------------------------------------------
+
+const TCP_STATS_FIELDS: &[NamedField<'static>] = &[
+    NamedField::new("max_abs_pp"),
+    NamedField::new("max_abs_ppp"),
+    NamedField::new("max_abs_pppp"),
+    NamedField::new("min_abs_pp_per_axis"),
+    NamedField::new("max_abs_pp_per_axis"),
+];
+
+impl Valuable for TcpStats {
+    #[inline]
+    fn as_value(&self) -> Value<'_> {
+        Value::Structable(self)
+    }
+    fn visit(&self, visit: &mut dyn Visit) {
+        let min_axis = self.min_abs_pp_per_axis.as_slice();
+        let max_axis = self.max_abs_pp_per_axis.as_slice();
+        let values = [
+            self.max_abs_pp.as_value(),
+            self.max_abs_ppp.as_value(),
+            self.max_abs_pppp.as_value(),
+            min_axis.as_value(),
+            max_axis.as_value(),
+        ];
+        visit.visit_named_fields(&NamedValues::new(TCP_STATS_FIELDS, &values));
+    }
+}
+
+impl Structable for TcpStats {
+    fn definition(&self) -> StructDef<'_> {
+        StructDef::new_static("TcpStats", Fields::Named(TCP_STATS_FIELDS))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ConstraintCounts
+// ---------------------------------------------------------------------------
+
+const CONSTRAINT_COUNTS_FIELDS: &[NamedField<'static>] = &[
+    NamedField::new("joint_v"),
+    NamedField::new("joint_a"),
+    NamedField::new("joint_j"),
+    NamedField::new("tcp_v"),
+    NamedField::new("tcp_a"),
+    NamedField::new("tcp_j"),
+];
+
+impl Valuable for ConstraintCounts {
+    #[inline]
+    fn as_value(&self) -> Value<'_> {
+        Value::Structable(self)
+    }
+    fn visit(&self, visit: &mut dyn Visit) {
+        let values = [
+            self.joint_v.as_value(),
+            self.joint_a.as_value(),
+            self.joint_j.as_value(),
+            self.tcp_v.as_value(),
+            self.tcp_a.as_value(),
+            self.tcp_j.as_value(),
+        ];
+        visit.visit_named_fields(&NamedValues::new(CONSTRAINT_COUNTS_FIELDS, &values));
+    }
+}
+
+impl Structable for ConstraintCounts {
+    fn definition(&self) -> StructDef<'_> {
+        StructDef::new_static("ConstraintCounts", Fields::Named(CONSTRAINT_COUNTS_FIELDS))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// InitialGuessStats
+// ---------------------------------------------------------------------------
+
+const INITIAL_GUESS_FIELDS: &[NamedField<'static>] = &[
+    NamedField::new("end_sd_residual"),
+    NamedField::new("end_sdd_residual"),
+    NamedField::new("max_sddd"),
+    NamedField::new("max_sddd_segment"),
+];
+
+impl Valuable for InitialGuessStats {
+    #[inline]
+    fn as_value(&self) -> Value<'_> {
+        Value::Structable(self)
+    }
+    fn visit(&self, visit: &mut dyn Visit) {
+        let values = [
+            self.end_sd_residual.as_value(),
+            self.end_sdd_residual.as_value(),
+            self.max_sddd.as_value(),
+            self.max_sddd_segment.as_value(),
+        ];
+        visit.visit_named_fields(&NamedValues::new(INITIAL_GUESS_FIELDS, &values));
+    }
+}
+
+impl Structable for InitialGuessStats {
+    fn definition(&self) -> StructDef<'_> {
+        StructDef::new_static("InitialGuessStats", Fields::Named(INITIAL_GUESS_FIELDS))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// BoundarySlackUsage
+// ---------------------------------------------------------------------------
+
+const BOUNDARY_SLACK_USAGE_FIELDS: &[NamedField<'static>] = &[
+    NamedField::new("start_sd"),
+    NamedField::new("start_sdd"),
+    NamedField::new("end_sd"),
+    NamedField::new("end_sdd"),
+];
+
+impl Valuable for BoundarySlackUsage {
+    #[inline]
+    fn as_value(&self) -> Value<'_> {
+        Value::Structable(self)
+    }
+    fn visit(&self, visit: &mut dyn Visit) {
+        let values = [
+            self.start_sd.as_value(),
+            self.start_sdd.as_value(),
+            self.end_sd.as_value(),
+            self.end_sdd.as_value(),
+        ];
+        visit.visit_named_fields(&NamedValues::new(BOUNDARY_SLACK_USAGE_FIELDS, &values));
+    }
+}
+
+impl Structable for BoundarySlackUsage {
+    fn definition(&self) -> StructDef<'_> {
+        StructDef::new_static(
+            "BoundarySlackUsage",
+            Fields::Named(BOUNDARY_SLACK_USAGE_FIELDS),
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PhaseTiming
+// ---------------------------------------------------------------------------
+
+const PHASE_TIMING_FIELDS: &[NamedField<'static>] = &[
+    NamedField::new("densify_secs"),
+    NamedField::new("derivatives_secs"),
+    NamedField::new("nlp_build_secs"),
+    NamedField::new("nlp_solve_secs"),
+    NamedField::new("resample_secs"),
+];
+
+impl Valuable for PhaseTiming {
+    #[inline]
+    fn as_value(&self) -> Value<'_> {
+        Value::Structable(self)
+    }
+    fn visit(&self, visit: &mut dyn Visit) {
+        let densify = duration_secs(self.densify);
+        let derivatives = duration_secs(self.derivatives);
+        let nlp_build = duration_secs(self.nlp_build);
+        let nlp_solve = duration_secs(self.nlp_solve);
+        let resample = duration_secs(self.resample);
+        let values = [
+            densify.as_value(),
+            derivatives.as_value(),
+            nlp_build.as_value(),
+            nlp_solve.as_value(),
+            resample.as_value(),
+        ];
+        visit.visit_named_fields(&NamedValues::new(PHASE_TIMING_FIELDS, &values));
+    }
+}
+
+impl Structable for PhaseTiming {
+    fn definition(&self) -> StructDef<'_> {
+        StructDef::new_static("PhaseTiming", Fields::Named(PHASE_TIMING_FIELDS))
     }
 }
 

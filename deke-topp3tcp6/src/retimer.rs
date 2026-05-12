@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use deke_types::{
     DekeError, DekeResult, FKChain, Retimer, SRobotPath, SRobotTraj, Validator,
@@ -6,7 +6,10 @@ use deke_types::{
 
 use crate::boundary::project;
 use crate::constraints::Topp3Tcp6Constraints;
-use crate::diagnostic::{LimitingGroup, SolveStatus, Topp3Tcp6Diagnostic};
+use crate::diagnostic::{
+    DerivativeStats, LimitingGroup, PathStats, PeakLocation, SolveStatus, TcpStats,
+    Topp3Tcp6Diagnostic,
+};
 use crate::nlp::{Solution, build_and_solve};
 use crate::path_derivatives::PathDerivatives;
 use crate::resample::resample_to_uniform;
@@ -29,6 +32,7 @@ impl<const N: usize> Retimer<N, f64> for Topp3Tcp6 {
         ctx: &V::Context<'_>,
     ) -> (DekeResult<SRobotTraj<N, f64>>, Self::Diagnostic) {
         let mut diag = Topp3Tcp6Diagnostic::default();
+        diag.path_stats.input_waypoints = path.len();
 
         if let Err(e) = PathDerivatives::<N>::check_locked_prefix(path, constraints.locked_prefix) {
             diag.status = SolveStatus::NotAttempted;
@@ -37,15 +41,22 @@ impl<const N: usize> Retimer<N, f64> for Topp3Tcp6 {
             return (Err(e), diag);
         }
 
-        let densified = match densify_path(path, &constraints.densification) {
-            Ok(p) => p,
-            Err(e) => {
-                diag.message = Some(format!("{}", e));
-                return (Err(e), diag);
-            }
-        };
+        let t_densify = Instant::now();
+        let (densified, merged_count) =
+            match densify_path(path, &constraints.densification) {
+                Ok(out) => out,
+                Err(e) => {
+                    diag.message = Some(format!("{}", e));
+                    diag.phase_timing.densify = t_densify.elapsed();
+                    return (Err(e), diag);
+                }
+            };
+        diag.phase_timing.densify = t_densify.elapsed();
         diag.densified_samples = densified.len();
+        diag.path_stats.merged_waypoints = merged_count;
+        populate_path_geometry::<N>(&mut diag.path_stats, &densified);
 
+        let t_deriv = Instant::now();
         let tcp_disabled = constraints.tcp.is_disabled();
         let deriv = match if tcp_disabled {
             PathDerivatives::<N>::new_without_tcp(&densified)
@@ -55,9 +66,15 @@ impl<const N: usize> Retimer<N, f64> for Topp3Tcp6 {
             Ok(d) => d,
             Err(e) => {
                 diag.message = Some(format!("{}", e));
+                diag.phase_timing.derivatives = t_deriv.elapsed();
                 return (Err(e), diag);
             }
         };
+        diag.phase_timing.derivatives = t_deriv.elapsed();
+        diag.derivative_stats = derivative_stats_from_deriv::<N>(&deriv, constraints);
+        if deriv.has_tcp() {
+            diag.tcp_stats = tcp_stats_from_deriv::<N>(&deriv);
+        }
 
         let start = project::<N>(
             &constraints.boundary.v_start,
@@ -91,9 +108,19 @@ impl<const N: usize> Retimer<N, f64> for Topp3Tcp6 {
         diag.status = solution.status;
         diag.iterations = solution.iterations;
         diag.solve_time = solution.solve_time;
+        diag.phase_timing.nlp_build = solution.build_time;
+        diag.phase_timing.nlp_solve = solution.solve_time;
+        diag.constraint_counts = solution.constraint_counts;
+        diag.initial_guess = solution.initial_guess;
+        diag.boundary_slack_usage = solution.boundary_slack_usage;
+        diag.derivative_stats.degenerate_qp_samples = solution.degenerate_qp_samples;
+        diag.derivative_stats.min_qp_norm_relative_sq = solution.min_qp_norm_relative_sq;
+        diag.derivative_stats.min_qp_norm_sample = solution.min_qp_norm_sample;
 
         if !matches!(solution.status, SolveStatus::Success) {
-            diag.limiting_constraint = infer_limiting_group(&solution, &deriv, constraints);
+            let (group, sample) = infer_limiting_group(&solution, &deriv, constraints);
+            diag.limiting_constraint = group;
+            diag.limiting_sample = sample;
             let err = DekeError::RetimerFailed(format!("{}", solution.status));
             diag.message = Some(format!("{}", err));
             return (Err(err), diag);
@@ -101,6 +128,7 @@ impl<const N: usize> Retimer<N, f64> for Topp3Tcp6 {
 
         populate_analytical_peaks(&mut diag, &solution, &deriv, constraints);
 
+        let t_resample = Instant::now();
         let dt_out = Duration::from_secs_f64(1.0 / constraints.sample_rate_hz);
         let (total_time, samples) = resample_to_uniform(&solution, &deriv, dt_out);
         diag.output_samples = samples.len();
@@ -109,9 +137,11 @@ impl<const N: usize> Retimer<N, f64> for Topp3Tcp6 {
             Ok(p) => p,
             Err(e) => {
                 diag.message = Some(format!("{}", e));
+                diag.phase_timing.resample = t_resample.elapsed();
                 return (Err(e), diag);
             }
         };
+        diag.phase_timing.resample = t_resample.elapsed();
 
         if constraints.post_validation {
             if let Err(e) = validator.validate_motion(traj_path.iter().as_slice(), ctx) {
@@ -127,8 +157,9 @@ impl<const N: usize> Retimer<N, f64> for Topp3Tcp6 {
 fn densify_path<const N: usize>(
     path: &SRobotPath<N, f64>,
     opts: &crate::constraints::DensificationOptions,
-) -> DekeResult<SRobotPath<N, f64>> {
+) -> DekeResult<(SRobotPath<N, f64>, usize)> {
     let merged = merge_near_duplicates(path, opts.min_segment_fraction)?;
+    let merged_len = merged.len();
 
     let mut p = if let Some(step) = opts.max_segment_step {
         merged.densify(step)
@@ -156,7 +187,106 @@ fn densify_path<const N: usize>(
         p = SRobotPath::try_new(wps)?;
     }
 
-    Ok(p)
+    Ok((p, merged_len))
+}
+
+/// Fills `chord_length`, `min_segment_length`, `max_segment_length`, and
+/// `segment_length_ratio` from the densified path. Leaves the input/merged counts alone
+/// (those are populated by the caller earlier in the flow).
+fn populate_path_geometry<const N: usize>(stats: &mut PathStats, densified: &SRobotPath<N, f64>) {
+    let m = densified.len();
+    if m < 2 {
+        return;
+    }
+    let mut total = 0.0_f64;
+    let mut min_seg = f64::INFINITY;
+    let mut max_seg = 0.0_f64;
+    for k in 0..m - 1 {
+        let d = chord_distance::<N>(densified.get(k).unwrap(), densified.get(k + 1).unwrap());
+        total += d;
+        if d < min_seg {
+            min_seg = d;
+        }
+        if d > max_seg {
+            max_seg = d;
+        }
+    }
+    stats.chord_length = total;
+    stats.min_segment_length = if min_seg.is_finite() { min_seg } else { 0.0 };
+    stats.max_segment_length = max_seg;
+    stats.segment_length_ratio = if min_seg > 0.0 && min_seg.is_finite() {
+        max_seg / min_seg
+    } else {
+        0.0
+    };
+}
+
+/// Computes the per-path PCHIP-derivative magnitude stats for failure triage. Does not
+/// populate `min_qp_norm_*` or `degenerate_qp_samples` — those are tracked alongside the
+/// constraint-build loop in `nlp::build_and_solve`.
+fn derivative_stats_from_deriv<const N: usize>(
+    deriv: &PathDerivatives<N>,
+    constraints: &Topp3Tcp6Constraints<N>,
+) -> DerivativeStats {
+    let m = deriv.num_waypoints();
+    let lock = constraints.locked_prefix.min(N);
+    let mut out = DerivativeStats::default();
+    for k in 0..m {
+        for j in lock..N {
+            let qpp = deriv.qpp[k][j].abs();
+            if qpp > out.max_abs_qpp {
+                out.max_abs_qpp = qpp;
+                out.max_abs_qpp_sample = k;
+                out.max_abs_qpp_joint = j;
+            }
+            let qppp = deriv.qppp[k][j].abs();
+            if qppp > out.max_abs_qppp {
+                out.max_abs_qppp = qppp;
+                out.max_abs_qppp_sample = k;
+                out.max_abs_qppp_joint = j;
+            }
+        }
+    }
+    out
+}
+
+/// Per-axis `pp` min/max + global max of `pp`/`ppp`/`pppp` — flags the TCP-axis-collapse
+/// failure mode.
+fn tcp_stats_from_deriv<const N: usize>(deriv: &PathDerivatives<N>) -> TcpStats {
+    let m = deriv.num_waypoints();
+    let mut out = TcpStats::default();
+    out.min_abs_pp_per_axis = [f64::INFINITY; 3];
+    for k in 0..m {
+        let pp = &deriv.pp[k];
+        let ppp = &deriv.ppp[k];
+        let pppp = &deriv.pppp[k];
+        for d in 0..3 {
+            let abs_pp = pp[d].abs();
+            if abs_pp > out.max_abs_pp_per_axis[d] {
+                out.max_abs_pp_per_axis[d] = abs_pp;
+            }
+            if abs_pp < out.min_abs_pp_per_axis[d] {
+                out.min_abs_pp_per_axis[d] = abs_pp;
+            }
+            if abs_pp > out.max_abs_pp {
+                out.max_abs_pp = abs_pp;
+            }
+            let abs_ppp = ppp[d].abs();
+            if abs_ppp > out.max_abs_ppp {
+                out.max_abs_ppp = abs_ppp;
+            }
+            let abs_pppp = pppp[d].abs();
+            if abs_pppp > out.max_abs_pppp {
+                out.max_abs_pppp = abs_pppp;
+            }
+        }
+    }
+    for d in 0..3 {
+        if !out.min_abs_pp_per_axis[d].is_finite() {
+            out.min_abs_pp_per_axis[d] = 0.0;
+        }
+    }
+    out
 }
 
 /// Drops interior waypoints whose chord distance to the previously-kept waypoint is below
@@ -230,11 +360,13 @@ fn infer_limiting_group<const N: usize>(
     solution: &Solution,
     deriv: &PathDerivatives<N>,
     constraints: &Topp3Tcp6Constraints<N>,
-) -> Option<LimitingGroup> {
+) -> (Option<LimitingGroup>, Option<usize>) {
     if matches!(solution.status, SolveStatus::LocallyInfeasible | SolveStatus::GloballyInfeasible) {
         let lock = constraints.locked_prefix.min(N);
         let m = deriv.num_waypoints();
-        let mut worst = (0.0_f64, LimitingGroup::JointVelocity);
+        // (excess, group, sample_idx)
+        let mut worst: (f64, LimitingGroup, usize) =
+            (0.0, LimitingGroup::JointVelocity, 0);
         for k in 0..m {
             let sd = solution.sd[k].max(0.0);
             let sdd = solution.sdd[k];
@@ -244,12 +376,12 @@ fn infer_limiting_group<const N: usize>(
                 let v = (qp * sd).abs();
                 let v_max = constraints.joint.v_max.0[j];
                 if v_max.is_finite() && v - v_max > worst.0 {
-                    worst = (v - v_max, LimitingGroup::JointVelocity);
+                    worst = (v - v_max, LimitingGroup::JointVelocity, k);
                 }
                 let a = (qpp * sd * sd + qp * sdd).abs();
                 let a_max = constraints.joint.a_max.0[j];
                 if a_max.is_finite() && a - a_max > worst.0 {
-                    worst = (a - a_max, LimitingGroup::JointAcceleration);
+                    worst = (a - a_max, LimitingGroup::JointAcceleration, k);
                 }
             }
             if deriv.has_tcp() {
@@ -257,13 +389,13 @@ fn infer_limiting_group<const N: usize>(
                 let tcp_v = (pp[0] * pp[0] + pp[1] * pp[1] + pp[2] * pp[2]).sqrt() * sd;
                 let tcp_v_max = constraints.tcp.v_max;
                 if tcp_v_max.is_finite() && tcp_v - tcp_v_max > worst.0 {
-                    worst = (tcp_v - tcp_v_max, LimitingGroup::TcpVelocity);
+                    worst = (tcp_v - tcp_v_max, LimitingGroup::TcpVelocity, k);
                 }
             }
         }
-        Some(worst.1)
+        (Some(worst.1), Some(worst.2))
     } else {
-        None
+        (None, None)
     }
 }
 
@@ -282,11 +414,17 @@ fn populate_analytical_peaks<const N: usize>(
     let lock = constraints.locked_prefix.min(N);
 
     let mut peak_jv = 0.0_f64;
+    let mut peak_jv_at = (0_usize, 0_usize);
     let mut peak_ja = 0.0_f64;
+    let mut peak_ja_at = (0_usize, 0_usize);
     let mut peak_jj = 0.0_f64;
+    let mut peak_jj_at = (0_usize, 0_usize);
     let mut peak_tv = 0.0_f64;
+    let mut peak_tv_at = 0_usize;
     let mut peak_ta = 0.0_f64;
+    let mut peak_ta_at = 0_usize;
     let mut peak_tj = 0.0_f64;
+    let mut peak_tj_at = 0_usize;
 
     let jv_max: Vec<f64> = (0..N).map(|j| constraints.joint.v_max.0[j]).collect();
     let ja_max: Vec<f64> = (0..N).map(|j| constraints.joint.a_max.0[j]).collect();
@@ -321,9 +459,18 @@ fn populate_analytical_peaks<const N: usize>(
             let jv = (qp * sd).abs();
             let ja = (qpp * sd * sd + qp * sdd).abs();
             let jj = (qppp * sd * sd * sd + 3.0 * qpp * sd * sdd + qp * sddd).abs();
-            peak_jv = peak_jv.max(jv);
-            peak_ja = peak_ja.max(ja);
-            peak_jj = peak_jj.max(jj);
+            if jv > peak_jv {
+                peak_jv = jv;
+                peak_jv_at = (k, j);
+            }
+            if ja > peak_ja {
+                peak_ja = ja;
+                peak_ja_at = (k, j);
+            }
+            if jj > peak_jj {
+                peak_jj = jj;
+                peak_jj_at = (k, j);
+            }
             update_util(&mut step_util, jv, jv_max[j]);
             update_util(&mut step_util, ja, ja_max[j]);
             update_util(&mut step_util, jj, jj_max[j]);
@@ -338,21 +485,30 @@ fn populate_analytical_peaks<const N: usize>(
             let vy = pp[1] * sd;
             let vz = pp[2] * sd;
             let tv = (vx * vx + vy * vy + vz * vz).sqrt();
-            peak_tv = peak_tv.max(tv);
+            if tv > peak_tv {
+                peak_tv = tv;
+                peak_tv_at = k;
+            }
             update_util(&mut step_util, tv, tv_max);
 
             let ax = ppp[0] * sd * sd + pp[0] * sdd;
             let ay = ppp[1] * sd * sd + pp[1] * sdd;
             let az = ppp[2] * sd * sd + pp[2] * sdd;
             let ta = (ax * ax + ay * ay + az * az).sqrt();
-            peak_ta = peak_ta.max(ta);
+            if ta > peak_ta {
+                peak_ta = ta;
+                peak_ta_at = k;
+            }
             update_util(&mut step_util, ta, ta_max);
 
             let jx = pppp[0] * sd * sd * sd + 3.0 * ppp[0] * sd * sdd + pp[0] * sddd;
             let jy = pppp[1] * sd * sd * sd + 3.0 * ppp[1] * sd * sdd + pp[1] * sddd;
             let jz = pppp[2] * sd * sd * sd + 3.0 * ppp[2] * sd * sdd + pp[2] * sddd;
             let tj = (jx * jx + jy * jy + jz * jz).sqrt();
-            peak_tj = peak_tj.max(tj);
+            if tj > peak_tj {
+                peak_tj = tj;
+                peak_tj_at = k;
+            }
             update_util(&mut step_util, tj, tj_max);
         }
 
@@ -365,5 +521,35 @@ fn populate_analytical_peaks<const N: usize>(
     diag.peak_tcp_velocity = peak_tv;
     diag.peak_tcp_acceleration = peak_ta;
     diag.peak_tcp_jerk = peak_tj;
+    diag.peak_joint_velocity_at = PeakLocation {
+        value: peak_jv,
+        sample: peak_jv_at.0,
+        joint: Some(peak_jv_at.1),
+    };
+    diag.peak_joint_acceleration_at = PeakLocation {
+        value: peak_ja,
+        sample: peak_ja_at.0,
+        joint: Some(peak_ja_at.1),
+    };
+    diag.peak_joint_jerk_at = PeakLocation {
+        value: peak_jj,
+        sample: peak_jj_at.0,
+        joint: Some(peak_jj_at.1),
+    };
+    diag.peak_tcp_velocity_at = PeakLocation {
+        value: peak_tv,
+        sample: peak_tv_at,
+        joint: None,
+    };
+    diag.peak_tcp_acceleration_at = PeakLocation {
+        value: peak_ta,
+        sample: peak_ta_at,
+        joint: None,
+    };
+    diag.peak_tcp_jerk_at = PeakLocation {
+        value: peak_tj,
+        sample: peak_tj_at,
+        joint: None,
+    };
     diag.average_utilization = if m > 0 { util_sum / m as f64 } else { 0.0 };
 }

@@ -29,6 +29,9 @@ pub use constraints::{
     BoundaryConditions, DensificationOptions, JointLimits, SolverOptions, TcpLimits,
     Topp3Tcp6Constraints,
 };
-pub use diagnostic::{LimitingGroup, SolveStatus, Topp3Tcp6Diagnostic};
+pub use diagnostic::{
+    BoundarySlackUsage, ConstraintCounts, DerivativeStats, InitialGuessStats, LimitingGroup,
+    PathStats, PeakLocation, PhaseTiming, SolveStatus, TcpStats, Topp3Tcp6Diagnostic,
+};
 pub use path_derivatives::PathDerivatives;
 pub use retimer::Topp3Tcp6;

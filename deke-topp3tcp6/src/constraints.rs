@@ -145,9 +145,10 @@ impl Default for SolverOptions {
             // Budget tuned so a healthy retime converges well inside it (most tests land
             // in 50–300 iter) and pathological inputs fail fast rather than burning
             // minutes of CPU in the restoration phase. Long smooth paths with many
-            // extrema can need ~2k iter to converge under PCHIP — set
-            // `solver.max_iterations` higher per-call when you know that's the workload.
-            max_iterations: 1500,
+            // extrema can need ~2k iter to converge under PCHIP, and some captured
+            // user trajectories (`bench_8wp`-shaped) need ~1.5–2k. Bumped to 2500 to
+            // catch them; per-call override still available for harder workloads.
+            max_iterations: 2500,
             timeout: None,
             diagnostics: false,
             boundary_slack: 1e-4,
