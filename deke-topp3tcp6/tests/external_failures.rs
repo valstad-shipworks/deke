@@ -714,6 +714,48 @@ fn external_3wp_max_iter_burn() {
 // infeasible" and "feasibility restoration failed".
 // ----------------------------------------------------------------------------
 
+/// Probe: second 2wp long-chord case (`_feas_restore_failed` waypoints) with
+/// two-stage disabled. Same purpose as the probe above.
+#[test]
+fn probe_2wp_long_chord_b_single_stage() {
+    let waypoints = vec![
+        SRobotQ::from_array([
+            -0.816060612385409, 0.30785362088310586, -0.924320181316653,
+            0.3980429700691374, -0.9013845276941991, -2.2484856962704693,
+        ]),
+        SRobotQ::from_array([
+            1.5781361953476494, 0.5871822955443388, -0.29146571111791625,
+            -0.6136122566303709, -0.30540762557050655, 0.012720444323652685,
+        ]),
+    ];
+    let mut cfg = external_cfg();
+    cfg.solver.two_stage_warm_start = false;
+    let ok = run_external_traj("probe_2wp_long_chord_b_single_stage", waypoints, cfg);
+    assert!(ok);
+}
+
+/// Probe: same waypoints as `external_2wp_long_chord_locally_infeasible` but with
+/// two-stage warm-start disabled. Tells us whether single-stage `apply_initial_guess`
+/// (with the path-aware cruise threshold) handles the long-chord rest-to-rest move on
+/// its own, which would be evidence for dropping two-stage on linear-joint paths.
+#[test]
+fn probe_2wp_long_chord_single_stage() {
+    let waypoints = vec![
+        SRobotQ::from_array([
+            -0.8204609515172723, 0.31613102569329266, -0.923207714223723,
+            0.39905459054027176, -0.9012370581425307, -2.2446286935813715,
+        ]),
+        SRobotQ::from_array([
+            1.5781361953476498, 0.5871822955443382, -0.29146571111791547,
+            -0.6136122566303717, -0.30540762557050677, 0.012720444323654462,
+        ]),
+    ];
+    let mut cfg = external_cfg();
+    cfg.solver.two_stage_warm_start = false;
+    let ok = run_external_traj("probe_2wp_long_chord_single_stage", waypoints, cfg);
+    assert!(ok);
+}
+
 /// 2 wp, locally infeasible at iter 281 / 2.3 s. Chord 3.564, max_sddd in initial
 /// guess = 34.022 ≈ j_max[0] / qp_0 = 22.897 / 0.673.
 #[test]
@@ -760,6 +802,91 @@ fn external_2wp_long_chord_feas_restore_failed() {
 }
 
 // ----------------------------------------------------------------------------
+// Fifth batch (2026-05-12) — production failures from a *tighter-limit* arm config.
+//
+// New signature compared to earlier batches: the boundary slack box at start is
+// saturated (`start_sd ≈ 9.99e-5`, sometimes start_sdd too), meaning the time-optimal
+// solution itself pins against the slack edge — not just the initial guess. The
+// path-aware cruise threshold in `nlp.rs` only fixed the case where the *initial guess*
+// landed on the joint-jerk vertex; this batch shows the IPM grinds to the same
+// degenerate-corner failure even with a gentle initial guess, because the *optimum*
+// lives at the slack-box edge plus the joint-jerk row.
+// ----------------------------------------------------------------------------
+
+fn tight_arm_cfg() -> Topp3Tcp6Constraints<6> {
+    use deke_topp3tcp6::JointLimits;
+    let mut cfg = external_cfg();
+    cfg.joint = JointLimits {
+        q_min: SRobotQ::from_array([f64::NEG_INFINITY; 6]),
+        q_max: SRobotQ::from_array([f64::INFINITY; 6]),
+        v_max: SRobotQ::from_array([1.374447, 1.178097, 1.112647, 1.570796, 1.570796, 2.617994]),
+        a_max: SRobotQ::from_array([3.739382, 3.205185, 3.027119, 4.273579, 4.273579, 7.122633]),
+        j_max: SRobotQ::from_array([16.456684, 14.105729, 13.322078, 18.807639, 18.807639, 31.346066]),
+    };
+    cfg
+}
+
+/// 2wp, tight arm limits, chord=3.27, FeasRestoreFailed at 545 iter.
+#[test]
+fn external_2wp_tight_chord_3p27() {
+    let waypoints = vec![
+        SRobotQ::from_array([0.872925126811656, 1.1738425427986894, -0.8267260799525118, 2.132010971170433, 2.0206301899122248, -0.6068205652816956]),
+        SRobotQ::from_array([0.002662742298985527, 0.14094291649646548, -0.15317010814094578, 0.0010269920539685462, 0.15082150296467675, 0.003009367616041299]),
+    ];
+    let ok = run_external_traj("external_2wp_tight_chord_3p27", waypoints, tight_arm_cfg());
+    assert!(ok, "still failing — check diagnostic above");
+}
+
+/// 2wp, tight arm limits, chord=1.96, LocallyInfeasible at 1615 iter.
+#[test]
+fn external_2wp_tight_chord_1p96() {
+    let waypoints = vec![
+        SRobotQ::from_array([1.1146929388018008, 1.2013380400060065, -0.7802196440005686, 0.6162472116682283, 0.8805285070227381, -0.4177642958800518]),
+        SRobotQ::from_array([0.0026627422990204686, 0.14094291649646626, -0.15317010814094092, 0.0010269920533265077, 0.15082150296466543, 0.0030093676166768456]),
+    ];
+    let ok = run_external_traj("external_2wp_tight_chord_1p96", waypoints, tight_arm_cfg());
+    assert!(ok, "still failing — check diagnostic above");
+}
+
+/// 3wp, normal arm limits, chord=1.08, LocallyInfeasible at 1614 iter (curved path —
+/// `max|qpp|=3.5`, `max|qppp|=75` — and `max_sddd=49` in initial guess).
+#[test]
+fn external_3wp_curved_chord_1p08() {
+    let waypoints = vec![
+        SRobotQ::from_array([-0.793924821924714, 0.3689239477336923, -0.9030239451766042, -0.5668079603711639, -0.4295877513494606, -2.2303135281822066]),
+        SRobotQ::from_array([-0.8007905907464508, 0.34706416050291594, -0.8854761088810774, 0.04203712030782319, -0.7314859671629443, -2.25448895678904]),
+        SRobotQ::from_array([-0.8012647741665909, 0.35855100052974426, -0.9097269633056233, 0.39032891528531044, -0.9169005741201722, -2.252930380491735]),
+    ];
+    let ok = run_external_traj("external_3wp_curved_chord_1p08", waypoints, external_cfg());
+    assert!(ok, "still failing — check diagnostic above");
+}
+
+/// 3wp, normal arm limits, chord=1.09, LocallyInfeasible at 109 iter (curved).
+#[test]
+fn external_3wp_curved_chord_1p09() {
+    let waypoints = vec![
+        SRobotQ::from_array([-0.7997795325625987, 0.3415350801778597, -0.9124667942353557, -0.5809307699516029, -0.4251831842883253, -2.211397730857576]),
+        SRobotQ::from_array([-0.8112867215948241, 0.3160284973156428, -0.8942629243641242, -0.01703762377796136, -0.7028540376299858, -2.2354343475563447]),
+        SRobotQ::from_array([-0.8204609515172723, 0.31613102569329266, -0.923207714223723, 0.39905459054027176, -0.9012370581425307, -2.2446286935813715]),
+    ];
+    let ok = run_external_traj("external_3wp_curved_chord_1p09", waypoints, external_cfg());
+    assert!(ok, "still failing — check diagnostic above");
+}
+
+/// 2wp, normal arm limits, chord=3.54, LocallyInfeasible at 99 iter. Cruise fix
+/// already engaged (initial guess `max_sddd=2.81`, far from limit) — failure is
+/// purely the slack-edge KKT vertex, not the initial guess.
+#[test]
+fn external_2wp_long_chord_slack_edge() {
+    let waypoints = vec![
+        SRobotQ::from_array([1.57813619534763, 0.5871822955443138, -0.29146571111795433, -0.6136122566307983, -0.3054076255704742, 0.012720444324105878]),
+        SRobotQ::from_array([-0.6180104049085849, 0.5198161990509373, -1.0278924920416599, 0.05620183326441339, 0.5114762738642473, 2.466348656585609]),
+    ];
+    let ok = run_external_traj("external_2wp_long_chord_slack_edge", waypoints, external_cfg());
+    assert!(ok, "still failing — check diagnostic above");
+}
+
+// ----------------------------------------------------------------------------
 // Fourth batch (2026-05-12) — bench-discovered regressions.
 //
 // Captured from `external_bench` run-by-seed output. The stage-1→stage-2 warm-start
@@ -795,6 +922,34 @@ fn external_bench_multi_seg_10wp_run3() {
         external_cfg(),
     );
     assert!(ok, "still failing — check diagnostic above");
+}
+
+/// Same waypoints as `external_bench_multi_seg_10wp_run3` but with two-stage
+/// warm-start disabled. Used as a probe to tell whether the path is solvable at all by
+/// single-stage — if this passes and the two-stage variant doesn't, the answer is to
+/// gate two-stage off for this regime, not to chase IPM convergence.
+#[test]
+fn external_bench_multi_seg_10wp_run3_single_stage() {
+    let waypoints = vec![
+        SRobotQ::from_array([-1.1967357, 0.6513940, 0.0649984, -0.7458407, -1.0254644, 1.9914096]),
+        SRobotQ::from_array([-1.4218939, 0.7337620, 0.3250841, -0.5453823, -0.9866293, 1.6930232]),
+        SRobotQ::from_array([-1.5209670, 0.7668492, 0.5091862, -0.3223294, -0.8368485, 1.4805338]),
+        SRobotQ::from_array([-1.3353859, 0.6944350, 0.5843410, -0.0834244, -0.9241249, 1.1985058]),
+        SRobotQ::from_array([-1.5004166, 0.7278752, 0.6759865, -0.2666964, -0.7699144, 1.4176370]),
+        SRobotQ::from_array([-1.3280353, 0.5349262, 0.4342674, -0.4279996, -0.9543195, 1.6290450]),
+        SRobotQ::from_array([-1.2149905, 0.3504188, 0.7067139, -0.3298242, -0.9069862, 1.6441734]),
+        SRobotQ::from_array([-1.2035334, 0.3318515, 1.0019210, -0.2021268, -0.6941859, 1.5207703]),
+        SRobotQ::from_array([-1.3864710, 0.3202283, 1.1828311, -0.2501720, -0.8450851, 1.3589037]),
+        SRobotQ::from_array([-1.5619611, 0.5108429, 1.3277226, -0.0363543, -0.6535910, 1.3245343]),
+    ];
+    let mut cfg = external_cfg();
+    cfg.solver.two_stage_warm_start = false;
+    let ok = run_external_traj(
+        "external_bench_multi_seg_10wp_run3_single_stage",
+        waypoints,
+        cfg,
+    );
+    assert!(ok, "single-stage also failing — path may need different fix");
 }
 
 // ----------------------------------------------------------------------------
