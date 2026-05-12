@@ -129,6 +129,8 @@ fn external_cfg() -> Topp3Tcp6Constraints<6> {
     });
     cfg.sample_rate_hz = 125.0;
     cfg.post_validation = false;
+    // Match the producing project's looser projection tolerance (default is 1e-4).
+    cfg.boundary.projection_tolerance = 1e-3;
     cfg
 }
 
@@ -652,6 +654,108 @@ fn external_23wp_feas_restore_slow() {
     let mut cfg = external_cfg();
     cfg.solver.max_iterations = 600;
     let ok = run_external_traj("external_23wp_feas_restore_slow", waypoints, cfg);
+    assert!(ok, "still failing — check diagnostic above");
+}
+
+// ----------------------------------------------------------------------------
+// Second batch (2026-05-12) — three more failures from `valstad::controls::universal::traj_gen`.
+// All run with `external_cfg()` (TCP v=2 a=20 j=200, default solver options w/ two-stage
+// warm-start on). Captures the warning lines verbatim.
+// ----------------------------------------------------------------------------
+
+/// 3 wp, status=locally infeasible, limiting=JointVelocity, ~68 iter / 159 ms.
+#[test]
+fn external_3wp_jv_infeasible() {
+    let waypoints = vec![
+        SRobotQ::from_array([-0.5339535097453525, 0.74498675515349, -1.1050209027842832, -1.4289759983486348, 1.4386454927014827, 1.644987848470685]),
+        SRobotQ::from_array([-0.5374347769801416, 0.7015257184949478, -1.0920137429213423, -0.9566055105144483, 1.1775898514577787, 1.9667187355379523]),
+        SRobotQ::from_array([-0.6120284630576481, 0.6487779263898105, -1.0738133155393101, -0.3213680361203431, 0.8516805909536677, 2.389489759293551]),
+    ];
+    let ok = run_external_traj("external_3wp_jv_infeasible", waypoints, external_cfg());
+    assert!(ok, "still failing — check diagnostic above");
+}
+
+/// 4 wp, status=locally infeasible, limiting=JointVelocity, ~371 iter / 2.2 s.
+#[test]
+fn external_4wp_jv_infeasible() {
+    let waypoints = vec![
+        SRobotQ::from_array([-0.6844456406012558, 0.27943208064805813, -1.0291380777032204, -1.0177393097241967, 0.3801949001369142, 1.0611198294268227]),
+        SRobotQ::from_array([-0.7879614417204257, 0.18060696474847898, -0.9056821833396007, -0.9446100616633397, 0.17271020047616978, 0.633403057607808]),
+        SRobotQ::from_array([-0.7457079161375768, 0.09388051212451275, -0.9347383979149606, 0.012300712001010052, -0.01999423969876598, -0.33654199449183686]),
+        SRobotQ::from_array([-0.6140441403794081, 0.2362715059394544, -0.9127875180643983, 0.1074237519778685, -0.6194001488746936, -0.985872517054197]),
+    ];
+    let ok = run_external_traj("external_4wp_jv_infeasible", waypoints, external_cfg());
+    assert!(ok, "still failing — check diagnostic above");
+}
+
+/// 3 wp, status=max iterations exceeded, limiting=None, ~2647 iter / 8.5 s in the field.
+/// Capped to 600 iter here so the test doesn't dominate CI wall time.
+#[test]
+fn external_3wp_max_iter_burn() {
+    let waypoints = vec![
+        SRobotQ::from_array([1.5781361953476452, 0.5871822955443483, -0.2914657111179135, -0.6136122566304394, -0.30540762557051676, 0.012720444323725405]),
+        SRobotQ::from_array([0.04582322042765487, 0.8358902301235366, -0.6940597972956994, 0.24628190378634335, -2.0017796241964514, -1.359778649135518]),
+        SRobotQ::from_array([0.013284717572806378, 1.0293772926092564, -0.9137038190858852, 0.2351194911416346, -2.2004976102007894, -1.2531773054630062]),
+    ];
+    let mut cfg = external_cfg();
+    cfg.solver.max_iterations = 600;
+    let ok = run_external_traj("external_3wp_max_iter_burn", waypoints, cfg);
+    assert!(ok, "still failing — check diagnostic above");
+}
+
+// ----------------------------------------------------------------------------
+// Third batch (2026-05-12) — two more 2-waypoint p2p failures from
+// `valstad::controls::universal::traj_gen`. Both are the same long-chord joint-space
+// line (chord ≈ 3.564m), single segment densified to 73 samples. PCHIP on 2 colinear
+// waypoints gives qpp ≈ qppp ≈ 0, so all joint a/j constraints reduce to scalar
+// `|qp_j·sdd| ≤ a_max[j]` / `|qp_j·sddd| ≤ j_max[j]`; joint 0 (largest |Δq|) sets the
+// tightest scalar caps, and the initial-guess sddd lands *exactly* on j0's jerk limit.
+// Tiny FP perturbations between the two starts flip the IPM between "locally
+// infeasible" and "feasibility restoration failed".
+// ----------------------------------------------------------------------------
+
+/// 2 wp, locally infeasible at iter 281 / 2.3 s. Chord 3.564, max_sddd in initial
+/// guess = 34.022 ≈ j_max[0] / qp_0 = 22.897 / 0.673.
+#[test]
+fn external_2wp_long_chord_locally_infeasible() {
+    let waypoints = vec![
+        SRobotQ::from_array([
+            -0.8204609515172723, 0.31613102569329266, -0.923207714223723,
+            0.39905459054027176, -0.9012370581425307, -2.2446286935813715,
+        ]),
+        SRobotQ::from_array([
+            1.5781361953476498, 0.5871822955443382, -0.29146571111791547,
+            -0.6136122566303717, -0.30540762557050677, 0.012720444323654462,
+        ]),
+    ];
+    let ok = run_external_traj(
+        "external_2wp_long_chord_locally_infeasible",
+        waypoints,
+        external_cfg(),
+    );
+    assert!(ok, "still failing — check diagnostic above");
+}
+
+/// 2 wp, feasibility restoration failed at iter 555 / 4.3 s. Same chord/end as the
+/// `_locally_infeasible` case above, start perturbed ~4 mrad in q[0,1,5] — enough to
+/// flip the IPM's failure mode.
+#[test]
+fn external_2wp_long_chord_feas_restore_failed() {
+    let waypoints = vec![
+        SRobotQ::from_array([
+            -0.816060612385409, 0.30785362088310586, -0.924320181316653,
+            0.3980429700691374, -0.9013845276941991, -2.2484856962704693,
+        ]),
+        SRobotQ::from_array([
+            1.5781361953476494, 0.5871822955443388, -0.29146571111791625,
+            -0.6136122566303709, -0.30540762557050655, 0.012720444323652685,
+        ]),
+    ];
+    let ok = run_external_traj(
+        "external_2wp_long_chord_feas_restore_failed",
+        waypoints,
+        external_cfg(),
+    );
     assert!(ok, "still failing — check diagnostic above");
 }
 

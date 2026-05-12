@@ -556,30 +556,44 @@ fn apply_initial_guess<'a, const N: usize>(
     let ramp = ((m / 4).max(2)).min((m.saturating_sub(1)) / 2);
 
     // Iteratively shrink `cruise_factor` until the forward-propagated guess respects the
-    // joint v/a/j limits. Starting at 0.7 (the historical default) and halving each round
-    // caps the worst case at 8 rounds (cruise ≈ 2.7e-3 × min_cap), at which point we
-    // accept whatever we have and let the IPM recover.
+    // joint v/a/j limits. Starting at 0.5 and halving each round caps the worst case at
+    // 8 rounds (cruise ≈ 2e-3 × min_cap), at which point we accept whatever we have and
+    // let the IPM recover.
     //
-    // **The loop is intentionally permissive.** A modest violation in the initial guess
-    // is something the IPM recovers from in a few iterations; the tight tolerance from
-    // earlier drafts (`> 1.05`) actually *slowed* the IPM down because a too-conservative
-    // cruise leaves it climbing back up to the optimal speed for hundreds of iterations.
-    // The loop only fires for truly egregious infeasibility (10× limits) — which is
-    // exactly the symptom of paths that previously bailed in feasibility-restoration
-    // after 12–19 iter (8wp, 13wp, 20wp, 3wp from external_failures).
-    // Path-length-dependent cruise factor. Empirically (release-mode bench, see
-    // `tests/external_bench.rs`):
+    // **Threshold is path-aware.** Two regimes:
     //
-    // - **Short paths** (`m ≲ 30`) prefer `cruise = 0.5`. With few segments, any sddd
-    //   violation from the ramp concentrates in 1–2 segments where the IPM has to
-    //   reverse it; a gentler cruise keeps the ramp's sddd within bounds.
-    // - **Long paths** (`m ≳ 100`) prefer `cruise = 0.9`. With many segments the ramp
-    //   is naturally spread out, and an aggressive cruise seeds sd closer to its
-    //   optimum so the IPM doesn't waste iterations climbing.
+    // - **Curved joint paths** (`max|qpp| / max|qp| > 1e-6`). The joint a/j rows have
+    //   real second/third-order dependence on `sd, sdd`; the IPM can absorb a fairly
+    //   over-limit guess in a few iterations, and a too-conservative cruise costs more
+    //   iter (climbing back up to the optimum) than it saves. Tolerance `10.0` —
+    //   only halve on truly egregious (10× over-limit) guesses.
     //
-    // Linear interpolation between the two regimes. Thresholds tuned with the
-    // `external_bench` shape distribution in mind; the "medium" band 30–100 catches
-    // 5wp/10wp/25wp paths smoothly.
+    // - **Linear joint paths** (`max|qpp| ≈ 0`). After densification, PCHIP through
+    //   colinear waypoints yields `qpp ≈ qppp ≈ FP noise`, so the joint-jerk row
+    //   reduces to `|qp_j·sddd| ≤ j_max[j]`. The cruise-loop's analytical `max|sddd|`
+    //   then lands at exactly `j_max[j*]/qp_j*` for the dominant joint — *violation
+    //   ≈ 1.000*. Combined with the boundary-slack box pinning `sd[0]/sdd[0]` at the
+    //   soft-box wall, the IPM sits in a three-active-row corner with no descent
+    //   direction and either declares *locally infeasible* or fails feasibility
+    //   restoration. Tolerance `0.95` — fires exactly one halving (cruise 0.5 → 0.25,
+    //   `max|sddd|` drops to ≈half) and leaves the IPM with margin to maneuver. See
+    //   the `external_2wp_long_chord_*` regression tests for the captured trajectories.
+    let mut max_abs_qpp = 0.0_f64;
+    let mut max_abs_qp = 0.0_f64;
+    for k in 0..m {
+        for j in lock..N {
+            let qp = deriv.qp[k][j].abs();
+            if qp > max_abs_qp {
+                max_abs_qp = qp;
+            }
+            let qpp = deriv.qpp[k][j].abs();
+            if qpp > max_abs_qpp {
+                max_abs_qpp = qpp;
+            }
+        }
+    }
+    let joint_path_is_linear = max_abs_qp > 0.0 && max_abs_qpp < 1e-6 * max_abs_qp;
+
     let mut cruise_factor = 0.5;
     let mut sd_guess = vec![0.0_f64; m];
     let mut sdd_guess = vec![0.0_f64; m];
@@ -587,7 +601,7 @@ fn apply_initial_guess<'a, const N: usize>(
     let mut dt_guess = vec![1e-5_f64; seg];
     let mut violation = f64::INFINITY;
     let max_rounds = 8;
-    let violation_tolerance = 10.0;
+    let violation_tolerance = if joint_path_is_linear { 0.95 } else { 10.0 };
     for _round in 0..max_rounds {
         let cruise = (min_cap * cruise_factor).max(1e-3);
         build_sd_profile(
