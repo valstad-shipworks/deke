@@ -168,6 +168,12 @@ pub struct Topp3Tcp6Constraints<const N: usize> {
     pub locked_prefix: usize,
     /// If true, the retimed trajectory is validated against the provided `validator` after retiming and rejected if invalid.
     pub post_validation: bool,
+    /// If true, after the validator pass the retimer re-evaluates the analytical
+    /// per-sample joint and TCP kinematics from the converged NLP solution against the
+    /// configured [`JointLimits`] / [`TcpLimits`] and returns
+    /// [`deke_types::DekeError::ExceedsDynamicsLimits`] on the first violation. Useful
+    /// as a belt-and-braces guard against IPM convergence slop or upstream bugs.
+    pub check_output_dynamics: bool,
 }
 
 impl<const N: usize> Topp3Tcp6Constraints<N> {
@@ -183,6 +189,7 @@ impl<const N: usize> Topp3Tcp6Constraints<N> {
             sample_rate_hz: 125.0,
             locked_prefix: 0,
             post_validation: true,
+            check_output_dynamics: true,
         }
     }
 }

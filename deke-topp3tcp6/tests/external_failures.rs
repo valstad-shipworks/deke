@@ -112,14 +112,33 @@ fn external_cfg() -> Topp3Tcp6Constraints<6> {
     cfg.joint = JointLimits {
         q_min: SRobotQ::from_array([f64::NEG_INFINITY; 6]),
         q_max: SRobotQ::from_array([f64::INFINITY; 6]),
+        // Full-precision values copied verbatim from the production warning logs —
+        // the truncated 6-decimal versions previously here differed from prod at the
+        // ~4e-7 level, which was enough to send the IPM on a different iteration
+        // trajectory and mask reproducibility of the captured failures.
         v_max: SRobotQ::from_array([
-            2.748894, 2.748894, 3.468842, 5.497787, 5.890486, 9.424778,
+            2.748893571891069,
+            2.748893571891069,
+            3.46884188833873,
+            5.497787143782138,
+            5.8904862254808625,
+            9.42477796076938,
         ]),
         a_max: SRobotQ::from_array([
-            6.170564, 6.170564, 7.786665, 12.341129, 13.222637, 21.156220,
+            6.17056448573788,
+            6.17056448573788,
+            7.786664511626387,
+            12.34112897147576,
+            13.222637422820858,
+            21.156219876513376,
         ]),
         j_max: SRobotQ::from_array([
-            22.897033, 22.897033, 28.893875, 45.794066, 49.065074, 78.504119,
+            22.897032833404705,
+            22.897032833404705,
+            28.893874634073196,
+            45.79406566680941,
+            49.065074313992284,
+            78.50411890238763,
         ]),
     };
     cfg.tcp = Some(TcpLimits {
@@ -732,6 +751,61 @@ fn probe_2wp_long_chord_b_single_stage() {
     cfg.solver.two_stage_warm_start = false;
     let ok = run_external_traj("probe_2wp_long_chord_b_single_stage", waypoints, cfg);
     assert!(ok);
+}
+
+/// Print fk_end(q) at both waypoints of the long-chord case, so we can compare against
+/// production's FK output directly. If the printed TCP positions match, FK is identical
+/// and the iteration divergence has to come from somewhere else (compiler flags, etc).
+/// If they don't match, the FK chain is genuinely different and we need to figure out
+/// what's between the URDF constants and the chain object.
+#[test]
+fn probe_fk_at_long_chord_endpoints() {
+    use deke_types::FKChain;
+    let fk = external_chain();
+    let q_start = SRobotQ::<6, f64>::from_array([
+        -0.8204609515172723, 0.31613102569329266, -0.923207714223723,
+        0.39905459054027176, -0.9012370581425307, -2.2446286935813715,
+    ]);
+    let q_end = SRobotQ::<6, f64>::from_array([
+        1.5781361953476498, 0.5871822955443382, -0.29146571111791547,
+        -0.6136122566303717, -0.30540762557050677, 0.012720444323654462,
+    ]);
+    let p_start = fk.fk_end(&q_start).unwrap().translation;
+    let p_end = fk.fk_end(&q_end).unwrap().translation;
+    eprintln!(
+        "FK_END(q_start) = [{:.17}, {:.17}, {:.17}]",
+        p_start.x, p_start.y, p_start.z
+    );
+    eprintln!(
+        "FK_END(q_end)   = [{:.17}, {:.17}, {:.17}]",
+        p_end.x, p_end.y, p_end.z
+    );
+}
+
+/// Probe: same waypoints/cfg as `external_2wp_long_chord_locally_infeasible` but with
+/// the FK chain built via f32 → f64 conversion (matching how production constructs it).
+/// If the iter counts here match production (144 / 227) instead of my f64-direct ones
+/// (44 / 436), the divergence is the FK precision path, not anything in the retimer.
+#[test]
+fn probe_2wp_long_chord_f32_fk() {
+    let fk_f32 = URDFChain::<6, f32>::new(URDF_JOINTS).unwrap()
+        .with_fixed_suffix(&URDF_FIXED_SUFFIX).unwrap();
+    let fk: URDFChain<6, f64> = fk_f32.into();
+    let waypoints = vec![
+        SRobotQ::from_array([
+            -0.8204609515172723, 0.31613102569329266, -0.923207714223723,
+            0.39905459054027176, -0.9012370581425307, -2.2446286935813715,
+        ]),
+        SRobotQ::from_array([
+            1.5781361953476498, 0.5871822955443382, -0.29146571111791547,
+            -0.6136122566303717, -0.30540762557050677, 0.012720444323654462,
+        ]),
+    ];
+    let path = SRobotPath::<6, f64>::try_new(waypoints).unwrap();
+    let mut validator = wide_validator();
+    let (result, diag) = Topp3Tcp6.retime(&external_cfg(), &path, &fk, &mut validator, &());
+    eprintln!("[probe_2wp_long_chord_f32_fk] {}", diag);
+    assert!(result.is_ok(), "f32 FK probe failed");
 }
 
 /// Probe: same waypoints as `external_2wp_long_chord_locally_infeasible` but with

@@ -165,8 +165,139 @@ impl<const N: usize> Retimer<N, f64> for Topp3Tcp6 {
             }
         }
 
+        if constraints.check_output_dynamics {
+            if let Err(e) = check_dynamics_against_limits::<N>(&solution, &deriv, constraints, dt_out) {
+                diag.message = Some(format!("{}", e));
+                return (Err(e), diag);
+            }
+        }
+
         (Ok(SRobotTraj::new(dt_out, traj_path)), diag)
     }
+}
+
+/// Re-evaluates the analytical per-sample kinematics from the converged NLP solution
+/// against the configured joint and TCP limits. Each constraint is the same expression
+/// the solver enforced, so this is exact up to IPM convergence tolerance — the small
+/// relative slack (`solver.tolerance`, defaulting to 1e-6) absorbs that.
+///
+/// Joint violations use the joint index as `dof`. TCP violations report `dof = u8::MAX`
+/// since the bound is on the translational-velocity magnitude rather than a single axis.
+fn check_dynamics_against_limits<const N: usize>(
+    solution: &Solution,
+    deriv: &PathDerivatives<N>,
+    constraints: &Topp3Tcp6Constraints<N>,
+    dt_in: Duration,
+) -> DekeResult<()> {
+    let m = deriv.num_waypoints();
+    let seg = deriv.num_segments();
+    let lock = constraints.locked_prefix.min(N);
+    let rel_slack = constraints.solver.tolerance.max(0.0);
+
+    let exceeds = |observed: f64, limit: f64| -> bool {
+        limit.is_finite() && limit > 0.0 && observed > limit * (1.0 + rel_slack)
+    };
+
+    for k in 0..m {
+        let sd = solution.sd[k];
+        let sdd = solution.sdd[k];
+        let seg_idx = k.min(seg - 1);
+        let sddd = solution.sddd[seg_idx];
+
+        for j in lock..N {
+            let qp = deriv.qp[k][j];
+            let qpp = deriv.qpp[k][j];
+            let qppp = deriv.qppp[k][j];
+
+            let v = (qp * sd).abs();
+            let v_max = constraints.joint.v_max.0[j];
+            if exceeds(v, v_max) {
+                return Err(DekeError::ExceedsDynamicsLimits {
+                    dt_in,
+                    limit_type: "joint_velocity",
+                    dof: j as u8,
+                    limit_value: v_max,
+                    observed_value: v,
+                });
+            }
+
+            let a = (qpp * sd * sd + qp * sdd).abs();
+            let a_max = constraints.joint.a_max.0[j];
+            if exceeds(a, a_max) {
+                return Err(DekeError::ExceedsDynamicsLimits {
+                    dt_in,
+                    limit_type: "joint_acceleration",
+                    dof: j as u8,
+                    limit_value: a_max,
+                    observed_value: a,
+                });
+            }
+
+            let jk = (qppp * sd * sd * sd + 3.0 * qpp * sd * sdd + qp * sddd).abs();
+            let j_max = constraints.joint.j_max.0[j];
+            if exceeds(jk, j_max) {
+                return Err(DekeError::ExceedsDynamicsLimits {
+                    dt_in,
+                    limit_type: "joint_jerk",
+                    dof: j as u8,
+                    limit_value: j_max,
+                    observed_value: jk,
+                });
+            }
+        }
+
+        if let Some(tcp) = constraints.tcp
+            && deriv.has_tcp()
+        {
+            let pp = &deriv.pp[k];
+            let ppp = &deriv.ppp[k];
+            let pppp = &deriv.pppp[k];
+
+            let vx = pp[0] * sd;
+            let vy = pp[1] * sd;
+            let vz = pp[2] * sd;
+            let tv = (vx * vx + vy * vy + vz * vz).sqrt();
+            if exceeds(tv, tcp.v_max) {
+                return Err(DekeError::ExceedsDynamicsLimits {
+                    dt_in,
+                    limit_type: "tcp_velocity",
+                    dof: u8::MAX,
+                    limit_value: tcp.v_max,
+                    observed_value: tv,
+                });
+            }
+
+            let ax = ppp[0] * sd * sd + pp[0] * sdd;
+            let ay = ppp[1] * sd * sd + pp[1] * sdd;
+            let az = ppp[2] * sd * sd + pp[2] * sdd;
+            let ta = (ax * ax + ay * ay + az * az).sqrt();
+            if exceeds(ta, tcp.a_max) {
+                return Err(DekeError::ExceedsDynamicsLimits {
+                    dt_in,
+                    limit_type: "tcp_acceleration",
+                    dof: u8::MAX,
+                    limit_value: tcp.a_max,
+                    observed_value: ta,
+                });
+            }
+
+            let jx = pppp[0] * sd * sd * sd + 3.0 * ppp[0] * sd * sdd + pp[0] * sddd;
+            let jy = pppp[1] * sd * sd * sd + 3.0 * ppp[1] * sd * sdd + pp[1] * sddd;
+            let jz = pppp[2] * sd * sd * sd + 3.0 * ppp[2] * sd * sdd + pp[2] * sddd;
+            let tj = (jx * jx + jy * jy + jz * jz).sqrt();
+            if exceeds(tj, tcp.j_max) {
+                return Err(DekeError::ExceedsDynamicsLimits {
+                    dt_in,
+                    limit_type: "tcp_jerk",
+                    dof: u8::MAX,
+                    limit_value: tcp.j_max,
+                    observed_value: tj,
+                });
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn densify_path<const N: usize>(
@@ -177,7 +308,7 @@ fn densify_path<const N: usize>(
     let merged_len = merged.len();
 
     let mut p = if let Some(step) = opts.max_segment_step {
-        merged.densify(step)
+        densify_with_kink_boost::<N>(&merged, step)
     } else {
         merged
     };
@@ -369,6 +500,76 @@ fn chord_distance<const N: usize>(
         sq += d * d;
     }
     sq.sqrt()
+}
+
+/// Chord-by-chord densifier that takes a smaller step in segments adjacent to sharp
+/// kinks. A kink at waypoint `k` is a triplet `(p[k-1], p[k], p[k+1])` whose unit chord
+/// vectors have a dot product below `-0.5` (i.e. the path direction reverses by more
+/// than 120°). PCHIP's `qp` collapses to zero at a true 180° reversal, but the
+/// surrounding samples carry the constraint pressure — denser sampling there gives the
+/// IPM more rows of `qpp·sd² ≤ a_max` to honor before sd can climb back up.
+fn densify_with_kink_boost<const N: usize>(
+    path: &deke_types::SRobotPath<N, f64>,
+    base_step: f64,
+) -> deke_types::SRobotPath<N, f64> {
+    let m = path.len();
+    if m < 2 || base_step <= 0.0 {
+        return path.clone();
+    }
+
+    // Per-segment boost factor: 1.0 by default, larger near sharp kinks. cos=-1 ⇒ 8×,
+    // cos=-0.5 ⇒ 4×, cos≥-0.5 ⇒ 1× (untouched).
+    let mut boost = vec![1.0_f64; m - 1];
+    if m >= 3 {
+        for k in 1..m - 1 {
+            let a = path.get(k - 1).unwrap();
+            let b = path.get(k).unwrap();
+            let c = path.get(k + 1).unwrap();
+            let d1 = chord_distance::<N>(a, b);
+            let d2 = chord_distance::<N>(b, c);
+            if d1 < 1e-12 || d2 < 1e-12 {
+                continue;
+            }
+            let mut dot = 0.0_f64;
+            for j in 0..N {
+                dot += (b.0[j] - a.0[j]) * (c.0[j] - b.0[j]);
+            }
+            let cos = (dot / (d1 * d2)).clamp(-1.0, 1.0);
+            // Threshold tuned for 6-DOF random-direction noise: at high N, consecutive
+            // chord directions naturally have moderately negative cosines (the typical
+            // dot product of two unit vectors in N-D is ~1/√N), so a permissive cutoff
+            // floods the densifier on benign paths. Only triggers for clear reversals.
+            if cos < -0.7 {
+                let factor = 1.0 + (-cos - 0.5) * 6.0; // cos=-0.7→2.2, cos=-1.0→4.0
+                if factor > boost[k - 1] {
+                    boost[k - 1] = factor;
+                }
+                if factor > boost[k] {
+                    boost[k] = factor;
+                }
+            }
+        }
+    }
+
+    let mut out = Vec::with_capacity(m);
+    out.push(*path.get(0).unwrap());
+    for k in 0..m - 1 {
+        let a = path.get(k).unwrap();
+        let b = path.get(k + 1).unwrap();
+        let d = chord_distance::<N>(a, b);
+        if d <= 0.0 {
+            out.push(*b);
+            continue;
+        }
+        let effective_step = base_step / boost[k];
+        let steps = (d / effective_step).ceil().max(1.0) as usize;
+        for i in 1..=steps {
+            let t = i as f64 / steps as f64;
+            out.push(a.interpolate(b, t));
+        }
+    }
+
+    deke_types::SRobotPath::try_new(out).unwrap_or_else(|_| path.clone())
 }
 
 fn infer_limiting_group<const N: usize>(

@@ -265,12 +265,6 @@ fn build_and_solve_inner<const N: usize>(
         let seg_idx = if k < seg { k } else { seg - 1 };
         let sddd_k = sddd[seg_idx];
 
-        // The TCP a/j constraints at the very first and last sample are fully determined by the
-        // boundary equalities on sd, sdd (and by the implicit determination of sddd through the
-        // integrator). Adding them anyway just creates spurious KKT activity at the boundary
-        // that the IPM restoration phase trips over.
-        let at_boundary = k == 0 || k == m - 1;
-
         let qp_norm_sq: f64 = (lock..N)
             .map(|j| deriv.qp[k][j] * deriv.qp[k][j])
             .sum();
@@ -289,48 +283,58 @@ fn build_and_solve_inner<const N: usize>(
             degenerate_qp_samples += 1;
         }
 
-        if !qp_degenerate {
-            for j in lock..N {
-                let qp_j = deriv.qp[k][j];
-                let qpp_j = deriv.qpp[k][j];
-                let qppp_j = deriv.qppp[k][j];
-                let v_max = constraints.joint.v_max.0[j];
-                let a_max = constraints.joint.a_max.0[j];
-                let j_max = constraints.joint.j_max.0[j];
+        // Joint a/j constraints are applied even at qp-degenerate samples: their LHS
+        // reduces to `qpp·sd² (+ 3·qpp·sd·sdd)` when `qp_j = 0`, which is still a
+        // well-posed bound on `sd` (and `sdd`). Skipping them lets the IPM find a
+        // solution where `sd` stays high through a kink even though `|qpp|` is huge
+        // there, producing acceleration violations one or two samples past the corner.
+        // The v constraint stays guarded since it becomes vacuous at `qp_j ≈ 0`.
+        for j in lock..N {
+            let qp_j = deriv.qp[k][j];
+            let qpp_j = deriv.qpp[k][j];
+            let qppp_j = deriv.qppp[k][j];
+            let v_max = constraints.joint.v_max.0[j];
+            let a_max = constraints.joint.a_max.0[j];
+            let j_max = constraints.joint.j_max.0[j];
 
-                if v_max.is_finite() && v_max > 0.0 && qp_j.abs() > qp_cutoffs[j] {
-                    let expr = qp_j * sd_k;
-                    subject_to!(problem, expr <= v_max);
-                    let neg = -qp_j * sd_k;
-                    subject_to!(problem, neg <= v_max);
-                    counts.joint_v += 2;
-                }
+            if v_max.is_finite() && v_max > 0.0 && qp_j.abs() > qp_cutoffs[j] {
+                let expr = qp_j * sd_k;
+                subject_to!(problem, expr <= v_max);
+                let neg = -qp_j * sd_k;
+                subject_to!(problem, neg <= v_max);
+                counts.joint_v += 2;
+            }
 
-                if a_max.is_finite() && a_max > 0.0 {
-                    let expr = qpp_j * sd_k * sd_k + qp_j * sdd_k;
-                    subject_to!(problem, expr <= a_max);
-                    let neg = -qpp_j * sd_k * sd_k - qp_j * sdd_k;
-                    subject_to!(problem, neg <= a_max);
-                    counts.joint_a += 2;
-                }
+            if a_max.is_finite() && a_max > 0.0 {
+                let expr = qpp_j * sd_k * sd_k + qp_j * sdd_k;
+                subject_to!(problem, expr <= a_max);
+                let neg = -qpp_j * sd_k * sd_k - qp_j * sdd_k;
+                subject_to!(problem, neg <= a_max);
+                counts.joint_a += 2;
+            }
 
-                if j_max.is_finite() && j_max > 0.0 {
-                    let expr = qppp_j * sd_k * sd_k * sd_k
-                        + 3.0 * qpp_j * sd_k * sdd_k
-                        + qp_j * sddd_k;
-                    subject_to!(problem, expr <= j_max);
-                    let neg = -qppp_j * sd_k * sd_k * sd_k
-                        - 3.0 * qpp_j * sd_k * sdd_k
-                        - qp_j * sddd_k;
-                    subject_to!(problem, neg <= j_max);
-                    counts.joint_j += 2;
-                }
+            if j_max.is_finite() && j_max > 0.0 {
+                let expr = qppp_j * sd_k * sd_k * sd_k
+                    + 3.0 * qpp_j * sd_k * sdd_k
+                    + qp_j * sddd_k;
+                subject_to!(problem, expr <= j_max);
+                let neg = -qppp_j * sd_k * sd_k * sd_k
+                    - 3.0 * qpp_j * sd_k * sdd_k
+                    - qp_j * sddd_k;
+                subject_to!(problem, neg <= j_max);
+                counts.joint_j += 2;
             }
         }
+        let _ = qp_degenerate; // retained for diagnostic accounting above
+
+        let at_boundary = k == 0 || k == m - 1;
 
         // TCP a/j are scaled into the unit ball: ||a_vec/a_max||² ≤ 1 instead of
         // ||a_vec||² ≤ a_max². The quadratic LHS otherwise ranges across a_max²/j_max²
         // (e.g. 40000), and that wrecks the Hessian conditioning in interior-point methods.
+        //
+        // TCP a at the boundary is redundant: with `sd ≈ 0` and `sdd ≈ 0` (within the
+        // boundary slack), the LHS `ppp·sd² + pp·sdd` is ~0 regardless of `a_max`.
         if let Some(tcp) = constraints.tcp
             && tcp_active
             && !at_boundary
@@ -350,26 +354,42 @@ fn build_and_solve_inner<const N: usize>(
 
         if let Some(tcp) = constraints.tcp
             && tcp_active
-            && !at_boundary
             && tcp.j_max.is_finite()
             && tcp.j_max > 0.0
         {
-            let inv = 1.0 / tcp.j_max;
-            let pppp = &deriv.pppp[k];
-            let ppp = &deriv.ppp[k];
-            let pp = &deriv.pp[k];
-            let c0 = (pppp[0] * inv) * sd_k * sd_k * sd_k
-                + (3.0 * ppp[0] * inv) * sd_k * sdd_k
-                + (pp[0] * inv) * sddd_k;
-            let c1 = (pppp[1] * inv) * sd_k * sd_k * sd_k
-                + (3.0 * ppp[1] * inv) * sd_k * sdd_k
-                + (pp[1] * inv) * sddd_k;
-            let c2 = (pppp[2] * inv) * sd_k * sd_k * sd_k
-                + (3.0 * ppp[2] * inv) * sd_k * sdd_k
-                + (pp[2] * inv) * sddd_k;
-            let sum_sq = c0 * c0 + c1 * c1 + c2 * c2;
-            subject_to!(problem, sum_sq <= 1.0);
-            counts.tcp_j += 1;
+            if at_boundary {
+                // At rest-to-rest boundaries `sd, sdd ≈ 0` (within slack), so the TCP
+                // jerk LHS `pppp·sd³ + 3·ppp·sd·sdd + pp·sddd` collapses to `pp·sddd`.
+                // Bound `|sddd|·‖pp‖ ≤ j_max` as two scalar linear inequalities on the
+                // segment's `sddd` decision variable — no SOC at the boundary keeps the
+                // IPM's barrier scaling well-behaved.
+                let pp = &deriv.pp[k];
+                let pp_norm = (pp[0] * pp[0] + pp[1] * pp[1] + pp[2] * pp[2]).sqrt();
+                if pp_norm > 1e-12 {
+                    let upper = tcp.j_max / pp_norm;
+                    subject_to!(problem, sddd_k <= upper);
+                    let neg_sddd = -sddd_k;
+                    subject_to!(problem, neg_sddd <= upper);
+                    counts.tcp_j += 1;
+                }
+            } else {
+                let inv = 1.0 / tcp.j_max;
+                let pppp = &deriv.pppp[k];
+                let ppp = &deriv.ppp[k];
+                let pp = &deriv.pp[k];
+                let c0 = (pppp[0] * inv) * sd_k * sd_k * sd_k
+                    + (3.0 * ppp[0] * inv) * sd_k * sdd_k
+                    + (pp[0] * inv) * sddd_k;
+                let c1 = (pppp[1] * inv) * sd_k * sd_k * sd_k
+                    + (3.0 * ppp[1] * inv) * sd_k * sdd_k
+                    + (pp[1] * inv) * sddd_k;
+                let c2 = (pppp[2] * inv) * sd_k * sd_k * sd_k
+                    + (3.0 * ppp[2] * inv) * sd_k * sdd_k
+                    + (pp[2] * inv) * sddd_k;
+                let sum_sq = c0 * c0 + c1 * c1 + c2 * c2;
+                subject_to!(problem, sum_sq <= 1.0);
+                counts.tcp_j += 1;
+            }
         }
     }
 

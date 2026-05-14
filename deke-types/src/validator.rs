@@ -93,6 +93,10 @@ mod sealed {
 
 pub trait ValidatorRet: Sized + sealed::Sealed + Copy {
     fn as_f64(&self) -> f64;
+    /// Maximal-margin value used when a validator is disabled (no
+    /// constraint applied). Mirrors the `as_f64() == INFINITY` convention
+    /// for the unit return type.
+    fn passing() -> Self;
 }
 
 impl sealed::Sealed for () {}
@@ -101,6 +105,8 @@ impl ValidatorRet for () {
     fn as_f64(&self) -> f64 {
         f64::INFINITY
     }
+    #[inline]
+    fn passing() -> Self {}
 }
 
 impl sealed::Sealed for f32 {}
@@ -108,6 +114,10 @@ impl ValidatorRet for f32 {
     #[inline]
     fn as_f64(&self) -> f64 {
         *self as f64
+    }
+    #[inline]
+    fn passing() -> Self {
+        f32::INFINITY
     }
 }
 
@@ -117,10 +127,15 @@ impl ValidatorRet for f64 {
     fn as_f64(&self) -> f64 {
         *self
     }
+    #[inline]
+    fn passing() -> Self {
+        f64::INFINITY
+    }
 }
 
 pub trait Validator<const N: usize, R: ValidatorRet = (), F: FKScalar = f32>: Sized + Clone + Debug + Send + Sync + 'static {
     type Context<'ctx>: ValidatorContext;
+    const VALIDATE_MOTION_IS_CONTINUOUS: bool = false;
 
     fn validate<'ctx, E: Into<DekeError>, A: SRobotQLike<N, E, F>>(
         &self,
@@ -285,6 +300,43 @@ where
         match self.0.validate_motion(qs, ctx) {
             Ok(()) => Err(DekeError::SuperError),
             Err(_) => Ok(()),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum MaybeValidator<V> {
+    Active(V),
+    Disabled,
+}
+
+impl<const N: usize, F: FKScalar, R: ValidatorRet, V> Validator<N, R, F> for MaybeValidator<V>
+where
+    V: Validator<N, R, F>,
+{
+    type Context<'ctx> = V::Context<'ctx>;
+
+    #[inline]
+    fn validate<'ctx, E: Into<DekeError>, Q: SRobotQLike<N, E, F>>(
+        &self,
+        q: Q,
+        ctx: &Self::Context<'ctx>,
+    ) -> DekeResult<R> {
+        match self {
+            MaybeValidator::Active(v) => v.validate(q, ctx),
+            MaybeValidator::Disabled => Ok(R::passing()),
+        }
+    }
+
+    #[inline]
+    fn validate_motion<'ctx>(
+        &self,
+        qs: &[SRobotQ<N, F>],
+        ctx: &Self::Context<'ctx>,
+    ) -> DekeResult<R> {
+        match self {
+            MaybeValidator::Active(v) => v.validate_motion(qs, ctx),
+            MaybeValidator::Disabled => Ok(R::passing()),
         }
     }
 }

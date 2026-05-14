@@ -1,6 +1,7 @@
 use std::{
     convert::Infallible,
     fmt::{Debug, Display},
+    time::Duration,
 };
 
 pub use glam;
@@ -21,7 +22,7 @@ pub use fk::{
 pub use path::{RobotPath, SRobotPath};
 pub use q::{RobotQ, SRobotQ, robotq, SRobotQLike};
 pub use traj::{RobotTraj, SRobotTraj};
-pub use validator::{JointValidator, Validator, ValidatorAnd, ValidatorNot, ValidatorOr, ValidatorContext, Leaf, FromFlattened};
+pub use validator::{JointValidator, Validator, ValidatorAnd, ValidatorNot, ValidatorOr, MaybeValidator, ValidatorContext, Leaf, FromFlattened};
 pub use validator_dynamic::DynamicJointValidator;
 
 use crate::validator::ValidatorRet;
@@ -50,6 +51,16 @@ pub enum DekeError {
     DuplicateWaypoints,
     #[error("Retimer failed: {0}")]
     RetimerFailed(String),
+    #[error(
+        "Retimer output exceeds {limit_type} limit on dof {dof}: observed {observed_value}, limit {limit_value} (dt_in={dt_in:?})"
+    )]
+    ExceedsDynamicsLimits {
+        dt_in: Duration,
+        limit_type: &'static str,
+        dof: u8,
+        limit_value: f64,
+        observed_value: f64,
+    },
     #[error(
         "URDF joint at index {index} has an unexpected type: expected {expected}, found {found}"
     )]

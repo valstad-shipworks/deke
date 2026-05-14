@@ -695,6 +695,7 @@ const CONSTRAINTS_FIELDS: &[NamedField<'static>] = &[
     NamedField::new("sample_rate_hz"),
     NamedField::new("locked_prefix"),
     NamedField::new("post_validation"),
+    NamedField::new("check_output_dynamics"),
 ];
 
 impl<const N: usize> Valuable for Topp3Tcp6Constraints<N> {
@@ -716,6 +717,7 @@ impl<const N: usize> Valuable for Topp3Tcp6Constraints<N> {
             self.sample_rate_hz.as_value(),
             self.locked_prefix.as_value(),
             self.post_validation.as_value(),
+            self.check_output_dynamics.as_value(),
         ];
         visit.visit_named_fields(&NamedValues::new(CONSTRAINTS_FIELDS, &values));
     }
