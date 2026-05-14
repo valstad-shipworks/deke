@@ -8,7 +8,7 @@ default = []
 valuable = ["dep:valuable", "deke-types/valuable", "glam-traits-ext/Valuable"]
 
 [dependencies]
-deke-types = { version = "1.5.2", path = "../deke-types" }
+deke-types = { version = "1.5.2" }
 glam-traits-ext = { version = "0.32.3", features = ["approx"] }
 sleipnir = { git = "https://github.com/oh-yes-0-fps/Sleipnir.git", branch = "rust-with-regularized-ldlt-patch", default-features = false }
 ndarray = { version = "0.17.2", features = ["approx"] }
