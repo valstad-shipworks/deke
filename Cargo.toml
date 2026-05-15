@@ -5,6 +5,8 @@ members = [
     "deke-rrt",
     "deke-cricket",
     "deke-topp3tcp6",
+    "deke-topp3tcp6-discrete",
+    "deke-topp-speed"
 ]
 resolver = "2"
 
