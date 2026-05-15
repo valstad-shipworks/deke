@@ -427,12 +427,6 @@ fn build_and_solve_inner<const N: usize>(
     let two_and_a_half_h = 2.5 * h;
     let nineteen_sixth_h_sq = (19.0 / 6.0) * h * h;
     let two_h = 2.0 * h;
-    // Gate the resampler-side FD bounds on the same flag that runs the downstream
-    // FD check. They're costly enough (a quadratic-in-IPM-variables row per joint
-    // per segment) that callers who don't ask for the resampled-output guarantee
-    // — convergence-only / failure-replay fixtures with `check_output_dynamics =
-    // false` — shouldn't pay for them. With the gate, those fixtures recover their
-    // original constraint count and IPM iteration cost.
     // Skip FD constraints entirely when the path is short enough that no output
     // sample will be FD-checked. `check_resampled_dynamics_against_limits` needs a
     // 3-step backward stencil inside one segment, so the very first FD-evaluated
@@ -442,8 +436,8 @@ fn build_and_solve_inner<const N: usize>(
     // (`total_ds < 3h · v_max_path`), the entire trajectory fits inside one
     // FD-skipped window and the FD rows would only extrapolate past it — they're
     // numerically punishing tight and can render the IPM problem infeasible
-    // (`microscopic_path_length` etc.). The FD check itself returns Ok trivially
-    // in that regime, so dropping the rows preserves the guarantee.
+    // (`microscopic_path_length` etc.). No FD sample can read a violation in that
+    // regime, so dropping the rows is exact, not a relaxation.
     let v_max_path: f64 = (lock..N)
         .map(|j| constraints.joint.v_max.0[j])
         .filter(|v| v.is_finite())
@@ -452,7 +446,7 @@ fn build_and_solve_inner<const N: usize>(
     let total_ds: f64 = deriv.ds.iter().sum();
     let path_too_short_for_fd = total_ds < 3.0 * h * v_max_path;
     const FD_RELAX: f64 = 1.0;
-    if h > 0.0 && constraints.check_output_dynamics && !path_too_short_for_fd {
+    if h > 0.0 && !path_too_short_for_fd {
         for k in 0..seg {
             let ds_k = deriv.ds[k];
             if !(ds_k > 0.0) {
@@ -608,6 +602,82 @@ fn build_and_solve_inner<const N: usize>(
                         let neg_sddd_k = -sddd_k;
                         subject_to!(problem, neg_sddd_k <= upper);
                         counts.tcp_j += 2;
+                    }
+                }
+            }
+        }
+    }
+
+    // Cross-knot output-FD bound. The resampler emits chord-linear joint samples
+    // inside each densified segment, so the joint-space chord direction
+    // `D_k = (waypoints[k+1] − waypoints[k]) / ds[k]` is constant within a segment
+    // but jumps across each interior densified knot. A backward-FD stencil whose
+    // window straddles knot `k` reads a single-sample spike whose worst-case
+    // magnitude (sample at τ = h past the knot) is
+    //   |a_FD| ≤ |D_k − D_{k−1}|·sd[k] / h
+    //   |j_FD| ≤ |D_k − D_{k−1}|·sd[k] / h²
+    // (Backward-FD velocity at the crossing sample is just the new-segment chord
+    // velocity, which the per-knot V row already bounds, so no V row here.)
+    //
+    // These rows are linear in `sd[k]` and replace the previous strategy of
+    // letting `check_resampled_dynamics_against_limits` skip boundary-straddling
+    // stencils — we now bound the spike a priori so every output sample is
+    // validated by the downstream check.
+    if h > 0.0 && !path_too_short_for_fd {
+        let knot_a_rhs = h;
+        let knot_j_rhs = h * h;
+        for k in 1..seg {
+            let ds_prev = deriv.ds[k - 1];
+            let ds_curr = deriv.ds[k];
+            if !(ds_prev > 0.0 && ds_curr > 0.0) {
+                continue;
+            }
+            let w_prev = deriv.waypoints[k - 1].0;
+            let w_knot = deriv.waypoints[k].0;
+            let w_next = deriv.waypoints[k + 1].0;
+            let sd_k = sd[k];
+            for j in lock..N {
+                let d_prev = (w_knot[j] - w_prev[j]) / ds_prev;
+                let d_curr = (w_next[j] - w_knot[j]) / ds_curr;
+                let delta = (d_curr - d_prev).abs();
+                if delta < qp_cutoffs[j] {
+                    continue;
+                }
+                let a_max = constraints.joint.a_max.0[j];
+                if a_max.is_finite() && a_max > 0.0 {
+                    let upper = (a_max * knot_a_rhs) / delta;
+                    subject_to!(problem, sd_k <= upper);
+                    counts.joint_a += 1;
+                }
+                let j_max = constraints.joint.j_max.0[j];
+                if j_max.is_finite() && j_max > 0.0 {
+                    let upper = (j_max * knot_j_rhs) / delta;
+                    subject_to!(problem, sd_k <= upper);
+                    counts.joint_j += 1;
+                }
+            }
+            if let Some(tcp) = constraints.tcp
+                && tcp_active
+                && deriv.has_tcp()
+            {
+                let t_prev = deriv.tcp[k - 1];
+                let t_knot = deriv.tcp[k];
+                let t_next = deriv.tcp[k + 1];
+                let dx = (t_next[0] - t_knot[0]) / ds_curr - (t_knot[0] - t_prev[0]) / ds_prev;
+                let dy = (t_next[1] - t_knot[1]) / ds_curr - (t_knot[1] - t_prev[1]) / ds_prev;
+                let dz = (t_next[2] - t_knot[2]) / ds_curr - (t_knot[2] - t_prev[2]) / ds_prev;
+                let delta_norm_sq = dx * dx + dy * dy + dz * dz;
+                if delta_norm_sq > pp_cutoff_sq {
+                    let delta_norm = delta_norm_sq.sqrt();
+                    if tcp.a_max.is_finite() && tcp.a_max > 0.0 {
+                        let upper = (tcp.a_max * knot_a_rhs) / delta_norm;
+                        subject_to!(problem, sd_k <= upper);
+                        counts.tcp_a += 1;
+                    }
+                    if tcp.j_max.is_finite() && tcp.j_max > 0.0 {
+                        let upper = (tcp.j_max * knot_j_rhs) / delta_norm;
+                        subject_to!(problem, sd_k <= upper);
+                        counts.tcp_j += 1;
                     }
                 }
             }

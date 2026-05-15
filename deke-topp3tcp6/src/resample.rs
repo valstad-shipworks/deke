@@ -34,18 +34,16 @@ pub fn resample_to_uniform<const N: usize>(
     // total inherits `solver.tolerance` (~1e-6 in seconds) of slack from convergence
     // plus FP noise from the per-segment rescale. That translates to a fractional
     // wobble of `tol / dt_out`, which is ~1e-4 at 125 Hz and ~1e-3 at 1 kHz. Without
-    // this snap, `ceil` randomly produces N or N+1 sample counts on equivalent
-    // trajectories; when it gives N+1, the penultimate sample lands at `N·h` ~1ns
-    // before `total_secs`, the resampler emits it at u ≈ 1−ε, and the *final* sample
-    // is force-clamped to `waypoints.last()`. The resulting tiny position delta
-    // between them yields `v_FD = ε/h` on the last sample — collapsing the trailing
-    // backward-FD velocity to ~0 even though the analytical end velocity is `v_end`.
+    // this snap, `floor` randomly produces N or N−1 sample counts on equivalent
+    // trajectories. With snap+floor the output grid is strictly uniform: every emitted
+    // sample sits at `i·dt_out ≤ total_secs`. The downstream backward-FD check can
+    // then evaluate every sample (no non-uniform last-step clamp to hide).
     let frac = total_secs / dt_out_secs;
     let rounded = frac.round();
     let n_count = if (frac - rounded).abs() < 1e-3 {
         rounded as usize
     } else {
-        frac.ceil() as usize
+        frac.floor() as usize
     };
     let n_samples = n_count.max(1) + 1;
 
@@ -53,6 +51,11 @@ pub fn resample_to_uniform<const N: usize>(
     let mut seg_idx = 0;
 
     for i in 0..n_samples {
+        // After snap+floor every sampled `i·dt_out` is `≤ total_secs` (with the snap
+        // path putting the last sample at the snapped integer multiple). The `min`
+        // is a defensive clamp for the snapped case where `total_secs` may sit a few
+        // ULPs below the integer multiple due to FP — without it we'd read `τ` past
+        // the last segment's `dt[seg-1]` and extrapolate the cubic.
         let t_sample = (i as f64 * dt_out_secs).min(total_secs);
 
         while seg_idx + 1 < seg && cum[seg_idx + 1] < t_sample {
@@ -71,10 +74,6 @@ pub fn resample_to_uniform<const N: usize>(
         let a = deriv.waypoints[seg_idx];
         let b = deriv.waypoints[seg_idx + 1];
         out.push(a.interpolate(&b, u));
-    }
-
-    if let Some(last) = out.last_mut() {
-        *last = *deriv.waypoints.last().unwrap();
     }
 
     (Duration::from_secs_f64(total_secs.max(0.0)), out)

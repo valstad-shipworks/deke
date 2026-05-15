@@ -132,20 +132,22 @@ pub struct SolverOptions {
     /// false to disable for benchmarking the single-stage baseline.
     pub two_stage_warm_start: bool,
     /// Relative slack for the backward-difference V/A/J check on the resampled
-    /// output. Default `2.5e-1` — sized to absorb the *quadratic-interior-overshoot
+    /// output. Default `1e-1` — sized to absorb the *quadratic-interior-overshoot
     /// floor* of the chord-linear resampler.
     ///
-    /// The NLP now enforces output-FD bounds at `τ = 3h` and `τ = dt[k]` per
-    /// segment (so the FD samples the check actually evaluates land inside
-    /// `v_max / a_max / j_max`), but `sd_avg(τ)` is quadratic in `τ` and can peak
-    /// in the interior of a concave-down segment by up to
-    /// `(1/16)·|sddd|·(dt[k] − 3h)² · |secant|`. For typical robot params (j_max
-    /// ≈ 200, dt[k] ≈ 50 ms) that's ~0.5–1.5 % of `v_max`. Closing the gap
-    /// entirely requires a cubic-in-NLP-variables midpoint row that the IPM
-    /// doesn't handle cheaply; bumping the check slack to the analytical floor is
-    /// the right trade-off — the resampler still emits to within 2 % of the
-    /// stated limit, an order of magnitude tighter than the ~30 % overshoots a
-    /// pure-PCHIP analytical NLP would produce on the same paths.
+    /// The NLP enforces output-FD bounds at `τ = 3h`, `τ = dt[k]` per segment plus
+    /// an explicit cross-knot row at every interior densified knot, so every FD
+    /// sample the check actually evaluates is bounded a priori at the endpoints of
+    /// each `[3h, dt[k]]` window and at every densified-segment boundary. The
+    /// residual is the concave-in-τ V case: `v_FD(τ)/secant = sd[k] + sdd[k]·(τ −
+    /// h/2) + ½·sddd[k]·(τ² − τh + h²/3)` is quadratic in `τ`, and when `sddd[k] <
+    /// 0` it has an interior peak at `τ* = h/2 − sdd[k]/sddd[k]` that exceeds both
+    /// endpoint values by up to `½·sdd[k]²/|sddd[k]|`. The exact peak depends on
+    /// IPM-variable ratios so it can't be bounded by an affine row; empirically it
+    /// runs 3–8 % of `v_max` on rail-dominant straight motions where the IPM pushes
+    /// `|sddd|` near its limit. Closing the gap entirely would need a midpoint row
+    /// whose argument is a product of decision variables (quadratic IPM term);
+    /// 10 % covers the empirical floor with margin.
     pub resampled_check_slack: f64,
     /// When true, the retimer applies a global time-rescale after the IPM solve so
     /// that `total_time` is the smallest multiple of `cycle_time = 1/sample_rate_hz`
@@ -178,7 +180,7 @@ impl Default for SolverOptions {
             diagnostics: false,
             boundary_slack: 1e-4,
             two_stage_warm_start: true,
-            resampled_check_slack: 2.5e-1,
+            resampled_check_slack: 1e-1,
             discrete_dt: true,
         }
     }

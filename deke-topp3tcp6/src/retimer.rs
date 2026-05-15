@@ -246,7 +246,6 @@ impl<const N: usize> Retimer<N, f64> for Topp3Tcp6 {
                 constraints,
                 fk,
                 tolerance_used,
-                &solution,
             ) {
                 diag.message = Some(format!("{}", e));
                 return (Err(e), diag);
@@ -397,17 +396,16 @@ fn check_dynamics_against_limits<const N: usize>(
 ///   The resampler outputs `q(t) = a + ((sd·τ + ½·sdd·τ² + ⅙·sddd·τ³)/ds)·(b − a)`
 ///   between adjacent densified waypoints `a, b`, so its instantaneous joint
 ///   tangent is the *secant* `(b − a)/ds`, not the PCHIP slope `qp` that the NLP
-///   constrained.
+///   constrained at each knot.
 ///
-/// Within a single densified segment the chord-linear output is C∞ in time (a
-/// cubic in `τ` times a constant joint-space direction), so backward FD gives a
-/// good approximation of the analytical derivatives. *Across* a densified segment
-/// boundary the joint-space direction jumps, and a backward FD stencil that
-/// straddles a boundary picks up the direction change as a single-sample spike.
-/// Those spikes are an artifact of the chord-linear interpolation choice, not of
-/// the NLP solution, so this check skips any sample whose backward-FD window spans
-/// a densified-segment boundary — the analytical check already validated the NLP
-/// inputs at those knots.
+/// Within a single densified segment the chord-linear output is C∞ in time and the
+/// backward FD tracks the analytical derivatives. Across a densified segment
+/// boundary the joint-space chord direction jumps, and a backward FD stencil that
+/// straddles a boundary picks up the direction change as a single-sample spike of
+/// magnitude `|D_k − D_{k−1}|·sd[k]/dt²` (jerk) or `…/dt` (acceleration). The NLP
+/// adds an explicit row at every interior knot bounding that spike, so we evaluate
+/// every output sample without skipping — there is no "spike artifact" left to
+/// exclude.
 ///
 /// Stencils are pure backward FD: `v[k] = (q[k] − q[k−1])/dt`,
 /// `a[k] = (q[k] − 2·q[k−1] + q[k−2])/dt²`,
@@ -419,7 +417,6 @@ fn check_resampled_dynamics_against_limits<const N: usize, FK: FKChain<N, f64>>(
     constraints: &Topp3Tcp6Constraints<N>,
     fk: &FK,
     tolerance_used: f64,
-    solution: &Solution,
 ) -> DekeResult<()> {
     let dt = dt_out.as_secs_f64();
     if dt <= 0.0 || samples.len() < 4 {
@@ -427,41 +424,12 @@ fn check_resampled_dynamics_against_limits<const N: usize, FK: FKChain<N, f64>>(
     }
     let lock = constraints.locked_prefix.min(N);
     // Use the larger of the IPM tolerance and the configured resampled-check slack.
-    // The IPM term is usually 1e-6 (tight); the resampled slack absorbs chord-linear
-    // and backward-FD numerical noise that the analytical check doesn't see.
+    // The IPM term is usually 1e-6 (tight); the resampled slack absorbs the residual
+    // chord-linear interior-quadratic overshoot that the per-segment FD rows don't
+    // close analytically.
     let rel_slack = tolerance_used
         .max(constraints.solver.resampled_check_slack)
         .max(0.0);
-
-    // Cumulative segment end times. `cum_end[k]` is the time at the end of densified
-    // segment `k`. Sample at time `t` is in segment `k` if `cum_end[k-1] ≤ t <
-    // cum_end[k]` (with `cum_end[-1] := 0`). Used to skip output samples whose
-    // backward-FD window crosses a segment boundary, where the chord-linear
-    // interpolation has a tangent kink that the FD picks up as a spurious spike.
-    let cum_end: Vec<f64> = {
-        let mut v = Vec::with_capacity(solution.dt.len());
-        let mut acc = 0.0_f64;
-        for d in &solution.dt {
-            acc += d.as_secs_f64();
-            v.push(acc);
-        }
-        v
-    };
-    let total_time = *cum_end.last().unwrap_or(&0.0);
-    // Returns the densified segment index containing sample time `t`. Linear walk is
-    // O(seg + samples); for typical 100-segment, 1000-sample problems this is a few
-    // microseconds total.
-    let seg_at = |t: f64, hint: &mut usize| -> usize {
-        let t_clamped = t.min(total_time).max(0.0);
-        while *hint > 0 && cum_end[*hint - 1] > t_clamped {
-            *hint -= 1;
-        }
-        while *hint < cum_end.len() - 1 && cum_end[*hint] <= t_clamped {
-            *hint += 1;
-        }
-        *hint
-    };
-    let mut hint = 0_usize;
 
     let exceeds = |observed: f64, limit: f64| -> bool {
         limit.is_finite() && limit > 0.0 && observed > limit * (1.0 + rel_slack)
@@ -488,31 +456,7 @@ fn check_resampled_dynamics_against_limits<const N: usize, FK: FKChain<N, f64>>(
         None
     };
 
-    // Skip the final sample: `resample_to_uniform` forces `samples.last() =
-    // waypoints.last()` regardless of where `total_secs / dt_out` rounds in FP. With
-    // `discrete_dt = true` the natural last sample already lands on the endpoint, but
-    // sub-ULP drift in `sum(solution.dt)` can push `ceil(total_secs / dt_out)` one
-    // count past the integer multiple, so the *penultimate* sample lands at
-    // `(N-1)·dt_out < total_secs` (a few mm before the endpoint) while the last is
-    // pinned to the endpoint exactly. Backward FD across that gap reads
-    // `~2·v_end / dt_out` on `a` and `~6·v_end / dt_out²` on `j` — pure clamping
-    // artifact, not a trajectory property. Downstream consumers treat the last
-    // sample as a fixed endpoint anyway.
-    let last_k_exclusive = samples.len().saturating_sub(1).max(3);
-    for k in 3..last_k_exclusive {
-        // Skip samples whose backward-FD jerk stencil (q[k-3..k]) straddles a
-        // densified-segment boundary. Inside a segment the chord-linear output is
-        // smooth in time; across segments the tangent direction jumps and the FD
-        // picks that up as a single-sample spike that the analytical NLP didn't
-        // bound (it constrained PCHIP slopes, not secants).
-        let t_now = (k as f64) * dt;
-        let t_then = ((k - 3) as f64) * dt;
-        let mut hint_then = hint;
-        let seg_now = seg_at(t_now, &mut hint);
-        let seg_then = seg_at(t_then, &mut hint_then);
-        if seg_now != seg_then {
-            continue;
-        }
+    for k in 3..samples.len() {
         for j in lock..N {
             let q3 = samples[k - 3].0[j];
             let q2 = samples[k - 2].0[j];
