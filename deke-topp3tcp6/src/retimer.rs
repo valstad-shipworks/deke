@@ -488,7 +488,18 @@ fn check_resampled_dynamics_against_limits<const N: usize, FK: FKChain<N, f64>>(
         None
     };
 
-    for k in 3..samples.len() {
+    // Skip the final sample: `resample_to_uniform` forces `samples.last() =
+    // waypoints.last()` regardless of where `total_secs / dt_out` rounds in FP. With
+    // `discrete_dt = true` the natural last sample already lands on the endpoint, but
+    // sub-ULP drift in `sum(solution.dt)` can push `ceil(total_secs / dt_out)` one
+    // count past the integer multiple, so the *penultimate* sample lands at
+    // `(N-1)·dt_out < total_secs` (a few mm before the endpoint) while the last is
+    // pinned to the endpoint exactly. Backward FD across that gap reads
+    // `~2·v_end / dt_out` on `a` and `~6·v_end / dt_out²` on `j` — pure clamping
+    // artifact, not a trajectory property. Downstream consumers treat the last
+    // sample as a fixed endpoint anyway.
+    let last_k_exclusive = samples.len().saturating_sub(1).max(3);
+    for k in 3..last_k_exclusive {
         // Skip samples whose backward-FD jerk stencil (q[k-3..k]) straddles a
         // densified-segment boundary. Inside a segment the chord-linear output is
         // smooth in time; across segments the tangent direction jumps and the FD

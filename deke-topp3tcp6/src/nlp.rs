@@ -393,6 +393,227 @@ fn build_and_solve_inner<const N: usize>(
         }
     }
 
+    // Output-FD V/A/J bound. The resampler emits chord-linear samples inside each
+    // densified segment, so the *backward-difference* kinematics that downstream
+    // consumers (and `check_resampled_dynamics_against_limits`) read are
+    //
+    //   v_FD(τ) / secant = sd(τ) − h/2·sdd(τ) + h²/6·sddd        (cubic in τ)
+    //   a_FD(τ) / secant = sdd(τ − h) = sdd[k] + sddd[k]·(τ − h) (linear in τ)
+    //   j_FD     / secant = sddd                                  (constant)
+    //
+    // where `h = 1/sample_rate_hz` is the output dt, `τ` is local time within the
+    // segment, and `secant = (q[k+1] − q[k])/ds[k]`. The PCHIP-side rows above
+    // bound the *analytical* kinematics `qp·sd`, `qpp·sd² + qp·sdd`, …, which
+    // differ from the chord-linear FD kinematics by an `O(qpp·ds + sdd·h)` term
+    // that grows with curvature and output dt.
+    //
+    // FD-valid τ in segment k runs from `3h` to `dt[k]`. The lower bound is `3h`
+    // (not `h`) because `check_resampled_dynamics_against_limits` skips any sample
+    // whose 3-step backward *jerk* stencil straddles a segment boundary, and that
+    // skip applies to the V/A rows too. Constraint magnitudes are quadratic /
+    // linear / constant in τ, so enforcing at both ends bounds the entire valid
+    // range — the only interior overshoot is the concave-in-τ V case, capped at
+    // `(1/8)·|sddd|·dt[k]² · |secant|` ≪ v_max for realistic (j_max, dt[k]) pairs.
+    // Enforcing at `τ = h` instead would miss the `2.5h·sdd[k]` linear ramp that
+    // the FD picks up between `h` and `3h` whenever the IPM puts non-zero `sdd`
+    // at the start of a segment.
+    let h = if constraints.sample_rate_hz.is_finite() && constraints.sample_rate_hz > 0.0 {
+        1.0 / constraints.sample_rate_hz
+    } else {
+        0.0
+    };
+    let h_half = 0.5 * h;
+    let h_sq_6 = h * h / 6.0;
+    let two_and_a_half_h = 2.5 * h;
+    let nineteen_sixth_h_sq = (19.0 / 6.0) * h * h;
+    let two_h = 2.0 * h;
+    // Gate the resampler-side FD bounds on the same flag that runs the downstream
+    // FD check. They're costly enough (a quadratic-in-IPM-variables row per joint
+    // per segment) that callers who don't ask for the resampled-output guarantee
+    // — convergence-only / failure-replay fixtures with `check_output_dynamics =
+    // false` — shouldn't pay for them. With the gate, those fixtures recover their
+    // original constraint count and IPM iteration cost.
+    // Skip FD constraints entirely when the path is short enough that no output
+    // sample will be FD-checked. `check_resampled_dynamics_against_limits` needs a
+    // 3-step backward stencil inside one segment, so the very first FD-evaluated
+    // sample sits at `t ≥ 3h` and the trajectory needs at least roughly `3h` of
+    // wall time to host any check at all. For micro-paths whose total arc length
+    // is less than the distance the slowest plausible cruise can cover in `3h`
+    // (`total_ds < 3h · v_max_path`), the entire trajectory fits inside one
+    // FD-skipped window and the FD rows would only extrapolate past it — they're
+    // numerically punishing tight and can render the IPM problem infeasible
+    // (`microscopic_path_length` etc.). The FD check itself returns Ok trivially
+    // in that regime, so dropping the rows preserves the guarantee.
+    let v_max_path: f64 = (lock..N)
+        .map(|j| constraints.joint.v_max.0[j])
+        .filter(|v| v.is_finite())
+        .fold(0.0_f64, f64::max)
+        .max(1.0);
+    let total_ds: f64 = deriv.ds.iter().sum();
+    let path_too_short_for_fd = total_ds < 3.0 * h * v_max_path;
+    const FD_RELAX: f64 = 1.0;
+    if h > 0.0 && constraints.check_output_dynamics && !path_too_short_for_fd {
+        for k in 0..seg {
+            let ds_k = deriv.ds[k];
+            if !(ds_k > 0.0) {
+                continue;
+            }
+            let a = deriv.waypoints[k].0;
+            let b = deriv.waypoints[k + 1].0;
+            let sd_k = sd[k];
+            let sd_k1 = sd[k + 1];
+            let sdd_k = sdd[k];
+            let sdd_k1 = sdd[k + 1];
+            let sddd_k = sddd[k];
+
+            for j in lock..N {
+                let secant_j = (b[j] - a[j]) / ds_k;
+                let abs_sec = secant_j.abs();
+                if abs_sec < qp_cutoffs[j] {
+                    // Joint j barely moves in this segment — secant·anything is
+                    // dominated by the noise floor; constraint row is near-vacuous
+                    // and only hurts IPM conditioning.
+                    continue;
+                }
+                // Curvature-guard: skip when path curvature on this joint·segment
+                // is so steep that the analytical jerk row (`|qppp·sd³ + …| ≤ j_max`)
+                // is already pinning `sd` extremely low, and the chord-linear V row
+                // here would only multiply the over-constraint. Threshold compares
+                // the PCHIP curvature contribution `|qpp[k]·ds[k]|` against the
+                // PCHIP slope `|qp[k]|` — when `qpp·ds ≫ qp` the chord direction
+                // diverges from the PCHIP tangent by an unbounded factor and any
+                // chord-side row at that scale clashes with the analytical jerk
+                // bound. Empirically tuned to keep adversarial joint-space zigzags
+                // (max|qpp| ≈ 1500) IPM-feasible while still applying the FD rows
+                // wherever the chord-linear/PCHIP gap is the dominant overshoot
+                // source.
+                let qpp_k = deriv.qpp[k][j].abs();
+                let qpp_k1 = deriv.qpp[k + 1][j].abs();
+                let qp_k_abs = deriv.qp[k][j].abs().max(deriv.qp[k + 1][j].abs());
+                if qp_k_abs > 0.0 && qpp_k.max(qpp_k1) * ds_k > 3.0 * qp_k_abs {
+                    continue;
+                }
+                let v_max = constraints.joint.v_max.0[j] * FD_RELAX;
+                let a_max = constraints.joint.a_max.0[j] * FD_RELAX;
+                let j_max = constraints.joint.j_max.0[j] * FD_RELAX;
+
+                // V at τ = 3h (start of check-valid range):
+                //   secant·(sd[k] + 2.5h·sdd[k] + (19/6)·h²·sddd[k])
+                // V at τ = dt[k] (segment end):
+                //   secant·(sd[k+1] − h/2·sdd[k+1] + h²/6·sddd[k])
+                //
+                // `sd_avg(τ)` is quadratic in τ — for concave-down (sddd < 0)
+                // segments the interior peak between the endpoints can sit above
+                // both by up to `(1/16)·|sddd|·(dt − 3h)²`. That residual gets
+                // absorbed by `resampled_check_slack`; bounding it exactly would
+                // need a cubic-in-NLP-vars row.
+                if v_max.is_finite() && v_max > 0.0 {
+                    let v_start = secant_j * sd_k
+                        + (secant_j * two_and_a_half_h) * sdd_k
+                        + (secant_j * nineteen_sixth_h_sq) * sddd_k;
+                    subject_to!(problem, v_start <= v_max);
+                    let v_start_neg = -secant_j * sd_k
+                        + (-secant_j * two_and_a_half_h) * sdd_k
+                        + (-secant_j * nineteen_sixth_h_sq) * sddd_k;
+                    subject_to!(problem, v_start_neg <= v_max);
+
+                    let v_end = secant_j * sd_k1
+                        + (-secant_j * h_half) * sdd_k1
+                        + (secant_j * h_sq_6) * sddd_k;
+                    subject_to!(problem, v_end <= v_max);
+                    let v_end_neg = -secant_j * sd_k1
+                        + (secant_j * h_half) * sdd_k1
+                        + (-secant_j * h_sq_6) * sddd_k;
+                    subject_to!(problem, v_end_neg <= v_max);
+                    counts.joint_v += 4;
+                }
+
+                // A at τ = 3h:       secant·(sdd[k] + 2h·sddd[k])
+                // A at τ = dt[k]:    secant·(sdd[k+1] − h·sddd[k])
+                if a_max.is_finite() && a_max > 0.0 {
+                    let a_start = secant_j * sdd_k + (secant_j * two_h) * sddd_k;
+                    subject_to!(problem, a_start <= a_max);
+                    let a_start_neg = -secant_j * sdd_k + (-secant_j * two_h) * sddd_k;
+                    subject_to!(problem, a_start_neg <= a_max);
+
+                    let a_end = secant_j * sdd_k1 + (-secant_j * h) * sddd_k;
+                    subject_to!(problem, a_end <= a_max);
+                    let a_end_neg = -secant_j * sdd_k1 + (secant_j * h) * sddd_k;
+                    subject_to!(problem, a_end_neg <= a_max);
+                    counts.joint_a += 4;
+                }
+
+                // J:                 secant·sddd[k] (constant per segment)
+                if j_max.is_finite() && j_max > 0.0 {
+                    let j_expr = secant_j * sddd_k;
+                    subject_to!(problem, j_expr <= j_max);
+                    let j_neg = -secant_j * sddd_k;
+                    subject_to!(problem, j_neg <= j_max);
+                    counts.joint_j += 2;
+                }
+            }
+
+            // TCP V/A/J via the same FD-on-chord-linear logic but with the TCP-space
+            // secant `(T[k+1] − T[k]) / ds_k` standing in for the joint secant. The
+            // chord-linear joint interp produces a curve in TCP space (FK is nonlinear)
+            // rather than a chord, so this is exact at the segment endpoints and
+            // approximate (`O(qpp · ds)` and Jacobian variation) inside. Skipped when
+            // the segment's TCP secant is below the same noise floor `pp_cutoff_sq`
+            // that gates the analytical per-knot TCP-v bound — a wrist-only rotation
+            // segment, for instance, has `|tcp_secant| ≈ 0` and `tcp.v_max/|tcp_secant|`
+            // would inflate to a vacuous upper bound that costs the IPM nothing in
+            // feasibility but wrecks scaling.
+            if let Some(tcp) = constraints.tcp
+                && tcp_active
+            {
+                // Use the precomputed per-segment chord-curve tangent bound from
+                // `PathDerivatives` (numerical FK at u = 0/0.5/1, max of full +
+                // half-chord secants) — captures the FK curvature inside the
+                // chord-linear joint segment that a plain `(T[k+1]−T[k])/ds_k`
+                // secant under-reports on high-curvature paths.
+                let secant_norm_sq = deriv.chord_tcp_tangent_max_sq[k];
+                if secant_norm_sq > pp_cutoff_sq {
+                    let norm = secant_norm_sq.sqrt();
+
+                    // TCP V at τ = 3h: |sd[k] + 2.5h·sdd[k] + (19/6)·h²·sddd[k]| · ‖tcp_tangent‖ ≤ v_max
+                    // TCP V at τ = dt[k]: |sd[k+1] − h/2·sdd[k+1] + h²/6·sddd[k]| · ‖tcp_tangent‖ ≤ v_max
+                    if tcp.v_max.is_finite() && tcp.v_max > 0.0 {
+                        let upper = (tcp.v_max * FD_RELAX) / norm;
+                        let sd_avg_start = sd_k + two_and_a_half_h * sdd_k + nineteen_sixth_h_sq * sddd_k;
+                        subject_to!(problem, sd_avg_start <= upper);
+                        let sd_avg_end = sd_k1 + (-h_half) * sdd_k1 + h_sq_6 * sddd_k;
+                        subject_to!(problem, sd_avg_end <= upper);
+                        counts.tcp_v += 2;
+                    }
+
+                    // TCP A at τ = 3h:    |sdd[k] + 2h·sddd[k]| · ‖tcp_tangent‖ ≤ a_max
+                    // TCP A at τ = dt[k]: |sdd[k+1] − h·sddd[k]|  · ‖tcp_tangent‖ ≤ a_max
+                    if tcp.a_max.is_finite() && tcp.a_max > 0.0 {
+                        let upper = (tcp.a_max * FD_RELAX) / norm;
+                        let sdd_start = sdd_k + two_h * sddd_k;
+                        subject_to!(problem, sdd_start <= upper);
+                        let neg_sdd_start = -sdd_k + (-two_h) * sddd_k;
+                        subject_to!(problem, neg_sdd_start <= upper);
+                        let sdd_end = sdd_k1 + (-h) * sddd_k;
+                        subject_to!(problem, sdd_end <= upper);
+                        let neg_sdd_end = -sdd_k1 + h * sddd_k;
+                        subject_to!(problem, neg_sdd_end <= upper);
+                        counts.tcp_a += 4;
+                    }
+
+                    // TCP J: |sddd| · ‖tcp_secant‖ ≤ j_max
+                    if tcp.j_max.is_finite() && tcp.j_max > 0.0 {
+                        let upper = (tcp.j_max * FD_RELAX) / norm;
+                        subject_to!(problem, sddd_k <= upper);
+                        let neg_sddd_k = -sddd_k;
+                        subject_to!(problem, neg_sddd_k <= upper);
+                        counts.tcp_j += 2;
+                    }
+                }
+            }
+        }
+    }
+
     let mut total = dt[0];
     for k in 1..seg {
         total = total + dt[k];

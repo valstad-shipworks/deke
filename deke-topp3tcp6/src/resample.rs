@@ -29,7 +29,25 @@ pub fn resample_to_uniform<const N: usize>(
         cum.push(t);
     }
     let total_secs = *cum.last().unwrap();
-    let n_samples = ((total_secs / dt_out_secs).ceil() as usize).max(1) + 1;
+    // Snap-to-nearest when `total_secs / dt_out_secs` is within IPM-tolerance of an
+    // integer — `discrete_dt = true` aims for an integer multiple, but the post-IPM
+    // total inherits `solver.tolerance` (~1e-6 in seconds) of slack from convergence
+    // plus FP noise from the per-segment rescale. That translates to a fractional
+    // wobble of `tol / dt_out`, which is ~1e-4 at 125 Hz and ~1e-3 at 1 kHz. Without
+    // this snap, `ceil` randomly produces N or N+1 sample counts on equivalent
+    // trajectories; when it gives N+1, the penultimate sample lands at `N·h` ~1ns
+    // before `total_secs`, the resampler emits it at u ≈ 1−ε, and the *final* sample
+    // is force-clamped to `waypoints.last()`. The resulting tiny position delta
+    // between them yields `v_FD = ε/h` on the last sample — collapsing the trailing
+    // backward-FD velocity to ~0 even though the analytical end velocity is `v_end`.
+    let frac = total_secs / dt_out_secs;
+    let rounded = frac.round();
+    let n_count = if (frac - rounded).abs() < 1e-3 {
+        rounded as usize
+    } else {
+        frac.ceil() as usize
+    };
+    let n_samples = n_count.max(1) + 1;
 
     let mut out = Vec::with_capacity(n_samples);
     let mut seg_idx = 0;

@@ -28,6 +28,17 @@ pub struct PathDerivatives<const N: usize> {
     pub ppp: Vec<[f64; 3]>,
     pub pppp: Vec<[f64; 3]>,
     pub tcp: Vec<[f64; 3]>,
+    /// Per-segment upper bound on the squared TCP-tangent magnitude `|dT/ds|²`
+    /// that the chord-linear joint interpolation produces inside segment `k`.
+    /// The chord-linear joints trace a *curve* in TCP space (FK is nonlinear),
+    /// and the curve's instantaneous tangent magnitude per unit `s` can exceed
+    /// `|tcp_secant_k|` wherever the FK Jacobian varies along the chord. We bound
+    /// it numerically: sample FK at `u ∈ {0, 0.5, 1}` (the endpoints are already in
+    /// `tcp[k..=k+1]`, only the mid-point costs an extra FK call) and take the
+    /// max squared magnitude of the two half-chord secants together with the full
+    /// secant. For smooth FK curves this captures the interior peak within a few
+    /// percent. Empty when built without FK.
+    pub chord_tcp_tangent_max_sq: Vec<f64>,
 }
 
 impl<const N: usize> PathDerivatives<N> {
@@ -103,7 +114,7 @@ impl<const N: usize> PathDerivatives<N> {
 
         let (qp, qpp, qppp) = spline_derivatives::<N>(&wps_arr, &ds);
 
-        let (tcp, pp, ppp, pppp) = if let Some(fk) = fk {
+        let (tcp, pp, ppp, pppp, chord_tcp_tangent_max_sq) = if let Some(fk) = fk {
             let mut tcp = Vec::with_capacity(m);
             for wp in densified.iter() {
                 let pose = fk.fk_end(wp).map_err(|e| e.into())?;
@@ -112,9 +123,70 @@ impl<const N: usize> PathDerivatives<N> {
             }
             let (pp, ppp, _pppp) = spline_derivatives::<3>(&tcp, &ds);
             let pppp = vec![[0.0_f64; 3]; m];
-            (tcp, pp, ppp, pppp)
+            // Per-segment chord-curve TCP-tangent bound. Sample FK at the joint-space
+            // midpoint of each segment and compute the two half-chord secants. The
+            // chord-linear joint output traces an FK image of the joint chord, whose
+            // tangent magnitude per unit `s` can exceed `|tcp_secant_k|` wherever the
+            // FK Jacobian varies along the chord. Two half-secants give a tighter
+            // upper bound than the full secant alone for typical (smooth-FK,
+            // moderate-curvature) paths.
+            // Estimate the per-segment max `|J(q(u))·Δq/ds_k|` (the instantaneous
+            // chord-direction TCP-tangent magnitude inside the chord-linear joint
+            // segment) by *centered finite differences* at 9 interior u values.
+            // Sub-chord secants underestimate the derivative magnitude — the chord
+            // between two TCP-space points is always shorter than the arc between
+            // them — so secant-based max is a lower bound, not an upper bound.
+            // Centered FD with a small ε converges to `|J(q(u))·Δq|` to O(ε²) and
+            // is what we actually need to bound the output FD-V from above.
+            // 19 samples at 0.05 u-spacing. The first / last sit at u = 0.025 /
+            // 0.975 so the centered-FD `J·Δq` estimate brackets a tight window near
+            // each chord endpoint (with `ε = 1e-3` the FD step stays inside `[0,1]`).
+            // Closer sampling near the endpoints catches the J(q) extremes that
+            // typically dominate the chord-tangent peak on near-singularity paths.
+            const U_SAMPLES: [f64; 19] = [
+                0.025, 0.075, 0.125, 0.175, 0.225, 0.275, 0.325, 0.4, 0.475, 0.5,
+                0.525, 0.6, 0.675, 0.725, 0.775, 0.825, 0.875, 0.925, 0.975,
+            ];
+            const EPS_U: f64 = 1e-3;
+            let mut chord_tangent_max_sq = Vec::with_capacity(m - 1);
+            for k in 0..m - 1 {
+                let a = densified.get(k).unwrap().0;
+                let b = densified.get(k + 1).unwrap().0;
+                let ds_k = ds[k];
+                let inv_ds = 1.0 / ds_k;
+                let mut max_sq = 0.0_f64;
+                for &u in &U_SAMPLES {
+                    // Centered diff in u: J(q(u))·Δq ≈ (T(u+ε) − T(u−ε)) / (2ε).
+                    // Per unit `s`: divide by ds_k.
+                    let u_plus = u + EPS_U;
+                    let u_minus = u - EPS_U;
+                    let mut q_plus = [0.0_f64; N];
+                    let mut q_minus = [0.0_f64; N];
+                    for j in 0..N {
+                        let dq = b[j] - a[j];
+                        q_plus[j] = a[j] + u_plus * dq;
+                        q_minus[j] = a[j] + u_minus * dq;
+                    }
+                    let t_plus_pose = fk.fk_end(&SRobotQ::from_array(q_plus))
+                        .map_err(|e| e.into())?;
+                    let t_minus_pose = fk.fk_end(&SRobotQ::from_array(q_minus))
+                        .map_err(|e| e.into())?;
+                    let t_plus_v = t_plus_pose.translation();
+                    let t_minus_v = t_minus_pose.translation();
+                    let scale = inv_ds / (2.0 * EPS_U);
+                    let dx = (t_plus_v.x() - t_minus_v.x()) * scale;
+                    let dy = (t_plus_v.y() - t_minus_v.y()) * scale;
+                    let dz = (t_plus_v.z() - t_minus_v.z()) * scale;
+                    let m_sq = dx * dx + dy * dy + dz * dz;
+                    if m_sq > max_sq {
+                        max_sq = m_sq;
+                    }
+                }
+                chord_tangent_max_sq.push(max_sq);
+            }
+            (tcp, pp, ppp, pppp, chord_tangent_max_sq)
         } else {
-            (Vec::new(), Vec::new(), Vec::new(), Vec::new())
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new())
         };
 
         Ok(Self {
@@ -128,6 +200,7 @@ impl<const N: usize> PathDerivatives<N> {
             ppp,
             pppp,
             tcp,
+            chord_tcp_tangent_max_sq,
         })
     }
 
