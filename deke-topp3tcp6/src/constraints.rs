@@ -131,6 +131,26 @@ pub struct SolverOptions {
     /// stuck in bad basin" failures into ~30-iter convergences. Defaults to true; set
     /// false to disable for benchmarking the single-stage baseline.
     pub two_stage_warm_start: bool,
+    /// Relative slack for the backward-difference V/A/J check on the resampled
+    /// output. Default `1e-3` — meant only to absorb FP noise; trips beyond that
+    /// indicate the IPM and the resampler disagree about what the trajectory does
+    /// (not a numerical noise problem), and the fix belongs upstream (in the
+    /// resampler's interpolation rule or in the IPM's constraint formulation).
+    pub resampled_check_slack: f64,
+    /// When true, the retimer applies a global time-rescale after the IPM solve so
+    /// that `total_time` is the smallest multiple of `cycle_time = 1/sample_rate_hz`
+    /// no smaller than the IPM's optimum. The rescale identity `t → α·t` with
+    /// `α = ceil(T/cyc)·cyc / T ≥ 1` transforms `(sd, sdd, sddd, dt) → (sd/α, sdd/α²,
+    /// sddd/α³, α·dt)` and preserves `ds[k] = sd·dt + ½·sdd·dt² + ⅙·sddd·dt³` exactly,
+    /// so every integrator equality still holds and every constraint LHS shrinks by
+    /// the same factor → no constraint violations introduced. Per-segment `dt[k]`
+    /// remains continuous; only the total lands on the cycle grid. The benefit is
+    /// that `resample_to_uniform` then produces output samples on a uniform
+    /// `cycle_time` spacing with the final sample at exactly `total_time` — no
+    /// last-sample clamp needed and no spurious backward-FD spike at the end.
+    /// Trajectory slowdown is bounded by `cycle_time / total_time` (≲ 1% for typical
+    /// 1-second-class trajectories at 125 Hz). Defaults to true.
+    pub discrete_dt: bool,
 }
 
 impl Default for SolverOptions {
@@ -148,6 +168,8 @@ impl Default for SolverOptions {
             diagnostics: false,
             boundary_slack: 1e-4,
             two_stage_warm_start: true,
+            resampled_check_slack: 1e-3,
+            discrete_dt: true,
         }
     }
 }

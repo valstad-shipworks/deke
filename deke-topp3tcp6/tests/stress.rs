@@ -904,6 +904,395 @@ fn slow_section_with_tiny_qp() {
     assert!(result.is_ok(), "slow-section retime failed: {}", diag);
 }
 
+// ----------------------------------------------------------------------------
+// Round 3: targeted stress for known weak spots (2026-05-14)
+//
+// Failure modes that have been observed in production and reduced to fixtures here, plus
+// a small fuzz harness that generates fixed-seed random paths and asserts they all
+// retime cleanly. Each test exercises a specific mechanism rather than reusing a captured
+// trajectory — fast to triage when one breaks.
+// ----------------------------------------------------------------------------
+//
+// Background on the PCHIP spike: the densifier subdivides every input segment uniformly,
+// so densified samples within an input segment are colinear and PCHIP secants are
+// constant *within* a segment. At each input waypoint, the slope value transitions from
+// the left-segment secant to the right-segment secant, and the spline's 2nd/3rd
+// derivatives spike at the adjacent densified samples (∝ secant-difference / h²). When
+// adjacent input segments have very different lengths *and* very different secant
+// magnitudes, the weighted harmonic mean PCHIP uses at the knot biases hard toward the
+// smaller-magnitude secant — making the qppp spike at the immediately-following sample
+// the dominant entry of the constraint Hessian. The fix is `two_stage_solve`'s
+// stage-2-failure fallback to single-stage (see retimer.rs).
+
+/// 4-waypoint joint path with input-segment length ratio ~10:1 and dramatically
+/// different secant directions across the kink. Exactly the failure pattern we fixed:
+/// PCHIP yields qppp ≈ 300 at one of the densified samples adjacent to wp1. If the
+/// two-stage fallback is intact, this converges; if it regresses, the IPM bails with
+/// `LocallyInfeasible` at ~100 iter.
+#[test]
+fn pchip_spike_uneven_segments_4wp() {
+    let fk = common::dh_6dof();
+    // Segment 0 is 10× longer than segment 1; segment 2 matches segment 1.
+    let wps = vec![
+        SRobotQ::from_array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+        SRobotQ::from_array([1.0, 0.3, -0.5, -0.1, 1.0, 1.5]),
+        SRobotQ::from_array([1.02, 0.28, -0.55, -0.2, 1.1, 1.7]),
+        SRobotQ::from_array([1.04, 0.26, -0.6, -0.3, 1.2, 1.9]),
+    ];
+    let path = SRobotPath::<6, f64>::try_new(wps).unwrap();
+    let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(2.0, 8.0, 300.0);
+    cfg.tcp = Some(TcpLimits { v_max: 1.5, a_max: 12.0, j_max: 150.0 });
+    let mut validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6.retime(&cfg, &path, &fk, &mut validator, &());
+    eprintln!("PCHIP spike uneven 4wp:\n{}", diag);
+    assert!(result.is_ok(), "uneven-seg 4wp retime failed: {}", diag);
+}
+
+/// 6-waypoint path where every adjacent-segment ratio is extreme (each segment about
+/// half the previous). Stacks multiple qppp spikes within one path so the IPM Hessian
+/// has several near-singular rows simultaneously.
+#[test]
+fn pchip_multi_knot_geometric_segment_ratios() {
+    let fk = common::dh_6dof();
+    // Joint deltas chosen so each segment's joint-space length is ~half the previous.
+    let wps = vec![
+        SRobotQ::from_array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+        SRobotQ::from_array([0.8, 0.4, -0.4, -0.2, 0.5, 0.7]),
+        SRobotQ::from_array([1.2, 0.6, -0.6, -0.3, 0.75, 1.05]),
+        SRobotQ::from_array([1.4, 0.7, -0.7, -0.35, 0.875, 1.225]),
+        SRobotQ::from_array([1.5, 0.75, -0.75, -0.375, 0.9375, 1.3125]),
+        SRobotQ::from_array([1.55, 0.775, -0.775, -0.3875, 0.96875, 1.35625]),
+    ];
+    let path = SRobotPath::<6, f64>::try_new(wps).unwrap();
+    let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(2.0, 8.0, 300.0);
+    cfg.tcp = Some(TcpLimits { v_max: 1.5, a_max: 15.0, j_max: 200.0 });
+    let mut validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6.retime(&cfg, &path, &fk, &mut validator, &());
+    eprintln!("multi-knot geometric ratios:\n{}", diag);
+    assert!(result.is_ok(), "geometric-ratio retime failed: {}", diag);
+}
+
+/// One joint changes direction sharply at the second waypoint while another joint
+/// continues monotonically. PCHIP's small-flip detector decides per-joint; the
+/// joint that flips gets centered FD slope, the joint that doesn't gets the
+/// harmonic mean. The two co-located transitions sometimes interfere.
+#[test]
+fn mixed_per_joint_flip_versus_monotone() {
+    let fk = common::dh_6dof();
+    let wps = vec![
+        // j0 monotonically increases; j5 reverses sharply at wp1.
+        SRobotQ::from_array([0.0, 0.0, 0.0, 0.0, 0.0, -1.0]),
+        SRobotQ::from_array([0.5, 0.0, 0.0, 0.0, 0.0, 1.0]),
+        SRobotQ::from_array([1.0, 0.0, 0.0, 0.0, 0.0, -0.5]),
+        SRobotQ::from_array([1.5, 0.0, 0.0, 0.0, 0.0, 0.8]),
+    ];
+    let path = SRobotPath::<6, f64>::try_new(wps).unwrap();
+    let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 6.0, 250.0);
+    cfg.tcp = Some(TcpLimits { v_max: 1.0, a_max: 8.0, j_max: 100.0 });
+    let mut validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6.retime(&cfg, &path, &fk, &mut validator, &());
+    eprintln!("mixed flip vs monotone:\n{}", diag);
+    assert!(result.is_ok(), "mixed-flip retime failed: {}", diag);
+}
+
+/// One joint's secants flip sign with magnitudes that differ by 100×. Forces PCHIP's
+/// harmonic-mean rule into the regime where one secant dominates the slope at the
+/// knot, biasing the spline derivative heavily toward zero on one side.
+#[test]
+fn extreme_secant_magnitude_ratio_at_knot() {
+    let fk = common::dh_1dof();
+    let path = SRobotPath::<1, f64>::try_new(vec![
+        SRobotQ::from_array([0.0]),
+        SRobotQ::from_array([0.01]), // ~tiny first segment
+        SRobotQ::from_array([1.0]),  // long second segment
+        SRobotQ::from_array([1.005]), // tiny third segment
+    ])
+    .unwrap();
+    let cfg = Topp3Tcp6Constraints::<1>::symmetric(1.0, 5.0, 200.0);
+    let mut validator = common::wide_validator::<1>();
+    let (result, diag) = Topp3Tcp6.retime(&cfg, &path, &fk, &mut validator, &());
+    eprintln!("extreme secant ratio:\n{}", diag);
+    assert!(result.is_ok(), "extreme-ratio retime failed: {}", diag);
+}
+
+/// Path crosses near a wrist-singular configuration where joints 4 and 5 align so the
+/// last two joint axes are parallel. TCP velocity in the wrist-roll direction has a
+/// nullspace there — PCHIP yields |pp| → 0 at the singular sample.
+#[test]
+fn wrist_alignment_singularity_traverse() {
+    let fk = common::dh_6dof();
+    let wps = vec![
+        SRobotQ::from_array([0.0, -1.0, 1.2,  0.4,  0.4, 0.0]),
+        SRobotQ::from_array([0.1, -1.0, 1.2,  0.2,  0.2, 0.0]),
+        SRobotQ::from_array([0.2, -1.0, 1.2,  0.0,  0.0, 0.0]), // wrist aligned
+        SRobotQ::from_array([0.3, -1.0, 1.2, -0.2, -0.2, 0.0]),
+        SRobotQ::from_array([0.4, -1.0, 1.2, -0.4, -0.4, 0.0]),
+    ];
+    let path = SRobotPath::<6, f64>::try_new(wps).unwrap();
+    let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 6.0, 200.0);
+    cfg.tcp = Some(TcpLimits { v_max: 0.3, a_max: 3.0, j_max: 60.0 });
+    let mut validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6.retime(&cfg, &path, &fk, &mut validator, &());
+    eprintln!("wrist alignment traverse:\n{}", diag);
+    assert!(result.is_ok(), "wrist-alignment retime failed: {}", diag);
+}
+
+/// Long path (24 wp) made of three distinct curvature regimes glued together: smooth
+/// arc, sharp zigzag, smooth arc again. Stresses two-stage warm-start because stage-1's
+/// (sd, sdd, sddd) profile fits the smooth ends but is the wrong shape across the
+/// zigzag middle — exactly the kind of warm-start that pre-fix tripped stage 2.
+#[test]
+fn long_path_mixed_smooth_zigzag_smooth() {
+    let fk = common::dh_6dof();
+    let mut wps = Vec::new();
+    // First arc: 8 wp smooth.
+    for i in 0..8 {
+        let t = i as f64 / 7.0;
+        let theta = std::f64::consts::FRAC_PI_2 * t;
+        wps.push(SRobotQ::from_array([
+            0.3 * theta.sin(),
+            -1.0 + 0.2 * t,
+            1.2,
+            0.0,
+            0.0,
+            0.0,
+        ]));
+    }
+    // Zigzag middle: 8 wp small amplitude.
+    let mid = *wps.last().unwrap();
+    for i in 1..=8 {
+        let sign = if i % 2 == 0 { 1.0 } else { -1.0 };
+        let mut q = mid.0;
+        q[0] += 0.05 * i as f64;
+        q[3] += 0.15 * sign;
+        wps.push(SRobotQ::from_array(q));
+    }
+    // Second arc: 8 wp smooth.
+    let mid2 = *wps.last().unwrap();
+    for i in 1..=8 {
+        let t = i as f64 / 8.0;
+        let theta = std::f64::consts::FRAC_PI_2 * t;
+        let mut q = mid2.0;
+        q[0] += 0.3 * theta.sin();
+        q[4] += 0.2 * t;
+        wps.push(SRobotQ::from_array(q));
+    }
+    let path = SRobotPath::<6, f64>::try_new(wps).unwrap();
+    let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 6.0, 250.0);
+    cfg.tcp = Some(TcpLimits { v_max: 0.5, a_max: 4.0, j_max: 80.0 });
+    cfg.solver.max_iterations = 1500;
+    let mut validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6.retime(&cfg, &path, &fk, &mut validator, &());
+    eprintln!("smooth+zigzag+smooth:\n{}", diag);
+    assert!(result.is_ok(), "mixed-regime retime failed: {}", diag);
+}
+
+/// Final segment is ~100× shorter than the rest of the path. The retimer's boundary
+/// slack absorbs `sdd` mismatch; a microscopic final segment compresses the slack
+/// budget into a single tiny segment, forcing `sddd` on that segment to balloon.
+#[test]
+fn microscopic_final_segment_endpoint_squeeze() {
+    let fk = common::dh_6dof();
+    let wps = vec![
+        SRobotQ::from_array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+        SRobotQ::from_array([0.4, 0.3, -0.3, 0.2, 0.2, 0.5]),
+        SRobotQ::from_array([0.8, 0.6, -0.6, 0.4, 0.4, 1.0]),
+        // Final segment ~1e-3 in joint distance vs 1.0 chord above.
+        SRobotQ::from_array([0.8005, 0.6005, -0.6005, 0.4005, 0.4005, 1.0005]),
+    ];
+    let path = SRobotPath::<6, f64>::try_new(wps).unwrap();
+    let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 6.0, 250.0);
+    cfg.tcp = Some(TcpLimits { v_max: 1.0, a_max: 6.0, j_max: 100.0 });
+    let mut validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6.retime(&cfg, &path, &fk, &mut validator, &());
+    eprintln!("microscopic final segment:\n{}", diag);
+    assert!(result.is_ok(), "microscopic-final retime failed: {}", diag);
+}
+
+/// Locked first three joints, curved motion in last three. After densification the
+/// path is curved only in wrist DOFs — joint v/a/j constraints only apply to wrist
+/// joints, but the boundary projection and integrator are full-rank. Tests the
+/// `locked_prefix` skip-loop interaction with the qp-degeneracy detector.
+#[test]
+fn locked_base_curved_wrist() {
+    let fk = common::dh_6dof();
+    let wps = vec![
+        SRobotQ::from_array([0.5, -0.8, 1.0,  0.0,  0.0,  0.0]),
+        SRobotQ::from_array([0.5, -0.8, 1.0,  0.3,  0.5,  0.5]),
+        SRobotQ::from_array([0.5, -0.8, 1.0,  0.6,  0.8,  1.2]),
+        SRobotQ::from_array([0.5, -0.8, 1.0,  0.5,  1.0,  1.8]),
+        SRobotQ::from_array([0.5, -0.8, 1.0,  0.2,  1.1,  2.4]),
+    ];
+    let path = SRobotPath::<6, f64>::try_new(wps).unwrap();
+    let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(2.0, 10.0, 400.0);
+    cfg.locked_prefix = 3;
+    let mut validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6.retime(&cfg, &path, &fk, &mut validator, &());
+    eprintln!("locked base + curved wrist:\n{}", diag);
+    assert!(result.is_ok(), "locked-base retime failed: {}", diag);
+}
+
+/// Boundary projection produces a residual just under the user's tolerance ceiling.
+/// The user requests start velocity nearly aligned with the chord, with a small
+/// perpendicular component the projection has to absorb. Combined with TCP rows this
+/// is a stress on the slack interplay near the soft-equality cone tip.
+#[test]
+fn boundary_residual_near_tolerance_with_tcp() {
+    let fk = common::dh_6dof();
+    let path = SRobotPath::<6, f64>::try_new(vec![
+        SRobotQ::from_array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+        SRobotQ::from_array([0.6, 0.3, -0.3, 0.2, 0.2, 0.5]),
+    ])
+    .unwrap();
+    let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 6.0, 200.0);
+    cfg.tcp = Some(TcpLimits { v_max: 1.0, a_max: 5.0, j_max: 80.0 });
+    // Chord direction is dominated by joint 0; v_start chosen to project cleanly onto it
+    // with only a small (~5e-3) perpendicular residual against a tolerance of 1e-2.
+    cfg.boundary = BoundaryConditions {
+        v_start: SRobotQ::from_array([0.2, 0.1, -0.1, 0.066, 0.066, 0.166]),
+        a_start: SRobotQ::zeros(),
+        v_end: SRobotQ::zeros(),
+        a_end: SRobotQ::zeros(),
+        projection_tolerance: 1e-2,
+    };
+    let mut validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6.retime(&cfg, &path, &fk, &mut validator, &());
+    eprintln!("boundary residual near tol with TCP:\n{}", diag);
+    assert!(result.is_ok(), "boundary-near-tol retime failed: {}", diag);
+}
+
+/// TCP a_max is so tight (relative to the joint-space curvature) that the SOC rows are
+/// near-active across the entire path. Forces the IPM to walk along the cone boundary
+/// at every sample — a known IPM weak spot.
+#[test]
+fn nearly_active_tcp_a_everywhere() {
+    let fk = common::dh_6dof();
+    let mut wps = Vec::new();
+    for i in 0..12 {
+        let t = i as f64 / 11.0;
+        let theta = std::f64::consts::TAU * 0.4 * t;
+        wps.push(SRobotQ::from_array([
+            0.3 * theta.sin(),
+            -1.0 + 0.15 * theta.cos(),
+            1.2,
+            0.2 * (2.0 * theta).cos(),
+            0.0,
+            0.0,
+        ]));
+    }
+    let path = SRobotPath::<6, f64>::try_new(wps).unwrap();
+    let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(2.0, 10.0, 500.0);
+    // Curvature-times-cruise-squared at peak ≈ 0.5; pick a_max just above that so the
+    // optimizer wants to ride against the cone almost everywhere.
+    cfg.tcp = Some(TcpLimits { v_max: f64::INFINITY, a_max: 0.6, j_max: f64::INFINITY });
+    cfg.solver.max_iterations = 1500;
+    let mut validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6.retime(&cfg, &path, &fk, &mut validator, &());
+    eprintln!("nearly-active TCP a everywhere:\n{}", diag);
+    assert!(result.is_ok(), "near-active-cone retime failed: {}", diag);
+}
+
+/// Helper for the fuzz tests: deterministic xorshift64* random walk from a start
+/// pose. Produces `n` random waypoints with each joint stepping by up to
+/// `±delta` per step.
+fn fuzz_random_walk<const N: usize>(
+    seed: u64,
+    start: SRobotQ<N, f64>,
+    n: usize,
+    delta: f64,
+) -> Vec<SRobotQ<N, f64>> {
+    let mut s = seed;
+    let next = |s: &mut u64| -> f64 {
+        *s ^= *s << 13;
+        *s ^= *s >> 7;
+        *s ^= *s << 17;
+        ((*s as f64) / (u64::MAX as f64)) * 2.0 - 1.0
+    };
+    let mut wps = vec![start];
+    let mut cur = start.0;
+    for _ in 1..n {
+        for j in 0..N {
+            cur[j] += delta * next(&mut s);
+        }
+        wps.push(SRobotQ::from_array(cur));
+    }
+    wps
+}
+
+/// Pseudo-random fuzz: 6 distinct seeded paths, each 6 waypoints, joint deltas up to
+/// `±0.4` per step from a fixed start pose. Asserts every one retimes cleanly. Fixed
+/// seeds ensure reproducibility; the conservative delta keeps every path
+/// physically-reasonable so success is achievable across all seeds. The companion
+/// `fuzz_seeded_6wp_paths_aggressive` runs with a larger delta where some failures
+/// are expected.
+#[test]
+fn fuzz_seeded_6wp_paths() {
+    let fk = common::dh_6dof();
+    let seeds: [u64; 6] = [
+        0xDEAD_BEEF_0001,
+        0xCAFE_F00D_0002,
+        0xBADD_CAFE_0003,
+        0x1234_5678_0004,
+        0xFEED_FACE_0005,
+        0x0F0F_F0F0_0006,
+    ];
+    let start = SRobotQ::<6, f64>::from_array([0.0, -0.8, 1.0, 0.0, 0.2, 0.5]);
+    let mut failures = Vec::new();
+    for (i, &seed) in seeds.iter().enumerate() {
+        let wps = fuzz_random_walk::<6>(seed, start, 6, 0.4);
+        let path = SRobotPath::<6, f64>::try_new(wps).unwrap();
+        let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 6.0, 250.0);
+        cfg.tcp = Some(TcpLimits { v_max: 1.0, a_max: 8.0, j_max: 100.0 });
+        cfg.solver.max_iterations = 1500;
+        let mut validator = common::wide_validator::<6>();
+        let (result, diag) = Topp3Tcp6.retime(&cfg, &path, &fk, &mut validator, &());
+        eprintln!("fuzz seed {:#x} (#{}): status={:?}", seed, i, diag.status);
+        if let Err(e) = result {
+            failures.push(format!("seed {:#x}: {}", seed, e));
+        }
+    }
+    assert!(failures.is_empty(), "fuzz failures:\n  {}", failures.join("\n  "));
+}
+
+/// Aggressive fuzz: same 6 seeds, delta `±0.6` (close to joint v_max in a unit-time
+/// step) which produces sharp direction changes and uneven secant magnitudes that the
+/// PCHIP machinery struggles with. The tolerance-relaxation retry in `Topp3Tcp6::retime`
+/// catches the cases where the IPM's KKT factorization can't squeeze the last digit at
+/// the user's tight tolerance — all 6 now succeed. Asserts all-pass; a regression that
+/// drops any one will fail CI immediately.
+#[test]
+fn fuzz_seeded_6wp_paths_aggressive() {
+    let fk = common::dh_6dof();
+    let seeds: [u64; 6] = [
+        0xDEAD_BEEF_0001,
+        0xCAFE_F00D_0002,
+        0xBADD_CAFE_0003,
+        0x1234_5678_0004,
+        0xFEED_FACE_0005,
+        0x0F0F_F0F0_0006,
+    ];
+    let start = SRobotQ::<6, f64>::from_array([0.0, -0.8, 1.0, 0.0, 0.2, 0.5]);
+    let mut failures: Vec<String> = Vec::new();
+    for &seed in &seeds {
+        let wps = fuzz_random_walk::<6>(seed, start, 6, 0.6);
+        let path = SRobotPath::<6, f64>::try_new(wps).unwrap();
+        let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 6.0, 250.0);
+        cfg.tcp = Some(TcpLimits { v_max: 1.0, a_max: 8.0, j_max: 100.0 });
+        cfg.solver.max_iterations = 1500;
+        let mut validator = common::wide_validator::<6>();
+        let (result, diag) = Topp3Tcp6.retime(&cfg, &path, &fk, &mut validator, &());
+        eprintln!(
+            "aggressive fuzz seed {:#x}: status={:?} tol_used={:.0e}",
+            seed, diag.status, diag.solver_tolerance_used,
+        );
+        if let Err(e) = result {
+            failures.push(format!("seed {:#x}: {}", seed, e));
+        }
+    }
+    assert!(failures.is_empty(), "aggressive fuzz failures:\n  {}", failures.join("\n  "));
+}
+
+
 /// Output trajectory must reproduce the user-requested start velocity within slack.
 /// Stronger than `aligned_non_zero_velocity_is_feasible` (which uses 0.15 tolerance);
 /// here we assert the slack we promised in `SolverOptions::boundary_slack`.

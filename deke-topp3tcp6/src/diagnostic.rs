@@ -203,6 +203,13 @@ pub struct Topp3Tcp6Diagnostic {
     pub status: SolveStatus,
     pub iterations: i32,
     pub solve_time: Duration,
+    /// The IPM convergence tolerance actually used to obtain `status`. Equal to
+    /// `SolverOptions::tolerance` on the common path; relaxed by 10× (one ladder
+    /// step) if the user's tolerance produced a non-Success outcome and the
+    /// relaxed retry succeeded. `check_dynamics_against_limits` uses this value as
+    /// the relative slack so a relaxed solve isn't post-rejected by a tighter
+    /// slack than the IPM actually targeted.
+    pub solver_tolerance_used: f64,
     pub densified_samples: usize,
     pub output_samples: usize,
     pub total_time: Duration,
@@ -247,6 +254,7 @@ impl Default for Topp3Tcp6Diagnostic {
             status: SolveStatus::NotAttempted,
             iterations: 0,
             solve_time: Duration::ZERO,
+            solver_tolerance_used: 0.0,
             densified_samples: 0,
             output_samples: 0,
             total_time: Duration::ZERO,
@@ -283,10 +291,11 @@ impl fmt::Display for Topp3Tcp6Diagnostic {
         writeln!(f, "TOPP3TCP6 retimer diagnostic")?;
         writeln!(
             f,
-            "  status          : {} ({} iter, {:.3}s)",
+            "  status          : {} ({} iter, {:.3}s, tol={:.0e})",
             self.status,
             self.iterations,
-            self.solve_time.as_secs_f64()
+            self.solve_time.as_secs_f64(),
+            self.solver_tolerance_used,
         )?;
         writeln!(
             f,

@@ -1,5 +1,7 @@
 use std::time::{Duration, Instant};
 
+use glam_traits_ext::{TAffine3, TVec3};
+
 use deke_types::{
     DekeError, DekeResult, FKChain, Retimer, SRobotPath, SRobotTraj, Validator,
 };
@@ -105,21 +107,87 @@ impl<const N: usize> Retimer<N, f64> for Topp3Tcp6 {
         // set) and Stage 2 typically converges in <50 iter from the warm point —
         // significantly faster *and* more robust than single-stage on hard paths
         // (8wp/50wp shapes that previously consumed any iter budget then bailed).
-        let solution_result = if !tcp_disabled
-            && deriv.has_tcp()
-            && constraints.solver.two_stage_warm_start
-        {
-            two_stage_solve::<N>(&densified, &deriv, fk, constraints, start, end)
-        } else {
-            build_and_solve::<N>(&deriv, constraints, start, end)
+        let run_solve = |cfg: &Topp3Tcp6Constraints<N>| -> DekeResult<Solution> {
+            if !tcp_disabled && deriv.has_tcp() && cfg.solver.two_stage_warm_start {
+                two_stage_solve::<N>(&densified, &deriv, fk, cfg, start, end)
+            } else {
+                build_and_solve::<N>(&deriv, cfg, start, end)
+            }
         };
-        let solution = match solution_result {
+        let is_success = |r: &DekeResult<Solution>| -> bool {
+            matches!(r.as_ref().ok().map(|s| s.status), Some(SolveStatus::Success))
+        };
+
+        // Tolerance-relaxation retry ladder. The user's requested tolerance is what
+        // we try first; if the IPM declares a non-Success outcome (LocallyInfeasible,
+        // FeasibilityRestorationFailed, MaxIterationsExceeded), retry once at 10× the
+        // tolerance. The usual cause of these failures on geometrically-feasible paths
+        // is IPM ill-conditioning: PCHIP slopes go to zero at sign-flipping extrema,
+        // creating O(1) slope discontinuities at densified knots adjacent to input
+        // waypoints; the resulting qppp spikes (∝ 1/h²) make a few rows of the joint
+        // jerk constraint dominate the KKT Hessian and the factorization can't squeeze
+        // the last digit of primal/dual feasibility. Relaxing the IPM stopping
+        // criterion lets it accept the iterate it has converged to; constraint
+        // adherence is still bounded by `check_dynamics_against_limits` below using
+        // whatever tolerance actually ran (recorded in `diag.solver_tolerance_used`).
+        let mut solution_result = run_solve(constraints);
+        let mut tolerance_used = constraints.solver.tolerance;
+        if !is_success(&solution_result) {
+            let mut cfg2 = constraints.clone();
+            cfg2.solver.tolerance = constraints.solver.tolerance * 10.0;
+            let retry = run_solve(&cfg2);
+            if is_success(&retry) {
+                solution_result = retry;
+                tolerance_used = cfg2.solver.tolerance;
+            }
+        }
+        diag.solver_tolerance_used = tolerance_used;
+        let mut solution = match solution_result {
             Ok(s) => s,
             Err(e) => {
                 diag.message = Some(format!("{}", e));
                 return (Err(e), diag);
             }
         };
+
+        // Discrete-dt rescale: time-stretch the entire solution so total_time is the
+        // smallest multiple of cycle_time = 1/sample_rate_hz no smaller than the
+        // IPM's optimum. The identity `t → α·t` maps `(sd, sdd, sddd, dt) →
+        // (sd/α, sdd/α², sddd/α³, α·dt)` and preserves `ds[k]` exactly; every
+        // constraint LHS scales by `1/α^k` for kinematic order k, so with α ≥ 1
+        // they all relax. See `SolverOptions::discrete_dt` for the rationale.
+        if matches!(solution.status, SolveStatus::Success)
+            && constraints.solver.discrete_dt
+            && constraints.sample_rate_hz.is_finite()
+            && constraints.sample_rate_hz > 0.0
+        {
+            let cycle_time = 1.0 / constraints.sample_rate_hz;
+            let total_secs: f64 = solution.dt.iter().map(|d| d.as_secs_f64()).sum();
+            if cycle_time > 0.0 && total_secs > 0.0 {
+                let n_total = (total_secs / cycle_time).ceil().max(1.0);
+                let target = n_total * cycle_time;
+                let alpha = target / total_secs;
+                // Skip the rescale when it would be a no-op within FP noise — the IPM
+                // already landed close enough that further scaling would just stir
+                // the bits without changing anything observable.
+                if (alpha - 1.0).abs() > 1e-12 {
+                    let alpha2 = alpha * alpha;
+                    let alpha3 = alpha2 * alpha;
+                    for v in solution.sd.iter_mut() {
+                        *v /= alpha;
+                    }
+                    for v in solution.sdd.iter_mut() {
+                        *v /= alpha2;
+                    }
+                    for v in solution.sddd.iter_mut() {
+                        *v /= alpha3;
+                    }
+                    for v in solution.dt.iter_mut() {
+                        *v = Duration::from_secs_f64(v.as_secs_f64() * alpha);
+                    }
+                }
+            }
+        }
         diag.status = solution.status;
         diag.iterations = solution.iterations;
         diag.solve_time = solution.solve_time;
@@ -166,7 +234,20 @@ impl<const N: usize> Retimer<N, f64> for Topp3Tcp6 {
         }
 
         if constraints.check_output_dynamics {
-            if let Err(e) = check_dynamics_against_limits::<N>(&solution, &deriv, constraints, dt_out) {
+            if let Err(e) = check_dynamics_against_limits::<N>(
+                &solution, &deriv, constraints, dt_out, tolerance_used,
+            ) {
+                diag.message = Some(format!("{}", e));
+                return (Err(e), diag);
+            }
+            if let Err(e) = check_resampled_dynamics_against_limits::<N, _>(
+                traj_path.iter().as_slice(),
+                dt_out,
+                constraints,
+                fk,
+                tolerance_used,
+                &solution,
+            ) {
                 diag.message = Some(format!("{}", e));
                 return (Err(e), diag);
             }
@@ -178,8 +259,10 @@ impl<const N: usize> Retimer<N, f64> for Topp3Tcp6 {
 
 /// Re-evaluates the analytical per-sample kinematics from the converged NLP solution
 /// against the configured joint and TCP limits. Each constraint is the same expression
-/// the solver enforced, so this is exact up to IPM convergence tolerance — the small
-/// relative slack (`solver.tolerance`, defaulting to 1e-6) absorbs that.
+/// the solver enforced, so this is exact up to IPM convergence tolerance — the
+/// relative slack (`tolerance_used`, the tolerance the IPM actually converged at;
+/// equal to `solver.tolerance` on the common path, or 10× that when the
+/// tolerance-relaxation retry kicked in) absorbs that.
 ///
 /// Joint violations use the joint index as `dof`. TCP violations report `dof = u8::MAX`
 /// since the bound is on the translational-velocity magnitude rather than a single axis.
@@ -188,11 +271,12 @@ fn check_dynamics_against_limits<const N: usize>(
     deriv: &PathDerivatives<N>,
     constraints: &Topp3Tcp6Constraints<N>,
     dt_in: Duration,
+    tolerance_used: f64,
 ) -> DekeResult<()> {
     let m = deriv.num_waypoints();
     let seg = deriv.num_segments();
     let lock = constraints.locked_prefix.min(N);
-    let rel_slack = constraints.solver.tolerance.max(0.0);
+    let rel_slack = tolerance_used.max(0.0);
 
     let exceeds = |observed: f64, limit: f64| -> bool {
         limit.is_finite() && limit > 0.0 && observed > limit * (1.0 + rel_slack)
@@ -289,6 +373,220 @@ fn check_dynamics_against_limits<const N: usize>(
                 return Err(DekeError::ExceedsDynamicsLimits {
                     dt_in,
                     limit_type: "tcp_jerk",
+                    dof: u8::MAX,
+                    limit_value: tcp.j_max,
+                    observed_value: tj,
+                });
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Companion to [`check_dynamics_against_limits`] that runs a backward-difference
+/// V/A/J pass on the *resampled* output samples — what the downstream consumer
+/// actually receives — instead of the analytical NLP solution.
+///
+/// The two checks catch different things:
+///
+/// - The analytical check verifies the NLP iterate respects `qp·sd ≤ v_max`,
+///   `qpp·sd² + qp·sdd ≤ a_max`, etc. — the exact expressions the solver enforced.
+/// - This check verifies the *chord-linear interpolation* through densified
+///   waypoints stays inside the limits when differenced at the user's output `dt`.
+///   The resampler outputs `q(t) = a + ((sd·τ + ½·sdd·τ² + ⅙·sddd·τ³)/ds)·(b − a)`
+///   between adjacent densified waypoints `a, b`, so its instantaneous joint
+///   tangent is the *secant* `(b − a)/ds`, not the PCHIP slope `qp` that the NLP
+///   constrained.
+///
+/// Within a single densified segment the chord-linear output is C∞ in time (a
+/// cubic in `τ` times a constant joint-space direction), so backward FD gives a
+/// good approximation of the analytical derivatives. *Across* a densified segment
+/// boundary the joint-space direction jumps, and a backward FD stencil that
+/// straddles a boundary picks up the direction change as a single-sample spike.
+/// Those spikes are an artifact of the chord-linear interpolation choice, not of
+/// the NLP solution, so this check skips any sample whose backward-FD window spans
+/// a densified-segment boundary — the analytical check already validated the NLP
+/// inputs at those knots.
+///
+/// Stencils are pure backward FD: `v[k] = (q[k] − q[k−1])/dt`,
+/// `a[k] = (q[k] − 2·q[k−1] + q[k−2])/dt²`,
+/// `j[k] = (q[k] − 3·q[k−1] + 3·q[k−2] − q[k−3])/dt³`. The relative slack is
+/// `max(tolerance_used, solver.resampled_check_slack)`.
+fn check_resampled_dynamics_against_limits<const N: usize, FK: FKChain<N, f64>>(
+    samples: &[deke_types::SRobotQ<N, f64>],
+    dt_out: Duration,
+    constraints: &Topp3Tcp6Constraints<N>,
+    fk: &FK,
+    tolerance_used: f64,
+    solution: &Solution,
+) -> DekeResult<()> {
+    let dt = dt_out.as_secs_f64();
+    if dt <= 0.0 || samples.len() < 4 {
+        return Ok(());
+    }
+    let lock = constraints.locked_prefix.min(N);
+    // Use the larger of the IPM tolerance and the configured resampled-check slack.
+    // The IPM term is usually 1e-6 (tight); the resampled slack absorbs chord-linear
+    // and backward-FD numerical noise that the analytical check doesn't see.
+    let rel_slack = tolerance_used
+        .max(constraints.solver.resampled_check_slack)
+        .max(0.0);
+
+    // Cumulative segment end times. `cum_end[k]` is the time at the end of densified
+    // segment `k`. Sample at time `t` is in segment `k` if `cum_end[k-1] ≤ t <
+    // cum_end[k]` (with `cum_end[-1] := 0`). Used to skip output samples whose
+    // backward-FD window crosses a segment boundary, where the chord-linear
+    // interpolation has a tangent kink that the FD picks up as a spurious spike.
+    let cum_end: Vec<f64> = {
+        let mut v = Vec::with_capacity(solution.dt.len());
+        let mut acc = 0.0_f64;
+        for d in &solution.dt {
+            acc += d.as_secs_f64();
+            v.push(acc);
+        }
+        v
+    };
+    let total_time = *cum_end.last().unwrap_or(&0.0);
+    // Returns the densified segment index containing sample time `t`. Linear walk is
+    // O(seg + samples); for typical 100-segment, 1000-sample problems this is a few
+    // microseconds total.
+    let seg_at = |t: f64, hint: &mut usize| -> usize {
+        let t_clamped = t.min(total_time).max(0.0);
+        while *hint > 0 && cum_end[*hint - 1] > t_clamped {
+            *hint -= 1;
+        }
+        while *hint < cum_end.len() - 1 && cum_end[*hint] <= t_clamped {
+            *hint += 1;
+        }
+        *hint
+    };
+    let mut hint = 0_usize;
+
+    let exceeds = |observed: f64, limit: f64| -> bool {
+        limit.is_finite() && limit > 0.0 && observed > limit * (1.0 + rel_slack)
+    };
+
+    let dt2 = dt * dt;
+    let dt3 = dt * dt2;
+
+    // Precompute TCP positions if any TCP limit is finite. We need them for backward
+    // FD on the translation triple; if the user disabled TCP entirely, skip the FK
+    // work.
+    let tcp_active = constraints
+        .tcp
+        .is_some_and(|t| t.v_max.is_finite() || t.a_max.is_finite() || t.j_max.is_finite());
+    let tcp_positions: Option<Vec<[f64; 3]>> = if tcp_active {
+        let mut v = Vec::with_capacity(samples.len());
+        for q in samples {
+            let pose = fk.fk_end(q).map_err(|e| e.into())?;
+            let t = pose.translation();
+            v.push([t.x(), t.y(), t.z()]);
+        }
+        Some(v)
+    } else {
+        None
+    };
+
+    for k in 3..samples.len() {
+        // Skip samples whose backward-FD jerk stencil (q[k-3..k]) straddles a
+        // densified-segment boundary. Inside a segment the chord-linear output is
+        // smooth in time; across segments the tangent direction jumps and the FD
+        // picks that up as a single-sample spike that the analytical NLP didn't
+        // bound (it constrained PCHIP slopes, not secants).
+        let t_now = (k as f64) * dt;
+        let t_then = ((k - 3) as f64) * dt;
+        let mut hint_then = hint;
+        let seg_now = seg_at(t_now, &mut hint);
+        let seg_then = seg_at(t_then, &mut hint_then);
+        if seg_now != seg_then {
+            continue;
+        }
+        for j in lock..N {
+            let q3 = samples[k - 3].0[j];
+            let q2 = samples[k - 2].0[j];
+            let q1 = samples[k - 1].0[j];
+            let q0 = samples[k].0[j];
+
+            let v = (q0 - q1) / dt;
+            let v_max = constraints.joint.v_max.0[j];
+            if exceeds(v.abs(), v_max) {
+                return Err(DekeError::ExceedsDynamicsLimits {
+                    dt_in: dt_out,
+                    limit_type: "joint_velocity_resampled",
+                    dof: j as u8,
+                    limit_value: v_max,
+                    observed_value: v.abs(),
+                });
+            }
+
+            let a = (q0 - 2.0 * q1 + q2) / dt2;
+            let a_max = constraints.joint.a_max.0[j];
+            if exceeds(a.abs(), a_max) {
+                return Err(DekeError::ExceedsDynamicsLimits {
+                    dt_in: dt_out,
+                    limit_type: "joint_acceleration_resampled",
+                    dof: j as u8,
+                    limit_value: a_max,
+                    observed_value: a.abs(),
+                });
+            }
+
+            let jk = (q0 - 3.0 * q1 + 3.0 * q2 - q3) / dt3;
+            let j_max = constraints.joint.j_max.0[j];
+            if exceeds(jk.abs(), j_max) {
+                return Err(DekeError::ExceedsDynamicsLimits {
+                    dt_in: dt_out,
+                    limit_type: "joint_jerk_resampled",
+                    dof: j as u8,
+                    limit_value: j_max,
+                    observed_value: jk.abs(),
+                });
+            }
+        }
+
+        if let (Some(tcp), Some(pos)) = (constraints.tcp, tcp_positions.as_ref()) {
+            let p3 = pos[k - 3];
+            let p2 = pos[k - 2];
+            let p1 = pos[k - 1];
+            let p0 = pos[k];
+
+            let vx = (p0[0] - p1[0]) / dt;
+            let vy = (p0[1] - p1[1]) / dt;
+            let vz = (p0[2] - p1[2]) / dt;
+            let tv = (vx * vx + vy * vy + vz * vz).sqrt();
+            if exceeds(tv, tcp.v_max) {
+                return Err(DekeError::ExceedsDynamicsLimits {
+                    dt_in: dt_out,
+                    limit_type: "tcp_velocity_resampled",
+                    dof: u8::MAX,
+                    limit_value: tcp.v_max,
+                    observed_value: tv,
+                });
+            }
+
+            let ax = (p0[0] - 2.0 * p1[0] + p2[0]) / dt2;
+            let ay = (p0[1] - 2.0 * p1[1] + p2[1]) / dt2;
+            let az = (p0[2] - 2.0 * p1[2] + p2[2]) / dt2;
+            let ta = (ax * ax + ay * ay + az * az).sqrt();
+            if exceeds(ta, tcp.a_max) {
+                return Err(DekeError::ExceedsDynamicsLimits {
+                    dt_in: dt_out,
+                    limit_type: "tcp_acceleration_resampled",
+                    dof: u8::MAX,
+                    limit_value: tcp.a_max,
+                    observed_value: ta,
+                });
+            }
+
+            let jx = (p0[0] - 3.0 * p1[0] + 3.0 * p2[0] - p3[0]) / dt3;
+            let jy = (p0[1] - 3.0 * p1[1] + 3.0 * p2[1] - p3[1]) / dt3;
+            let jz = (p0[2] - 3.0 * p1[2] + 3.0 * p2[2] - p3[2]) / dt3;
+            let tj = (jx * jx + jy * jy + jz * jz).sqrt();
+            if exceeds(tj, tcp.j_max) {
+                return Err(DekeError::ExceedsDynamicsLimits {
+                    dt_in: dt_out,
+                    limit_type: "tcp_jerk_resampled",
                     dof: u8::MAX,
                     limit_value: tcp.j_max,
                     observed_value: tj,
@@ -827,5 +1125,24 @@ fn two_stage_solve<const N: usize>(
 
     // Stage 2: TCP-enabled with the stage-1 solution as warm start.
     let stage2 = build_and_solve_warm::<N>(deriv_with_tcp, constraints, start, end, &stage1)?;
-    Ok(stage2)
+    if matches!(stage2.status, SolveStatus::Success) {
+        return Ok(stage2);
+    }
+
+    // Stage 2 failed from a feasible warm start. This happens on paths whose PCHIP
+    // derivatives produce qppp spikes at densified knots adjacent to input waypoints
+    // (1/h² scaling of the secant-slope discontinuity): the stage-1 (sd, sdd, sddd)
+    // is feasible against the joint rows but lands the IPM in a basin it can't
+    // reconcile with the quadratic TCP a/j rows. The synthetic single-stage initial
+    // guess avoids that basin and converges. See `external_4wp_curved_locally_infeasible`
+    // — stage 1 + single-stage both succeed in ~230 iter, but the warm-started stage 2
+    // declares `LocallyInfeasible` at ~100 iter.
+    //
+    // Cost on the failure path: one extra build_and_solve (the original solve we just
+    // did was cheap because warm-started; this single-stage one does its own
+    // `apply_initial_guess` then converges normally). Net cost vs no-two-stage: one
+    // extra stage-1 solve. Net cost vs always-two-stage: none on success, +1 single
+    // solve on failure.
+    let single = build_and_solve::<N>(deriv_with_tcp, constraints, start, end)?;
+    Ok(single)
 }
