@@ -3,7 +3,7 @@ use kiddo::KdTree;
 use kiddo::SquaredEuclidean;
 
 pub(crate) struct RrtTree<const N: usize> {
-    nodes: Vec<SRobotQ<N>>,
+    nodes: Vec<SRobotQ<N, f64>>,
     parents: Vec<usize>,
     radii: Vec<f64>,
     costs: Vec<f64>,
@@ -27,15 +27,15 @@ impl<const N: usize> RrtTree<N> {
         }
     }
 
-    fn scale(&self, q: &SRobotQ<N>) -> [f64; N] {
+    fn scale(&self, q: &SRobotQ<N, f64>) -> [f64; N] {
         let mut scaled = [0.0; N];
         for i in 0..N {
-            scaled[i] = q.0[i] as f64 * self.sqrt_coeffs[i];
+            scaled[i] = q.0[i] * self.sqrt_coeffs[i];
         }
         scaled
     }
 
-    pub fn add(&mut self, q: SRobotQ<N>, parent: usize, radius: f64, cost: f64) -> usize {
+    pub fn add(&mut self, q: SRobotQ<N, f64>, parent: usize, radius: f64, cost: f64) -> usize {
         let idx = self.nodes.len();
         let scaled = self.scale(&q);
         self.kdtree.add(&scaled, idx as u64);
@@ -46,13 +46,13 @@ impl<const N: usize> RrtTree<N> {
         idx
     }
 
-    pub fn nearest(&self, q: &SRobotQ<N>) -> (usize, f64) {
+    pub fn nearest(&self, q: &SRobotQ<N, f64>) -> (usize, f64) {
         let scaled = self.scale(q);
         let nn = self.kdtree.nearest_one::<SquaredEuclidean>(&scaled);
         (nn.item as usize, nn.distance.sqrt())
     }
 
-    // pub fn within(&self, q: &SRobotQ<N>, radius: f64) -> Vec<(usize, f64)> {
+    // pub fn within(&self, q: &SRobotQ<N, f64>, radius: f64) -> Vec<(usize, f64)> {
     //     let scaled = self.scale(q);
     //     self.kdtree
     //         .within::<SquaredEuclidean>(&scaled, radius * radius)
@@ -62,7 +62,7 @@ impl<const N: usize> RrtTree<N> {
     // }
 
     #[inline]
-    pub fn node(&self, idx: usize) -> &SRobotQ<N> {
+    pub fn node(&self, idx: usize) -> &SRobotQ<N, f64> {
         &self.nodes[idx]
     }
 
@@ -91,7 +91,7 @@ impl<const N: usize> RrtTree<N> {
         self.nodes.len()
     }
 
-    // pub fn dist_to_node(&self, q: &SRobotQ<N>, idx: usize) -> f64 {
+    // pub fn dist_to_node(&self, q: &SRobotQ<N, f64>, idx: usize) -> f64 {
     //     let mut sum = 0.0;
     //     for i in 0..N {
     //         let d = (q.0[i] - self.nodes[idx].0[i]) as f64 * self.sqrt_coeffs[i];
@@ -103,10 +103,10 @@ impl<const N: usize> RrtTree<N> {
     /// Finds the nearest node satisfying `node.cost + geo_dist(q, node) <= cost_bound`.
     /// Returns (index, weighted_geometric_distance).
     /// Falls back to root (index 0) if no node satisfies the constraint.
-    pub fn find_nearest_ao(&self, q: &SRobotQ<N>, cost_bound: f64) -> (usize, f64) {
+    pub fn find_nearest_ao(&self, q: &SRobotQ<N, f64>, cost_bound: f64) -> (usize, f64) {
         let mut scaled = [0.0f64; N];
         for i in 0..N {
-            scaled[i] = q.0[i] as f64 * self.sqrt_coeffs[i];
+            scaled[i] = q.0[i] * self.sqrt_coeffs[i];
         }
 
         let mut best_idx = 0;
@@ -124,7 +124,7 @@ impl<const N: usize> RrtTree<N> {
             let mut dist_sq = 0.0;
             let node = &self.nodes[i];
             for j in 0..N {
-                let d = scaled[j] - node.0[j] as f64 * self.sqrt_coeffs[j];
+                let d = scaled[j] - node.0[j] * self.sqrt_coeffs[j];
                 dist_sq += d * d;
                 if dist_sq > remaining_sq {
                     break;

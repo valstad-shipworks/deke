@@ -231,37 +231,6 @@ pub fn log_chain_line<const N: usize>(
     rec.log(entity_path, &rerun::LineStrips3D::new([points]))
 }
 
-/// Log the collision spheres of an `InlinedWreckValidator` at a given joint config.
-pub fn log_robot_spheres<const N: usize>(
-    rec: &RecordingStream,
-    entity_path: &str,
-    validator: &deke_wreck::InlinedWreckValidator<N>,
-    q: deke_types::SRobotQ<N>,
-) -> RecordingStreamResult<()> {
-    let spheres = validator.spheres(q);
-    spheres.log_to(rec, entity_path)
-}
-
-/// Log the collision spheres at each waypoint in a path using `set_time_sequence`.
-pub fn log_path_spheres<const N: usize>(
-    rec: &RecordingStream,
-    entity_path: &str,
-    path: &deke_types::RobotPath,
-    validator: &deke_wreck::InlinedWreckValidator<N>,
-) -> RecordingStreamResult<()> {
-    for (i, row) in path.rows().into_iter().enumerate() {
-        let Some(slice) = row.as_slice() else {
-            continue;
-        };
-        let Ok(sq) = deke_types::SRobotQ::<N>::try_from(slice) else {
-            continue;
-        };
-        rec.set_time_sequence("step", i as i64);
-        log_robot_spheres(rec, entity_path, validator, sq)?;
-    }
-    Ok(())
-}
-
 /// Compute the time each segment takes given per-joint max velocities (rad/s).
 /// Each segment's duration is the slowest joint: `max_j(|dq_j| / v_max_j)`.
 pub fn segment_times(path: &deke_types::RobotPath, joint_velocities: &[f32]) -> Vec<f64> {

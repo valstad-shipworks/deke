@@ -1,21 +1,21 @@
 use deke_types::{DekeError, DekeResult, SRobotPath, SRobotQ, Validator};
-use tinyrand::Rand;
 
-use crate::RrtDiagnostic;
-use crate::rrtc::{rand_f64, sample_uniform, validate_edge};
+use crate::randomizer::{DekeRng, RandomizerType};
+use crate::rrtc::{sample_uniform, validate_edge, validate_edge_stats};
 use crate::scurve::{
     KinematicLimits, direction_cosine, kinematic_interpolate, kinematic_path_cost,
     time_optimal_cost,
 };
 use crate::tree::RrtTree;
+use crate::{ExtensionStats, RrtDiagnostic, RrtTermination};
 
 #[derive(Debug, Clone, Copy)]
 pub struct KrrtcSettings<const N: usize> {
     pub range: f64,
     pub max_iterations: usize,
     pub max_samples: usize,
-    pub joint_lower: SRobotQ<N>,
-    pub joint_upper: SRobotQ<N>,
+    pub joint_lower: SRobotQ<N, f64>,
+    pub joint_upper: SRobotQ<N, f64>,
     pub kin_limits: KinematicLimits<N>,
     pub resolution: f64,
     pub dynamic_domain: bool,
@@ -25,12 +25,13 @@ pub struct KrrtcSettings<const N: usize> {
     pub balance: bool,
     pub tree_ratio: f64,
     pub seed: u64,
+    pub randomizer: RandomizerType,
     pub shortcut_iterations: usize,
     pub smoothing_iterations: usize,
 }
 
 impl<const N: usize> KrrtcSettings<N> {
-    pub fn new(lower: SRobotQ<N>, upper: SRobotQ<N>, kin_limits: KinematicLimits<N>) -> Self {
+    pub fn new(lower: SRobotQ<N, f64>, upper: SRobotQ<N, f64>, kin_limits: KinematicLimits<N>) -> Self {
         Self {
             range: 0.5,
             max_iterations: 100_000,
@@ -46,6 +47,7 @@ impl<const N: usize> KrrtcSettings<N> {
             balance: true,
             tree_ratio: 1.0,
             seed: 42,
+            randomizer: RandomizerType::default(),
             shortcut_iterations: 200,
             smoothing_iterations: 100,
         }
@@ -53,11 +55,11 @@ impl<const N: usize> KrrtcSettings<N> {
 }
 
 fn kinematic_steer<const N: usize>(
-    from: &SRobotQ<N>,
-    toward: &SRobotQ<N>,
+    from: &SRobotQ<N, f64>,
+    toward: &SRobotQ<N, f64>,
     range: f64,
     limits: &KinematicLimits<N>,
-) -> SRobotQ<N> {
+) -> SRobotQ<N, f64> {
     let cost = time_optimal_cost(from, toward, limits);
     if cost <= range {
         *toward
@@ -80,9 +82,10 @@ fn kinematic_steer<const N: usize>(
 ///
 /// Every candidate modification is collision-validated on both affected edges
 /// and only accepted if the local time-optimal cost decreases.
-fn round_corners<const N: usize>(
-    path: &mut Vec<SRobotQ<N>>,
-    validator: &mut impl Validator<N>,
+fn round_corners<const N: usize, V: Validator<N, (), f64>>(
+    path: &mut Vec<SRobotQ<N, f64>>,
+    validator: &V,
+    ctx: &V::Context<'_>,
     limits: &KinematicLimits<N>,
     resolution: f64,
     iterations: usize,
@@ -128,10 +131,10 @@ fn round_corners<const N: usize>(
         for &alpha in &[0.5f32, 0.4, 0.3, 0.2, 0.1, 0.05] {
             let candidate = curr + pull_dir * alpha;
 
-            if validate_edge(&prev, &candidate, resolution, validator).is_err() {
+            if validate_edge(&prev, &candidate, resolution, validator, ctx).is_err() {
                 continue;
             }
-            if validate_edge(&candidate, &next, resolution, validator).is_err() {
+            if validate_edge(&candidate, &next, resolution, validator, ctx).is_err() {
                 continue;
             }
 
@@ -152,19 +155,19 @@ fn round_corners<const N: usize>(
         // Pull didn't help — try arc split: replace the corner with two
         // waypoints that round it, placed along the incoming/outgoing edges.
         let mut best_arc_cost = old_cost;
-        let mut best_arc: Option<(SRobotQ<N>, SRobotQ<N>)> = None;
+        let mut best_arc: Option<(SRobotQ<N, f64>, SRobotQ<N, f64>)> = None;
 
         for &frac in &[0.25f32, 0.33, 0.4] {
             let p1 = prev + (curr - prev) * (1.0 - frac);
             let p2 = curr + (next - curr) * frac;
 
-            if validate_edge(&prev, &p1, resolution, validator).is_err() {
+            if validate_edge(&prev, &p1, resolution, validator, ctx).is_err() {
                 continue;
             }
-            if validate_edge(&p1, &p2, resolution, validator).is_err() {
+            if validate_edge(&p1, &p2, resolution, validator, ctx).is_err() {
                 continue;
             }
-            if validate_edge(&p2, &next, resolution, validator).is_err() {
+            if validate_edge(&p2, &next, resolution, validator, ctx).is_err() {
                 continue;
             }
 
@@ -188,13 +191,14 @@ fn round_corners<const N: usize>(
 /// Random shortcutting: pick two random waypoints, if the direct edge is
 /// collision-free, remove everything between them. Biases toward pairs
 /// with high time-optimal cost to maximize improvement per shortcut.
-fn shortcut<const N: usize>(
-    path: &mut Vec<SRobotQ<N>>,
-    validator: &mut impl Validator<N>,
+fn shortcut<const N: usize, V: Validator<N, (), f64>, R: DekeRng<N>>(
+    path: &mut Vec<SRobotQ<N, f64>>,
+    validator: &V,
+    ctx: &V::Context<'_>,
     limits: &KinematicLimits<N>,
     resolution: f64,
     iterations: usize,
-    rng: &mut impl Rand,
+    rng: &mut R,
 ) {
     if path.len() <= 2 {
         return;
@@ -216,26 +220,28 @@ fn shortcut<const N: usize>(
             break;
         }
 
-        let total_cost = *cumulative.last().unwrap();
+        let Some(&total_cost) = cumulative.last() else {
+            break;
+        };
         if total_cost < 1e-10 {
             break;
         }
 
         // Pick first index weighted by segment cost (favor expensive segments)
-        let r1 = rand_f64(rng) * total_cost;
+        let r1 = rng.next_f64() * total_cost;
         let i = cumulative
             .partition_point(|&c| c < r1)
-            .min(segment_costs.len() - 1);
+            .min(segment_costs.len().saturating_sub(1));
 
         // Pick second index at least 2 away
         let remaining = path.len() - i - 2;
         if remaining == 0 {
             continue;
         }
-        let j = i + 2 + (rand_f64(rng) * remaining as f64) as usize;
+        let j = i + 2 + (rng.next_f64() * remaining as f64) as usize;
         let j = j.min(path.len() - 1);
 
-        if validate_edge(&path[i], &path[j], resolution, validator).is_ok() {
+        if validate_edge(&path[i], &path[j], resolution, validator, ctx).is_ok() {
             let old_cost: f64 = (i..j).map(|k| segment_costs[k]).sum();
             let new_cost = time_optimal_cost(&path[i], &path[j], limits);
 
@@ -256,7 +262,7 @@ fn shortcut<const N: usize>(
     }
 }
 
-fn backtrack_path<const N: usize>(tree: &RrtTree<N>, idx: usize) -> Vec<SRobotQ<N>> {
+fn backtrack_path<const N: usize>(tree: &RrtTree<N>, idx: usize) -> Vec<SRobotQ<N, f64>> {
     let mut path = Vec::new();
     let mut current = idx;
     loop {
@@ -277,7 +283,7 @@ fn reconstruct<const N: usize>(
     tree_b: &RrtTree<N>,
     idx_b: usize,
     a_is_start: bool,
-) -> Vec<SRobotQ<N>> {
+) -> Vec<SRobotQ<N, f64>> {
     let path_a = backtrack_path(tree_a, idx_a);
     let path_b = backtrack_path(tree_b, idx_b);
 
@@ -292,17 +298,21 @@ fn reconstruct<const N: usize>(
     }
 }
 
-pub(crate) fn solve<const N: usize>(
-    start: &SRobotQ<N>,
-    goal: &SRobotQ<N>,
-    validator: &mut impl Validator<N>,
+pub(crate) fn solve<const N: usize, V: Validator<N, (), f64>, R: DekeRng<N>>(
+    start: &SRobotQ<N, f64>,
+    goal: &SRobotQ<N, f64>,
+    validator: &V,
+    ctx: &V::Context<'_>,
     settings: &KrrtcSettings<N>,
-    rng: &mut impl Rand,
-) -> (DekeResult<SRobotPath<N>>, RrtDiagnostic) {
+    rng: &mut R,
+) -> (DekeResult<SRobotPath<N, f64>>, RrtDiagnostic) {
     let timer = std::time::Instant::now();
     let coeffs = settings.kin_limits.velocity_coeffs();
 
+    let mut stats = ExtensionStats::default();
+    let mut closest_approach = f64::INFINITY;
     let direct_cost = time_optimal_cost(start, goal, &settings.kin_limits);
+
     if direct_cost < 1e-10 {
         return (
             Ok(SRobotPath::from_two(*start, *start)),
@@ -312,11 +322,17 @@ pub(crate) fn solve<const N: usize>(
                 goal_tree_size: 1,
                 path_cost: 0.0,
                 elapsed_ns: timer.elapsed().as_nanos(),
+                termination: RrtTermination::DegenerateStartGoal,
+                extension_stats: stats,
+                c_min: direct_cost,
+                closest_approach: 0.0,
+                anytime: None,
             },
         );
     }
 
-    if validate_edge(start, goal, settings.resolution, validator).is_ok() {
+    stats.edge_validations += 1;
+    if validate_edge(start, goal, settings.resolution, validator, ctx).is_ok() {
         return (
             Ok(SRobotPath::from_two(*start, *goal)),
             RrtDiagnostic {
@@ -325,8 +341,15 @@ pub(crate) fn solve<const N: usize>(
                 goal_tree_size: 1,
                 path_cost: direct_cost,
                 elapsed_ns: timer.elapsed().as_nanos(),
+                termination: RrtTermination::DirectConnection,
+                extension_stats: stats,
+                c_min: direct_cost,
+                closest_approach: 0.0,
+                anytime: None,
             },
         );
+    } else {
+        stats.edge_validation_failures += 1;
     }
 
     let mut start_tree = RrtTree::with_capacity(&coeffs, settings.max_samples / 2);
@@ -336,13 +359,18 @@ pub(crate) fn solve<const N: usize>(
     goal_tree.add(*goal, 0, settings.radius, 0.0);
 
     let mut extend_start = true;
+    let mut termination = RrtTermination::MaxIterationsExceeded;
+    let mut completed_iterations = settings.max_iterations;
 
     for iteration in 0..settings.max_iterations {
         if start_tree.len() + goal_tree.len() >= settings.max_samples {
+            termination = RrtTermination::MaxSamplesExceeded;
+            completed_iterations = iteration;
             break;
         }
 
         let q_rand = sample_uniform(rng, &settings.joint_lower, &settings.joint_upper);
+        stats.extension_attempts += 1;
 
         let result = if extend_start {
             extend_and_connect(
@@ -350,7 +378,10 @@ pub(crate) fn solve<const N: usize>(
                 &mut goal_tree,
                 &q_rand,
                 validator,
+                ctx,
                 settings,
+                &mut stats,
+                &mut closest_approach,
             )
         } else {
             extend_and_connect(
@@ -358,7 +389,10 @@ pub(crate) fn solve<const N: usize>(
                 &mut start_tree,
                 &q_rand,
                 validator,
+                ctx,
                 settings,
+                &mut stats,
+                &mut closest_approach,
             )
         };
 
@@ -374,6 +408,7 @@ pub(crate) fn solve<const N: usize>(
                 shortcut(
                     &mut waypoints,
                     validator,
+                    ctx,
                     &settings.kin_limits,
                     settings.resolution,
                     settings.shortcut_iterations,
@@ -385,6 +420,7 @@ pub(crate) fn solve<const N: usize>(
                 round_corners(
                     &mut waypoints,
                     validator,
+                    ctx,
                     &settings.kin_limits,
                     settings.resolution,
                     settings.smoothing_iterations,
@@ -392,17 +428,19 @@ pub(crate) fn solve<const N: usize>(
             }
 
             let cost = kinematic_path_cost(&waypoints, &settings.kin_limits);
-            let path = SRobotPath::new(waypoints).unwrap();
-            return (
-                Ok(path),
-                RrtDiagnostic {
-                    iterations: iteration + 1,
-                    start_tree_size: start_tree.len(),
-                    goal_tree_size: goal_tree.len(),
-                    path_cost: cost,
-                    elapsed_ns: timer.elapsed().as_nanos(),
-                },
-            );
+            let diag = RrtDiagnostic {
+                iterations: iteration + 1,
+                start_tree_size: start_tree.len(),
+                goal_tree_size: goal_tree.len(),
+                path_cost: cost,
+                elapsed_ns: timer.elapsed().as_nanos(),
+                termination: RrtTermination::Solved,
+                extension_stats: stats,
+                c_min: direct_cost,
+                closest_approach: 0.0,
+                anytime: None,
+            };
+            return (SRobotPath::try_new(waypoints), diag);
         }
 
         if settings.balance {
@@ -422,21 +460,29 @@ pub(crate) fn solve<const N: usize>(
     (
         Err(DekeError::OutOfIterations),
         RrtDiagnostic {
-            iterations: settings.max_iterations,
+            iterations: completed_iterations,
             start_tree_size: start_tree.len(),
             goal_tree_size: goal_tree.len(),
             path_cost: f64::INFINITY,
             elapsed_ns: timer.elapsed().as_nanos(),
+            termination,
+            extension_stats: stats,
+            c_min: direct_cost,
+            closest_approach,
+            anytime: None,
         },
     )
 }
 
-fn extend_and_connect<const N: usize>(
+fn extend_and_connect<const N: usize, V: Validator<N, (), f64>>(
     tree_a: &mut RrtTree<N>,
     tree_b: &mut RrtTree<N>,
-    q_rand: &SRobotQ<N>,
-    validator: &mut impl Validator<N>,
+    q_rand: &SRobotQ<N, f64>,
+    validator: &V,
+    ctx: &V::Context<'_>,
     settings: &KrrtcSettings<N>,
+    stats: &mut ExtensionStats,
+    closest_approach: &mut f64,
 ) -> Option<(usize, usize)> {
     let (near_idx, near_dist) = tree_a.nearest(q_rand);
 
@@ -446,13 +492,14 @@ fn extend_and_connect<const N: usize>(
             near_idx,
             (r * (1.0 - settings.alpha)).max(settings.min_radius),
         );
+        stats.dynamic_domain_rejections += 1;
         return None;
     }
 
     let q_near = *tree_a.node(near_idx);
     let q_new = kinematic_steer(&q_near, q_rand, settings.range, &settings.kin_limits);
 
-    if validate_edge(&q_near, &q_new, settings.resolution, validator).is_err() {
+    if validate_edge_stats(&q_near, &q_new, settings.resolution, validator, ctx, stats).is_err() {
         if settings.dynamic_domain {
             let r = tree_a.radius(near_idx);
             tree_a.set_radius(
@@ -464,25 +511,33 @@ fn extend_and_connect<const N: usize>(
     }
 
     let new_a_idx = tree_a.add(q_new, near_idx, settings.radius, 0.0);
+    stats.successful_extensions += 1;
 
     if settings.dynamic_domain {
         let r = tree_a.radius(near_idx);
         tree_a.set_radius(near_idx, r * (1.0 + settings.alpha));
     }
 
-    let (mut connect_idx, _) = tree_b.nearest(&q_new);
+    let (mut connect_idx, gap_to_other) = tree_b.nearest(&q_new);
+    if gap_to_other < *closest_approach {
+        *closest_approach = gap_to_other;
+    }
+    stats.connect_attempts += 1;
 
     loop {
         let q_connect = *tree_b.node(connect_idx);
         let dist = time_optimal_cost(&q_connect, &q_new, &settings.kin_limits);
 
         if dist < 1e-6 {
+            stats.connect_successes += 1;
             return Some((new_a_idx, connect_idx));
         }
 
         let q_step = kinematic_steer(&q_connect, &q_new, settings.range, &settings.kin_limits);
 
-        if validate_edge(&q_connect, &q_step, settings.resolution, validator).is_err() {
+        if validate_edge_stats(&q_connect, &q_step, settings.resolution, validator, ctx, stats)
+            .is_err()
+        {
             return None;
         }
 
@@ -494,6 +549,7 @@ fn extend_and_connect<const N: usize>(
         };
 
         if reached {
+            stats.connect_successes += 1;
             return Some((new_a_idx, step_idx));
         }
 

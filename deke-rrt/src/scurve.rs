@@ -129,8 +129,8 @@ pub fn min_time_1d(delta_q: f64, limits: &JointKinLimits) -> f64 {
 /// Computes the time-optimal cost between two configurations.
 /// The bottleneck joint (longest single-joint time) determines the cost.
 pub fn time_optimal_cost<const N: usize>(
-    a: &SRobotQ<N>,
-    b: &SRobotQ<N>,
+    a: &SRobotQ<N, f64>,
+    b: &SRobotQ<N, f64>,
     limits: &KinematicLimits<N>,
 ) -> f64 {
     let mut max_time = 0.0f64;
@@ -155,17 +155,17 @@ pub fn quintic_interp(t: f64) -> f64 {
 /// Interpolates between two configurations using quintic blending.
 /// t_normalized in [0, 1].
 pub fn kinematic_interpolate<const N: usize>(
-    from: &SRobotQ<N>,
-    to: &SRobotQ<N>,
+    from: &SRobotQ<N, f64>,
+    to: &SRobotQ<N, f64>,
     t_normalized: f64,
-) -> SRobotQ<N> {
+) -> SRobotQ<N, f64> {
     let s = quintic_interp(t_normalized) as f32;
     *from + (*to - *from) * s
 }
 
 /// Computes the time-optimal path cost (sum of segment times).
 pub fn kinematic_path_cost<const N: usize>(
-    path: &[SRobotQ<N>],
+    path: &[SRobotQ<N, f64>],
     limits: &KinematicLimits<N>,
 ) -> f64 {
     path.windows(2)
@@ -177,9 +177,9 @@ pub fn kinematic_path_cost<const N: usize>(
 /// segments a→b and b→c, measured in velocity-scaled joint space.
 /// Returns 1.0 for a straight path, -1.0 for a full reversal.
 pub fn direction_cosine<const N: usize>(
-    a: &SRobotQ<N>,
-    b: &SRobotQ<N>,
-    c: &SRobotQ<N>,
+    a: &SRobotQ<N, f64>,
+    b: &SRobotQ<N, f64>,
+    c: &SRobotQ<N, f64>,
     limits: &KinematicLimits<N>,
 ) -> f64 {
     let mut dot = 0.0f64;

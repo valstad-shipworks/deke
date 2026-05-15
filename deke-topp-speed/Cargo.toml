@@ -1,0 +1,10 @@
+[package]
+name = "deke-topp-speed"
+version = "0.1.0"
+edition = "2024"
+description = "Real-time, jerk-limited trajectory shaping for joint paths."
+
+[dependencies]
+deke-types = "1.5.1"
+num-traits = "0.2"
+thiserror = "2"

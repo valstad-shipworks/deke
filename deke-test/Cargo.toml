@@ -9,13 +9,15 @@ deke-cricket = { path = "../deke-cricket" }
 deke-types = { path = "../deke-types" }
 deke-wreck = { path = "../deke-wreck" }
 deke-rrt = { path = "../deke-rrt" }
-wreck = "0.2.1"
+wreck = "0.3.4"
 glam = "0.32.1"
 uuid = { version = "1", features = ["v4"] }
 vamp = { path = "../../vamp/vamp-rs" }
 
 [dev-dependencies]
 criterion = "0.5"
+deke-topp3tcp6 = { path = "../deke-topp3tcp6" }
+plotters = "0.3"
 
 [[bench]]
 name = "validate"
@@ -27,4 +29,8 @@ harness = false
 
 [[bench]]
 name = "fk"
+harness = false
+
+[[bench]]
+name = "clone"
 harness = false

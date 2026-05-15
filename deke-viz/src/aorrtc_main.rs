@@ -71,11 +71,11 @@ fn main() {
 
     let mut env = wreck::Collider::default();
     env.add(wreck::Sphere::new(glam::Vec3::new(1.5, 0.0, 1.75), 0.5));
-    let mut validator = validator(env);
+    let mut validator = validator();
 
     println!("environment: 1 sphere at (1.5, 0.0, 1.75) r=0.5");
 
-    deke_viz::log_collider(&rec, "obstacle", validator.1.environment())
+    deke_viz::log_collider(&rec, "obstacle", &env)
         .expect("failed to log obstacle");
 
     let mut settings = deke_rrt::AorrtcSettings::new(SRobotQ(JOINT_LOWER), SRobotQ(JOINT_UPPER));
@@ -102,10 +102,12 @@ fn main() {
     settings.simplify_reduce_range_ratio = 0.8;
     settings.static_dof_penalty = 100.0;
     settings.penalize_static_dof = true;
-    let planner = aorrtc(settings);
+    let planner = aorrtc();
+
+    let ctx = ((), deke_wreck::WreckValidatorContext::new(&env));
 
     println!("planning...");
-    let (result, diag) = planner.plan(start, goal, &mut validator);
+    let (result, diag) = planner.plan(&settings, start, goal, &mut validator, &ctx);
     println!("{diag}");
 
     let path = match result {
@@ -116,7 +118,7 @@ fn main() {
         }
     };
 
-    let fk = deke_types::URDFChain::new(URDF_JOINTS);
+    let fk = deke_types::URDFChain::new(URDF_JOINTS).unwrap();
 
     println!("path has {} waypoints:", path.len());
     for (i, q) in path.iter().enumerate() {

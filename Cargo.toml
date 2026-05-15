@@ -1,5 +1,13 @@
 [workspace]
-members = ["deke-types", "deke-wreck", "deke-rrt", "deke-cricket", "deke-test", "deke-viz"]
+members = [
+    "deke-types",
+    "deke-wreck",
+    "deke-rrt",
+    "deke-cricket",
+    "deke-topp3tcp6",
+    "deke-topp3tcp6-discrete",
+    "deke-topp-speed"
+]
 resolver = "2"
 
 [profile.release]

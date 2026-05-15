@@ -1,13 +1,25 @@
 [package]
 name = "deke-rrt"
-version = "1.1.0"
+version = "1.5.3"
 edition = "2024"
 license = "Apache-2.0"
 authors = ["Bowan Foryt <bowan@valstad.com>"]
 description = "An rrt based planner for the Deke project."
 repository = "https://github.com/valstad-shipworks/deke"
 
+[features]
+default = []
+valuable = ["dep:valuable", "deke-types/valuable"]
+
 [dependencies]
-deke-types = { version = "1.0.0", path = "../deke-types" }
+deke-types = { version = "1.5.2", path = "../deke-types" }
 kiddo = "5.2.4"
 tinyrand = "0.5.0"
+valuable = { version = "0.1", default-features = false, features = ["alloc"], optional = true }
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "randomizer"
+harness = false

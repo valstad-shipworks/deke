@@ -1,0 +1,21 @@
+[package]
+name = "deke-topp3tcp6"
+version = "1.5.2"
+edition = "2024"
+
+[features]
+default = []
+valuable = ["dep:valuable", "deke-types/valuable", "glam-traits-ext/Valuable"]
+
+[dependencies]
+deke-types = { version = "1.5.2" }
+glam-traits-ext = { version = "0.32.3", features = ["approx"] }
+sleipnir = { git = "https://github.com/oh-yes-0-fps/Sleipnir.git", branch = "rust-with-regularized-ldlt-patch", default-features = false }
+ndarray = { version = "0.17.2", features = ["approx"] }
+glam = "0.32.1"
+num-traits = "0.2.19"
+thiserror = "2.0.18"
+valuable = { version = "0.1", default-features = false, features = ["alloc"], optional = true }
+
+[dev-dependencies]
+approx = "0.5.1"
