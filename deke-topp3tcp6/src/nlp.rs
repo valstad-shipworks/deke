@@ -446,6 +446,44 @@ fn build_and_solve_inner<const N: usize>(
     let total_ds: f64 = deriv.ds.iter().sum();
     let path_too_short_for_fd = total_ds < 3.0 * h * v_max_path;
     const FD_RELAX: f64 = 1.0;
+    // Per-knot effective sd upper bound from the binding V constraints (joint AND
+    // TCP). The interior V_FD rows below use this to pick a lower bound on `dt[k]`
+    // for each segment: `dt[k] ≥ ds[k] / max(sd_upper[k], sd_upper[k+1])`. Using
+    // only the joint v_max would over-estimate the sd ceiling whenever the TCP v
+    // limit is tighter (e.g. rail-dominant paths where TCP v / |pp| ≪ joint v_max),
+    // so we take the min over all V rows the NLP enforces at each knot.
+    let sd_upper_at_knot: Vec<f64> = (0..m)
+        .map(|k| {
+            let mut upper = f64::INFINITY;
+            for j in lock..N {
+                let qp_abs = deriv.qp[k][j].abs();
+                if qp_abs > qp_cutoffs[j] {
+                    let v_max = constraints.joint.v_max.0[j];
+                    if v_max.is_finite() && v_max > 0.0 {
+                        upper = upper.min(v_max / qp_abs);
+                    }
+                }
+            }
+            if tcp_active
+                && deriv.has_tcp()
+                && let Some(tcp) = constraints.tcp
+                && tcp.v_max.is_finite()
+                && tcp.v_max > 0.0
+            {
+                let pp_k = &deriv.pp[k];
+                let pp_norm_sq =
+                    pp_k[0] * pp_k[0] + pp_k[1] * pp_k[1] + pp_k[2] * pp_k[2];
+                if pp_norm_sq > pp_cutoff_sq {
+                    upper = upper.min(tcp.v_max / pp_norm_sq.sqrt());
+                }
+            }
+            if upper.is_finite() { upper } else { v_max_path }
+        })
+        .collect();
+    // Per-segment lower bound on `dt[k]`. Used to gate the interior V_FD rows
+    // below: a row at `τ = i·h` is added only when `i·h ≤ dt_lower_k`, so the row
+    // never bounds an extrapolation past the segment end.
+    const MAX_INTERIOR_I: usize = 20;
     if h > 0.0 && !path_too_short_for_fd {
         for k in 0..seg {
             let ds_k = deriv.ds[k];
@@ -459,6 +497,11 @@ fn build_and_solve_inner<const N: usize>(
             let sdd_k = sdd[k];
             let sdd_k1 = sdd[k + 1];
             let sddd_k = sddd[k];
+            let sd_upper_seg =
+                sd_upper_at_knot[k].max(sd_upper_at_knot[k + 1]).max(1e-12);
+            let dt_lower_k = ds_k / sd_upper_seg;
+            let max_interior_i =
+                ((dt_lower_k / h).floor() as usize).min(MAX_INTERIOR_I);
 
             for j in lock..N {
                 let secant_j = (b[j] - a[j]) / ds_k;
@@ -496,11 +539,13 @@ fn build_and_solve_inner<const N: usize>(
                 // V at τ = dt[k] (segment end):
                 //   secant·(sd[k+1] − h/2·sdd[k+1] + h²/6·sddd[k])
                 //
-                // `sd_avg(τ)` is quadratic in τ — for concave-down (sddd < 0)
-                // segments the interior peak between the endpoints can sit above
-                // both by up to `(1/16)·|sddd|·(dt − 3h)²`. That residual gets
-                // absorbed by `resampled_check_slack`; bounding it exactly would
-                // need a cubic-in-NLP-vars row.
+                // Endpoint rows alone leave a concave-in-τ interior peak: when
+                // `sddd[k] < 0` the parabola `v_FD(τ)/secant = sd[k] + sdd[k]·
+                // (τ − h/2) + ½·sddd[k]·(τ² − τh + h²/3)` has its vertex at
+                // `τ* = h/2 − sdd[k]/sddd[k]` and exceeds both endpoints by up to
+                // `½·sdd[k]²/|sddd[k]|`. The interior rows below pin the parabola
+                // at additional fixed τ values with 2h spacing, closing the peak
+                // to `|sddd|·h²/2` (negligible for realistic params).
                 if v_max.is_finite() && v_max > 0.0 {
                     let v_start = secant_j * sd_k
                         + (secant_j * two_and_a_half_h) * sdd_k
@@ -520,6 +565,28 @@ fn build_and_solve_inner<const N: usize>(
                         + (-secant_j * h_sq_6) * sddd_k;
                     subject_to!(problem, v_end_neg <= v_max);
                     counts.joint_v += 4;
+
+                    // Interior V_FD rows at τ = i·h for i ∈ {5, 7, …} up to
+                    // `floor(dt_lower_k / h)`. Each is a linear combination of
+                    // `(sd[k], sdd[k], sddd[k])` evaluating `v_FD(τ)/secant` at
+                    // that fixed τ. 2h spacing is enough to bound the residual
+                    // peak to `|sddd|·h²/2` ≈ 0.3 % of `v_max` for typical params.
+                    let mut i = 5_usize;
+                    while i <= max_interior_i {
+                        let i_f = i as f64;
+                        let coeff_sdd = (i_f - 0.5) * h;
+                        let coeff_sddd = ((3.0 * i_f - 3.0) * i_f + 1.0) / 6.0 * h * h;
+                        let v_i = secant_j * sd_k
+                            + (secant_j * coeff_sdd) * sdd_k
+                            + (secant_j * coeff_sddd) * sddd_k;
+                        subject_to!(problem, v_i <= v_max);
+                        let v_i_neg = -secant_j * sd_k
+                            + (-secant_j * coeff_sdd) * sdd_k
+                            + (-secant_j * coeff_sddd) * sddd_k;
+                        subject_to!(problem, v_i_neg <= v_max);
+                        counts.joint_v += 2;
+                        i += 2;
+                    }
                 }
 
                 // A at τ = 3h:       secant·(sdd[k] + 2h·sddd[k])
@@ -571,6 +638,8 @@ fn build_and_solve_inner<const N: usize>(
 
                     // TCP V at τ = 3h: |sd[k] + 2.5h·sdd[k] + (19/6)·h²·sddd[k]| · ‖tcp_tangent‖ ≤ v_max
                     // TCP V at τ = dt[k]: |sd[k+1] − h/2·sdd[k+1] + h²/6·sddd[k]| · ‖tcp_tangent‖ ≤ v_max
+                    // Plus interior rows at τ = 5h, 7h, … to close the concave-down
+                    // parabola peak in the same way as the joint V rows above.
                     if tcp.v_max.is_finite() && tcp.v_max > 0.0 {
                         let upper = (tcp.v_max * FD_RELAX) / norm;
                         let sd_avg_start = sd_k + two_and_a_half_h * sdd_k + nineteen_sixth_h_sq * sddd_k;
@@ -578,6 +647,16 @@ fn build_and_solve_inner<const N: usize>(
                         let sd_avg_end = sd_k1 + (-h_half) * sdd_k1 + h_sq_6 * sddd_k;
                         subject_to!(problem, sd_avg_end <= upper);
                         counts.tcp_v += 2;
+                        let mut i = 5_usize;
+                        while i <= max_interior_i {
+                            let i_f = i as f64;
+                            let coeff_sdd = (i_f - 0.5) * h;
+                            let coeff_sddd = ((3.0 * i_f - 3.0) * i_f + 1.0) / 6.0 * h * h;
+                            let sd_avg_i = sd_k + coeff_sdd * sdd_k + coeff_sddd * sddd_k;
+                            subject_to!(problem, sd_avg_i <= upper);
+                            counts.tcp_v += 1;
+                            i += 2;
+                        }
                     }
 
                     // TCP A at τ = 3h:    |sdd[k] + 2h·sddd[k]| · ‖tcp_tangent‖ ≤ a_max
@@ -608,24 +687,39 @@ fn build_and_solve_inner<const N: usize>(
         }
     }
 
-    // Cross-knot output-FD bound. The resampler emits chord-linear joint samples
-    // inside each densified segment, so the joint-space chord direction
-    // `D_k = (waypoints[k+1] − waypoints[k]) / ds[k]` is constant within a segment
-    // but jumps across each interior densified knot. A backward-FD stencil whose
-    // window straddles knot `k` reads a single-sample spike whose worst-case
-    // magnitude (sample at τ = h past the knot) is
-    //   |a_FD| ≤ |D_k − D_{k−1}|·sd[k] / h
-    //   |j_FD| ≤ |D_k − D_{k−1}|·sd[k] / h²
-    // (Backward-FD velocity at the crossing sample is just the new-segment chord
-    // velocity, which the per-knot V row already bounds, so no V row here.)
+    // Cross-knot output-FD bound. The resampler emits chord-linear joint
+    // samples, so the chord direction `D_k = (w[k+1] − w[k])/ds[k]` jumps
+    // across each interior densified knot. The full backward-FD readout at
+    // the post-knot worst-case (sample 1 past the knot, τ→h⁻) is, per
+    // component j:
     //
-    // These rows are linear in `sd[k]` and replace the previous strategy of
-    // letting `check_resampled_dynamics_against_limits` skip boundary-straddling
-    // stencils — we now bound the spike a priori so every output sample is
-    // validated by the downstream check.
+    //   a_FD_j ≈ sd[K]·ΔD_j/h
+    //          + (1/2)·sdd[K]·(D_new_j + D_old_j)
+    //          + (h/6)·(sddd[K]·D_new_j − sddd[K-1]·D_old_j)
+    //
+    //   j_FD_j ≈ sd[K]·ΔD_j/h²
+    //          + (1/2)·sdd[K]·ΔD_j/h
+    //          + (1/6)·sddd[K]·D_new_j
+    //          + (5/6)·sddd[K-1]·D_old_j
+    //
+    // (with `ΔD = D_new − D_old`). Only the leading `sd·ΔD/h^n` term is
+    // *unbounded* by the per-segment analytical rows; the sdd / sddd tails are
+    // already constrained per segment but their cross-knot combinations can
+    // still reach a substantial fraction of the limit (the sddd weights sum
+    // to 1 in jerk). Bounding the whole linear combination in a single IPM
+    // row over-constrains the optimizer into feasibility restoration on
+    // tight axis-flip paths, so we cap only the leading spike at
+    // `KNOT_SD_BUDGET` of the limit and let `resampled_check_slack` absorb
+    // the remainder. Empirically 0.78 is the largest budget that keeps the
+    // tail-driven overshoot under the check's 10% slack envelope on the
+    // sharp-corner stress tests without flipping any IPM into infeasibility.
+    //
+    // Cross-knot V_FD at the post-knot sample is `D_new·sd[K]`, already
+    // bounded by the analytical V row in segment K, so no V cross-knot row.
     if h > 0.0 && !path_too_short_for_fd {
-        let knot_a_rhs = h;
-        let knot_j_rhs = h * h;
+        const KNOT_SD_BUDGET: f64 = 0.78;
+        let knot_a_rhs = h * KNOT_SD_BUDGET;
+        let knot_j_rhs = h * h * KNOT_SD_BUDGET;
         for k in 1..seg {
             let ds_prev = deriv.ds[k - 1];
             let ds_curr = deriv.ds[k];

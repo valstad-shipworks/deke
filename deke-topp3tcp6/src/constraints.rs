@@ -132,22 +132,20 @@ pub struct SolverOptions {
     /// false to disable for benchmarking the single-stage baseline.
     pub two_stage_warm_start: bool,
     /// Relative slack for the backward-difference V/A/J check on the resampled
-    /// output. Default `1e-1` — sized to absorb the *quadratic-interior-overshoot
-    /// floor* of the chord-linear resampler.
+    /// output. Default `1e-1` — sized to absorb residual chord-linear FD overshoot
+    /// that no affine NLP row can pin tightly.
     ///
-    /// The NLP enforces output-FD bounds at `τ = 3h`, `τ = dt[k]` per segment plus
-    /// an explicit cross-knot row at every interior densified knot, so every FD
-    /// sample the check actually evaluates is bounded a priori at the endpoints of
-    /// each `[3h, dt[k]]` window and at every densified-segment boundary. The
-    /// residual is the concave-in-τ V case: `v_FD(τ)/secant = sd[k] + sdd[k]·(τ −
-    /// h/2) + ½·sddd[k]·(τ² − τh + h²/3)` is quadratic in `τ`, and when `sddd[k] <
-    /// 0` it has an interior peak at `τ* = h/2 − sdd[k]/sddd[k]` that exceeds both
-    /// endpoint values by up to `½·sdd[k]²/|sddd[k]|`. The exact peak depends on
-    /// IPM-variable ratios so it can't be bounded by an affine row; empirically it
-    /// runs 3–8 % of `v_max` on rail-dominant straight motions where the IPM pushes
-    /// `|sddd|` near its limit. Closing the gap entirely would need a midpoint row
-    /// whose argument is a product of decision variables (quadratic IPM term);
-    /// 10 % covers the empirical floor with margin.
+    /// The NLP enforces output-FD bounds at the segment endpoints `τ = 3h`,
+    /// `τ = dt[k]`, at densely-sampled interior τ = 5h, 7h, …, and a leading-order
+    /// cross-knot row `|D_k − D_{k−1}|·sd[k] / h^n ≤ limit` at every interior
+    /// densified knot. The residual that escapes those rows is the *combined* FD
+    /// reading at the worst-case post-knot sample, where the cross-knot spike
+    /// stacks with the analytical kinematic contribution `D·sddd` (jerk) or
+    /// `(D_k+D_{k−1})/2 · sdd` (acceleration). Bounding that sum strictly is
+    /// infeasible whenever the analytical row is near-binding — the two
+    /// contributions can't both reach their limit in the FD readout, but the
+    /// either-or is a disjunction the IPM can't express. Empirically the stacked
+    /// overshoot is ~5–10 % of the limit on sharp-corner paths; 10 % covers it.
     pub resampled_check_slack: f64,
     /// When true, the retimer applies a global time-rescale after the IPM solve so
     /// that `total_time` is the smallest multiple of `cycle_time = 1/sample_rate_hz`
