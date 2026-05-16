@@ -1,0 +1,11 @@
+[package]
+name = "deke-topp3tcp-spline"
+version = "1.5.2"
+edition = "2024"
+description = "Discrete TOPP-3TCP retimer using a B-spline path representation and depth-first search over jerk candidates."
+
+[dependencies]
+deke-types = { version = "1.5.2" }
+glam-traits-ext = { version = "0.32.3", features = ["approx"] }
+ndarray = { version = "0.17.2" }
+thiserror = "2.0.18"

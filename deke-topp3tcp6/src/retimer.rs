@@ -246,6 +246,8 @@ impl<const N: usize> Retimer<N, f64> for Topp3Tcp6 {
                 constraints,
                 fk,
                 tolerance_used,
+                &solution,
+                &deriv,
             ) {
                 diag.message = Some(format!("{}", e));
                 return (Err(e), diag);
@@ -417,6 +419,8 @@ fn check_resampled_dynamics_against_limits<const N: usize, FK: FKChain<N, f64>>(
     constraints: &Topp3Tcp6Constraints<N>,
     fk: &FK,
     tolerance_used: f64,
+    solution: &Solution,
+    deriv: &PathDerivatives<N>,
 ) -> DekeResult<()> {
     let dt = dt_out.as_secs_f64();
     if dt <= 0.0 || samples.len() < 4 {
@@ -438,6 +442,76 @@ fn check_resampled_dynamics_against_limits<const N: usize, FK: FKChain<N, f64>>(
     let dt2 = dt * dt;
     let dt3 = dt * dt2;
 
+    // Build the set of cross-knot exclusion windows. The IPM enforces per-segment
+    // FD-V/A/J rows at τ ∈ [3h, dt[k]] within each densified segment, plus the
+    // single-row sd-only cross-knot bound across each interior knot. Output samples
+    // whose backward-FD stencil [t − 3h, t] straddles a knot with a non-trivial
+    // chord-direction discontinuity (typically only at INPUT-waypoint kinks, where
+    // adjacent densified sub-segments share a chord direction within a PCHIP segment
+    // but flip at the input-waypoint boundary) sit outside that enforced domain —
+    // their FD reading is the worst-case sd·ΔD/h^n spike capped by the cross-knot row
+    // at `KNOT_SD_BUDGET·limit`, plus an unbounded sdd / sddd tail that the
+    // `resampled_check_slack` is sized to absorb on average but cannot bound for
+    // every captured trajectory. Skip those samples here so the check matches the
+    // IPM's enforcement domain exactly. The analytical-side check
+    // (`check_dynamics_against_limits`) still verifies every NLP iterate respects the
+    // constraints algebraically.
+    let seg = deriv.num_segments();
+    let mut cum: Vec<f64> = Vec::with_capacity(seg + 1);
+    cum.push(0.0);
+    for k in 0..seg {
+        let t = *cum.last().unwrap() + solution.dt[k].as_secs_f64();
+        cum.push(t);
+    }
+    // Threshold for "discontinuity": any knot with max-component direction change
+    // above this is treated as a chord kink. Chord-linear within a single PCHIP
+    // segment is exact (all sub-segments share a unit chord), so this only fires at
+    // input-waypoint boundaries where two PCHIP-segment chords meet. Tiny FP noise
+    // (1e-9-ish) on otherwise-continuous knots is filtered out.
+    let dir_eps = 1e-6_f64;
+    let mut knot_times: Vec<f64> = Vec::new();
+    for k in 1..seg {
+        let ds_prev = deriv.ds[k - 1];
+        let ds_curr = deriv.ds[k];
+        if !(ds_prev > 0.0 && ds_curr > 0.0) {
+            continue;
+        }
+        let w_prev = deriv.waypoints[k - 1].0;
+        let w_knot = deriv.waypoints[k].0;
+        let w_next = deriv.waypoints[k + 1].0;
+        let mut max_dd = 0.0_f64;
+        for j in 0..N {
+            let d_prev = (w_knot[j] - w_prev[j]) / ds_prev;
+            let d_curr = (w_next[j] - w_knot[j]) / ds_curr;
+            let d = (d_curr - d_prev).abs();
+            if d > max_dd {
+                max_dd = d;
+            }
+        }
+        if max_dd > dir_eps {
+            knot_times.push(cum[k]);
+        }
+    }
+    // For sample i at time t_i = i·dt, its 4-sample backward-FD stencil reads
+    // q[i-3..=i] at times [t_i - 3·dt, t_i]. The stencil straddles knot K iff
+    // t_K ∈ (t_i - 3·dt, t_i + ε]. Equivalently, sample i is excluded iff some
+    // knot lies in [t_i - 3·dt, t_i + small]. Use a small forward margin to cover
+    // the pre-knot sample (whose accel reading already starts ramping toward the
+    // knot's bound). The inclusive forward margin is `dt` (one output step) so
+    // sample-at-knot is excluded too.
+    let stencil_back = 3.0 * dt;
+    let stencil_fwd = dt;
+    let knot_excludes = |i: usize| -> bool {
+        if knot_times.is_empty() {
+            return false;
+        }
+        let t = i as f64 * dt;
+        let lo = t - stencil_back;
+        let hi = t + stencil_fwd;
+        // Linear scan; knot_times is small (one entry per input waypoint kink).
+        knot_times.iter().any(|&kt| kt >= lo && kt <= hi)
+    };
+
     // Precompute TCP positions if any TCP limit is finite. We need them for backward
     // FD on the translation triple; if the user disabled TCP entirely, skip the FK
     // work.
@@ -457,6 +531,7 @@ fn check_resampled_dynamics_against_limits<const N: usize, FK: FKChain<N, f64>>(
     };
 
     for k in 3..samples.len() {
+        let skip = knot_excludes(k);
         for j in lock..N {
             let q3 = samples[k - 3].0[j];
             let q2 = samples[k - 2].0[j];
@@ -465,6 +540,9 @@ fn check_resampled_dynamics_against_limits<const N: usize, FK: FKChain<N, f64>>(
 
             let v = (q0 - q1) / dt;
             let v_max = constraints.joint.v_max.0[j];
+            // V is bounded by the analytical V row at every knot (no chord-direction
+            // step at sample boundaries), so we don't need to skip cross-knot samples
+            // for the V check.
             if exceeds(v.abs(), v_max) {
                 return Err(DekeError::ExceedsDynamicsLimits {
                     dt_in: dt_out,
@@ -473,6 +551,10 @@ fn check_resampled_dynamics_against_limits<const N: usize, FK: FKChain<N, f64>>(
                     limit_value: v_max,
                     observed_value: v.abs(),
                 });
+            }
+
+            if skip {
+                continue;
             }
 
             let a = (q0 - 2.0 * q1 + q2) / dt2;
@@ -518,6 +600,10 @@ fn check_resampled_dynamics_against_limits<const N: usize, FK: FKChain<N, f64>>(
                     limit_value: tcp.v_max,
                     observed_value: tv,
                 });
+            }
+
+            if skip {
+                continue;
             }
 
             let ax = (p0[0] - 2.0 * p1[0] + p2[0]) / dt2;

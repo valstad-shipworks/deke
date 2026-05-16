@@ -156,7 +156,7 @@ fn external_cfg() -> Topp3Tcp6Constraints<6> {
     // here keeps these focused on the solver-convergence behavior they were
     // captured to exercise. Production callers see the resampled check by
     // default; this is a per-fixture relaxation.
-    cfg.check_output_dynamics = false;
+    cfg.check_output_dynamics = true;
     // Match the producing project's looser projection tolerance (default is 1e-4).
     cfg.boundary.projection_tolerance = 1e-3;
     cfg

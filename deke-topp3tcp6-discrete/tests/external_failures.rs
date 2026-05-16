@@ -148,15 +148,11 @@ fn external_cfg() -> Topp3Tcp6DiscreteConstraints<6> {
     });
     cfg.sample_rate_hz = 125.0;
     cfg.post_validation = false;
-    // These captured trajectories test solver convergence on curved paths with
-    // high PCHIP qppp at densified knots — the chord-linear resampler then
-    // delivers a backward-FD jerk that legitimately exceeds j_max by up to 2×
-    // (the analytical NLP cancels `qppp·sd³` against `qp·sddd`, but the chord-
-    // linear output sees only the bare `sddd` term). Disabling the output check
-    // here keeps these focused on the solver-convergence behavior they were
-    // captured to exercise. Production callers see the resampled check by
-    // default; this is a per-fixture relaxation.
-    cfg.check_output_dynamics = false;
+    // Enable the strict output-FD check on the resampled samples. The
+    // discrete formulation enforces the same backward-FD bounds that the
+    // verifier measures, so any violation here is a real bug in the
+    // discrete crate's row construction or solve.
+    cfg.check_output_dynamics = true;
     // Match the producing project's looser projection tolerance (default is 1e-4).
     cfg.boundary.projection_tolerance = 1e-3;
     cfg

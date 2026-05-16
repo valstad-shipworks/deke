@@ -145,6 +145,25 @@ pub fn build_and_solve_discrete<const N: usize>(
     )
 }
 
+/// Variant of [`build_and_solve_discrete`] that overrides the per-solve IPM
+/// timeout. Used by the bisection driver to short-circuit feasibility-
+/// restoration hangs at adversarial `K` values without affecting the strict
+/// post-bisection solves.
+pub fn build_and_solve_discrete_with_timeout<const N: usize>(
+    deriv: &PathDerivatives<N>,
+    constraints: &Topp3Tcp6DiscreteConstraints<N>,
+    start: ProjectedBoundary,
+    end: ProjectedBoundary,
+    k_samples: usize,
+    with_slacks: bool,
+    warm_sigma: Option<&[f64]>,
+    timeout: Option<Duration>,
+) -> DekeResult<DiscreteSolution> {
+    build_and_solve_discrete_inner(
+        deriv, constraints, start, end, k_samples, with_slacks, warm_sigma, None, timeout,
+    )
+}
+
 /// Variant of [`build_and_solve_discrete`] that lets the caller override the
 /// per-sample bin assignment. Used by [`crate::retimer`] for the post-solve
 /// re-bin loop: after solving with proportional bins, the actual `σ` values
@@ -159,6 +178,22 @@ pub fn build_and_solve_discrete_with_bins<const N: usize>(
     with_slacks: bool,
     warm_sigma: Option<&[f64]>,
     bins_override: Option<&[usize]>,
+) -> DekeResult<DiscreteSolution> {
+    build_and_solve_discrete_inner(
+        deriv, constraints, start, end, k_samples, with_slacks, warm_sigma, bins_override, None,
+    )
+}
+
+fn build_and_solve_discrete_inner<const N: usize>(
+    deriv: &PathDerivatives<N>,
+    constraints: &Topp3Tcp6DiscreteConstraints<N>,
+    start: ProjectedBoundary,
+    end: ProjectedBoundary,
+    k_samples: usize,
+    with_slacks: bool,
+    warm_sigma: Option<&[f64]>,
+    bins_override: Option<&[usize]>,
+    timeout_override: Option<Duration>,
 ) -> DekeResult<DiscreteSolution> {
     if k_samples < 4 {
         return Err(DekeError::PathTooShort(k_samples));
@@ -465,8 +500,19 @@ pub fn build_and_solve_discrete_with_bins<const N: usize>(
 
     let iter_counter = Arc::new(AtomicI32::new(0));
     let ic = iter_counter.clone();
+    let effective_timeout = timeout_override.or(constraints.solver.timeout);
+    let cb_deadline: Option<Instant> = effective_timeout.map(|t| Instant::now() + t);
     problem.add_callback(move |_info| {
         ic.fetch_add(1, Ordering::Relaxed);
+        // Return `true` to request the IPM to stop. Sleipnir's
+        // `options.timeout` only fires at the *start* of each outer iter and
+        // never preempts the slow feasibility-restoration sub-iters, so we
+        // also check the deadline here on every callback hit.
+        if let Some(d) = cb_deadline
+            && Instant::now() >= d
+        {
+            return true;
+        }
         false
     });
 
@@ -474,7 +520,7 @@ pub fn build_and_solve_discrete_with_bins<const N: usize>(
         .tolerance(constraints.solver.tolerance)
         .max_iterations(constraints.solver.max_iterations)
         .diagnostics(constraints.solver.diagnostics);
-    if let Some(t) = constraints.solver.timeout {
+    if let Some(t) = effective_timeout {
         options = options.timeout(t);
     }
 

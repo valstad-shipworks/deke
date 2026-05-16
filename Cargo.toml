@@ -6,7 +6,9 @@ members = [
     "deke-cricket",
     "deke-topp3tcp6",
     "deke-topp3tcp6-discrete",
-    "deke-topp-speed"
+    "deke-topp3tcp-spline",
+    "deke-topp-speed",
+    "deke-bench-retimers",
 ]
 resolver = "2"
 
@@ -19,3 +21,10 @@ opt-level = 3
 lto = "fat"
 codegen-units = 1
 opt-level = 3
+
+# Unify all `deke-types` consumers (some sub-crates declare it via the
+# `1.5.2` registry version) onto the workspace's path copy. Without this,
+# the dependency graph contains two distinct `deke-types` crates and types
+# don't unify across consumers — see `cargo tree -d`.
+[patch.crates-io]
+deke-types = { path = "deke-types" }

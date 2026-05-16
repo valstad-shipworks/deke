@@ -11,7 +11,10 @@ use crate::constraints::{DensificationOptions, Topp3Tcp6DiscreteConstraints};
 use crate::diagnostic::{
     BisectionStep, LimitingGroup, SolveStatus, Topp3Tcp6DiscreteDiagnostic,
 };
-use crate::nlp::{DiscreteSolution, bins_from_sigma, build_and_solve_discrete, build_and_solve_discrete_with_bins};
+use crate::nlp::{
+    DiscreteSolution, bins_from_sigma, build_and_solve_discrete,
+    build_and_solve_discrete_with_bins, build_and_solve_discrete_with_timeout,
+};
 use crate::path_derivatives::PathDerivatives;
 use crate::verify::verify_output_fd;
 
@@ -130,36 +133,85 @@ impl<const N: usize> Retimer<N, f64> for Topp3Tcp6Discrete {
         // factor, which would send the probe loop doubling for nothing.
         // Use the seed only as the σ warm-start; the bisection's K_hi keeps
         // its v_max-derived initial guess and grows from there.
+        let trace_b = std::env::var("DEKE_DISCRETE_TRACE").is_ok();
         let mut warm: Option<Vec<f64>> = None;
         if constraints.solver.seed_from_topp_speed
             && let Some(seed) = topp_speed_seed::<N, _>(&deriv, path, constraints, fk, h)
         {
+            // Use 4× topp-speed's sample count as a starting `K_hi`. Topp-
+            // speed respects joint V/A/J and TCP V but not TCP A/J, so its
+            // `K` underestimates the discrete crate's required `K` on TCP-
+            // A/J-binding paths (typically by 1.5–4×). Quadrupling it as the
+            // initial `K_hi` lets the probe loop skip the slowest slack-mode
+            // probes on those paths — sleipnir's per-solve timeout doesn't
+            // preempt within an iter, so each narrowly-infeasible-K probe
+            // costs tens of seconds. The bisection narrows back down to the
+            // smallest feasible `K` quickly because each strict probe runs
+            // in ~100 ms.
+            let seed_k_hi = seed.0.saturating_mul(4);
+            if seed_k_hi > k_hi {
+                k_hi = seed_k_hi;
+            }
             warm = Some(seed.1);
+            if trace_b {
+                eprintln!(
+                    "[discrete] topp-speed seed K={} → initial K_hi={}",
+                    seed.0, k_hi
+                );
+            }
         }
 
         let mut last_feasible: Option<DiscreteSolution> = None;
         let max_iter = constraints.solver.max_bisection_iterations.max(1);
         let tol = constraints.solver.tolerance;
 
+        // Per-probe IPM timeout. The slack-mode bisection only needs a
+        // feasible/infeasible verdict; if the IPM enters feasibility
+        // restoration and grinds, we'd rather move on and grow K. Capped to
+        // the user-supplied `solver.timeout` when present (so users can still
+        // tighten further).
+        let probe_timeout = match constraints.solver.timeout {
+            Some(t) => Some(t.min(Duration::from_millis(500))),
+            None => Some(Duration::from_millis(500)),
+        };
+
         // Probe k_hi first; grow if infeasible. Captured-failure trajectories
         // (curved 6-DOF paths near singularities, long rest-to-rest moves with
         // a tight TCP) commonly need `K` 16–64× the v_max-derived lower bound;
         // 8 doublings gives a 256× headroom.
-        for _ in 0..8 {
-            let sol = build_and_solve_discrete::<N>(
-                &deriv, constraints, start, end, k_hi, true, warm.as_deref(),
+        //
+        // When a probe times out (sleipnir's feasibility-restoration sub-iter
+        // is uninterruptible — the per-solve timeout option fires at the
+        // *start* of each outer iter, so each iter still runs to completion),
+        // we treat that `K` as "infeasible and in the slow zone" and jump
+        // by 4× instead of 2× to skip ahead past the slow zone faster.
+        for probe in 0..8 {
+            let t = Instant::now();
+            let sol = build_and_solve_discrete_with_timeout::<N>(
+                &deriv, constraints, start, end, k_hi, true, warm.as_deref(), probe_timeout,
             );
+            if trace_b {
+                if let Ok(s) = &sol {
+                    eprintln!(
+                        "[discrete] probe#{} K={} status={:?} iter={} slack={:.3e} wall={:?}",
+                        probe, k_hi, s.status, s.iterations, s.slack, t.elapsed()
+                    );
+                } else {
+                    eprintln!("[discrete] probe#{} K={} ERR wall={:?}", probe, k_hi, t.elapsed());
+                }
+            }
             match sol {
                 Ok(s) => {
                     record_step(&mut diag.bisection_steps, &s);
                     let feasible = matches!(s.status, SolveStatus::Success) && s.slack < tol;
+                    let timed_out = matches!(s.status, SolveStatus::Timeout);
                     warm = Some(s.sigma.clone());
                     if feasible {
                         last_feasible = Some(s);
                         break;
                     } else {
                         k_lo = k_hi;
-                        k_hi *= 2;
+                        k_hi *= if timed_out { 4 } else { 2 };
                     }
                 }
                 Err(e) => {
@@ -181,14 +233,53 @@ impl<const N: usize> Retimer<N, f64> for Topp3Tcp6Discrete {
             return (Err(err), diag);
         }
 
-        // Standard bisection.
-        for _ in 0..max_iter {
+        // Standard bisection. We use strict (no-slack) mode here so the IPM
+        // returns `LocallyInfeasible` quickly on infeasible `K` instead of
+        // grinding feasibility-restoration sub-iters for tens of seconds.
+        // The slack-mode probing above established that `K_hi` is feasible,
+        // and the warm σ from that solve is a good interior starting point;
+        // strict mode just verifies that smaller `K` values are still
+        // feasible (Success) vs not (LocallyInfeasible). Sleipnir's per-iter
+        // timeout doesn't preempt feasibility-restoration sub-iters within
+        // an iter, so slack-mode bisection probes at narrowly-infeasible K
+        // would otherwise blow the wall budget.
+        //
+        // We also bail out of the bisection if it consumes more wall-time
+        // than the strict K_hi probe took. The slow zone in the IPM is
+        // typically narrow (a few percent of K), so once we've spent that
+        // much extra time on `K_mid` probes we're paying more for marginal
+        // K-reduction than the runtime savings justify.
+        let bisect_start = Instant::now();
+        // Default 2 s bisection budget — enough for ~10–20 strict probes at
+        // typical K (100–200 ms each) plus the occasional 500 ms-bounded
+        // timeout. Adversarial paths that need many probes bail out with
+        // `K_hi` as the final answer (the trajectory is still feasible, just
+        // not the K-optimal one). The user can override via
+        // `solver.timeout`, which takes precedence here too.
+        let bisect_wall_budget = constraints
+            .solver
+            .timeout
+            .unwrap_or(Duration::from_millis(2000));
+        for biter in 0..max_iter {
             if k_hi - k_lo <= 1 {
                 break;
             }
+            if bisect_start.elapsed() > bisect_wall_budget {
+                if trace_b {
+                    eprintln!(
+                        "[discrete] bisect budget exhausted after #{} ({:?} > {:?}); keeping K_hi={}",
+                        biter,
+                        bisect_start.elapsed(),
+                        bisect_wall_budget,
+                        k_hi
+                    );
+                }
+                break;
+            }
             let k_mid = (k_lo + k_hi) / 2;
-            let sol = build_and_solve_discrete::<N>(
-                &deriv, constraints, start, end, k_mid, true, warm.as_deref(),
+            let t = Instant::now();
+            let sol = build_and_solve_discrete_with_timeout::<N>(
+                &deriv, constraints, start, end, k_mid, false, warm.as_deref(), probe_timeout,
             );
             let s = match sol {
                 Ok(s) => s,
@@ -197,12 +288,23 @@ impl<const N: usize> Retimer<N, f64> for Topp3Tcp6Discrete {
                     break;
                 }
             };
+            if trace_b {
+                eprintln!(
+                    "[discrete] bisect#{} K={} (lo={} hi={}) status={:?} iter={} slack={:.3e} wall={:?}",
+                    biter, k_mid, k_lo, k_hi, s.status, s.iterations, s.slack, t.elapsed()
+                );
+            }
             record_step(&mut diag.bisection_steps, &s);
-            let feasible = matches!(s.status, SolveStatus::Success) && s.slack < tol;
-            warm = Some(s.sigma.clone());
+            let feasible = matches!(s.status, SolveStatus::Success);
             if feasible {
+                warm = Some(s.sigma.clone());
                 k_hi = k_mid;
                 last_feasible = Some(s);
+            } else if matches!(s.status, SolveStatus::Timeout) {
+                // The IPM ran out of wall budget at this `K` — treat as
+                // infeasible *and* shrink the remaining bisection budget so
+                // we don't fall into the same slow zone again.
+                k_lo = k_mid;
             } else {
                 k_lo = k_mid;
             }
@@ -210,24 +312,27 @@ impl<const N: usize> Retimer<N, f64> for Topp3Tcp6Discrete {
 
         let lf = last_feasible.unwrap();
         // Strict-feasible margin: try a strict (no-slack) re-solve at
-        // `K_bisection + 2` so the IPM has interior headroom — `slack` at the
-        // bisection optimum is bounded by `tolerance` in σ-units, which
-        // translates to relative FD overshoot `slack / rhs` (typically ~1% on
-        // the tightest `j_max·h³` row). On hard / large-K paths the strict
-        // re-solve sometimes declares `LocallyInfeasible` because the
-        // warm-start σ sits right on the slack-relaxed feasibility boundary
-        // — in that case we fall back to the bisection's slack-feasible
-        // solution directly. With `check_output_dynamics = true` the
-        // verifier downstream gates on the FD residual, so the small
-        // overshoot is caught explicitly.
-        let strict_k = lf.k + 2;
+        // `K_bisection + headroom` so the IPM has interior headroom. The
+        // slack-feasible σ at the bisection optimum can overshoot a row by
+        // up to `slack / rhs` (relative), which on the tightest `j_max·h³`
+        // row is ~9% at `tol=1e-6`. A few percent of extra K converts that
+        // slack into actual feasibility; if not, the verify-and-bump loop
+        // below grows `K` until the chord-FD output passes the strict check.
+        let trace = std::env::var("DEKE_DISCRETE_TRACE").is_ok();
         let t_solve = Instant::now();
-        let strict_attempt = build_and_solve_discrete::<N>(
-            &deriv, constraints, start, end, strict_k, false, Some(&lf.sigma),
-        );
-        let mut final_sol = match strict_attempt {
-            Ok(s) if matches!(s.status, SolveStatus::Success) => s,
-            _ => lf,
+        let mut final_sol = {
+            let strict_k = lf.k + (lf.k / 40).max(2);
+            let t = Instant::now();
+            let strict_attempt = build_and_solve_discrete::<N>(
+                &deriv, constraints, start, end, strict_k, false, Some(&lf.sigma),
+            );
+            if trace {
+                eprintln!("[discrete] strict@K={} took {:?}", strict_k, t.elapsed());
+            }
+            match strict_attempt {
+                Ok(s) if matches!(s.status, SolveStatus::Success) => s,
+                _ => lf,
+            }
         };
 
         // Re-bin loop. The build-time bins came from `proportional_bins`,
@@ -237,27 +342,63 @@ impl<const N: usize> Retimer<N, f64> for Topp3Tcp6Discrete {
         // reconstruction — the downstream FD check then sees spikes at the
         // mis-binned samples. Re-solve with the corrected bins; converges in
         // 1–3 iterations on typical paths.
-        for _rebin in 0..6 {
-            let actual_bins = bins_from_sigma(&deriv.s, &final_sol.sigma);
-            if actual_bins == final_sol.bins_used {
+        let t = Instant::now();
+        let iters = rebin_to_convergence::<N>(&deriv, constraints, start, end, &mut final_sol, 16);
+        if trace {
+            eprintln!("[discrete] rebin took {:?} ({} iters)", t.elapsed(), iters);
+        }
+
+        // Verify-and-bump loop. Even after the rebin converges, the FD-output
+        // can violate joint v/a/j when `slack` at the bisection optimum was
+        // close to `tolerance` — the slack-feasible σ overshoots its bound by
+        // a small amount that the strict check catches as a real violation.
+        // Bump `K` (≥+2, +5% of K) and re-solve; the larger sample count
+        // gives the IPM more room to find a strictly feasible σ. We cap the
+        // bump loop at 4 attempts so adversarial paths fail cleanly rather
+        // than spinning.
+        let dt_out = Duration::from_secs_f64(h);
+        let mut verify_residual = crate::diagnostic::PerLimitResidual::default();
+        let mut verify_result: DekeResult<()> = Ok(());
+        for bump in 0..5 {
+            let samples_try = sigma_to_samples(&final_sol.sigma, &deriv);
+            let (r, vr) = verify_output_fd(
+                &samples_try, dt_out, constraints, fk, constraints.solver.tolerance,
+            );
+            verify_residual = r;
+            verify_result = vr;
+            if !constraints.check_output_dynamics || verify_result.is_ok() {
+                if trace {
+                    eprintln!("[discrete] verify passed after {} bumps", bump);
+                }
                 break;
             }
-            match build_and_solve_discrete_with_bins::<N>(
-                &deriv,
-                constraints,
-                start,
-                end,
-                final_sol.k,
-                false,
-                Some(&final_sol.sigma),
-                Some(&actual_bins),
-            ) {
+            let next_k = final_sol.k + (final_sol.k / 20).max(2);
+            let t = Instant::now();
+            let bumped = build_and_solve_discrete::<N>(
+                &deriv, constraints, start, end, next_k, false, Some(&final_sol.sigma),
+            );
+            if trace {
+                eprintln!("[discrete] bump@K={} took {:?}", next_k, t.elapsed());
+            }
+            match bumped {
                 Ok(s) if matches!(s.status, SolveStatus::Success) => {
                     final_sol = s;
+                    let t = Instant::now();
+                    let iters = rebin_to_convergence::<N>(
+                        &deriv, constraints, start, end, &mut final_sol, 16,
+                    );
+                    if trace {
+                        eprintln!(
+                            "[discrete] bump rebin took {:?} ({} iters)",
+                            t.elapsed(),
+                            iters
+                        );
+                    }
                 }
                 _ => break,
             }
         }
+
         diag.final_k = final_sol.k;
         diag.phase_timing.nlp_solve = t_solve.elapsed();
         diag.iterations = final_sol.iterations;
@@ -279,19 +420,11 @@ impl<const N: usize> Retimer<N, f64> for Topp3Tcp6Discrete {
             }
         };
 
-        // Strict verification.
+        // Strict verification result is already computed by the bump loop above.
         let t_verify = Instant::now();
-        let dt_out = Duration::from_secs_f64(h);
-        let (residual, verify_res) = verify_output_fd(
-            traj_path.iter().as_slice(),
-            dt_out,
-            constraints,
-            fk,
-            constraints.solver.tolerance,
-        );
-        diag.output_fd_residual = residual;
+        diag.output_fd_residual = verify_residual;
         diag.phase_timing.verify = t_verify.elapsed();
-        if constraints.check_output_dynamics && let Err(e) = verify_res {
+        if constraints.check_output_dynamics && let Err(e) = verify_result {
             diag.message = Some(format!("{}", e));
             return (Err(e), diag);
         }
@@ -314,6 +447,45 @@ impl<const N: usize> Retimer<N, f64> for Topp3Tcp6Discrete {
 
         (Ok(SRobotTraj::new(dt_out, traj_path)), diag)
     }
+}
+
+/// Re-solve with corrected bins until the IPM's σ values land in the same
+/// densified segment they were assigned to at build time. Without this, the
+/// FD-row coefficients (built against the build-time bins) don't match the
+/// chord-linear reconstruction at samples whose σ shifted across a segment
+/// boundary, and the strict FD-verify catches the discrepancy as a violation.
+fn rebin_to_convergence<const N: usize>(
+    deriv: &PathDerivatives<N>,
+    constraints: &Topp3Tcp6DiscreteConstraints<N>,
+    start: crate::boundary::ProjectedBoundary,
+    end: crate::boundary::ProjectedBoundary,
+    sol: &mut DiscreteSolution,
+    max_iter: usize,
+) -> usize {
+    let mut iters = 0usize;
+    for _ in 0..max_iter {
+        let actual_bins = bins_from_sigma(&deriv.s, &sol.sigma);
+        if actual_bins == sol.bins_used {
+            break;
+        }
+        iters += 1;
+        match build_and_solve_discrete_with_bins::<N>(
+            deriv,
+            constraints,
+            start,
+            end,
+            sol.k,
+            false,
+            Some(&sol.sigma),
+            Some(&actual_bins),
+        ) {
+            Ok(s) if matches!(s.status, SolveStatus::Success) => {
+                *sol = s;
+            }
+            _ => break,
+        }
+    }
+    iters
 }
 
 fn record_step(steps: &mut Vec<BisectionStep>, sol: &DiscreteSolution) {
