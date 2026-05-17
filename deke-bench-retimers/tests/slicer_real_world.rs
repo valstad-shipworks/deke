@@ -365,7 +365,7 @@ fn print_row(robot_tag: &str, prob_name: &str, n_wp: usize, r: &BenchResult<6>) 
         r.status.clone()
     };
     println!(
-        "  {:>3} {:<22} {:<19} {:>3}  {:>8} {:>7.3} {:>5.3} {:>5.3} {:>5.3} {} {:>5.3} {}   {}",
+        "  {:>3} {:<22} {:<19} {:>3}  {:>8} {:>7.3} {:>5.3} {:>5.3} {:>5.3} {} {:>5.3} {:>5.3} {}   {}",
         robot_tag,
         prob_name,
         r.retimer,
@@ -377,6 +377,7 @@ fn print_row(robot_tag: &str, prob_name: &str, n_wp: usize, r: &BenchResult<6>) 
         u.joint_j,
         u_tcpv,
         u.max_u,
+        u.peak_u,
         dev,
         status_or_err,
     );
@@ -390,6 +391,7 @@ struct PerRetimerStats {
     solve_ms_max: f64,
     duration_sum: f64,
     max_u_sum: f64,
+    peak_u_max: f64,
     dev_sum: f64,
     dev_max: f64,
 }
@@ -406,6 +408,9 @@ impl PerRetimerStats {
             self.duration_sum += r.trajectory_duration.as_secs_f64();
             if let Some(u) = r.utilization {
                 self.max_u_sum += u.max_u;
+                if u.peak_u > self.peak_u_max {
+                    self.peak_u_max = u.peak_u;
+                }
             }
             if let Some(d) = r.max_path_deviation {
                 self.dev_sum += d;
@@ -457,13 +462,13 @@ fn slicer_real_world() {
     );
     println!();
     println!(
-        "  {:>3} {:<22} {:<19} {:>3}  {:>8} {:>7} {:>5} {:>5} {:>5} {:>5} {:>5} {:>7}   {}",
+        "  {:>3} {:<22} {:<19} {:>3}  {:>8} {:>7} {:>5} {:>5} {:>5} {:>5} {:>5} {:>5} {:>7}   {}",
         "rob", "problem", "retimer", "wps", "solve_ms", "dur_s", "u_jv", "u_ja", "u_jj", "u_tcp",
-        "max_u", "dev_rad", "status"
+        "max_u", "peak_u", "dev_rad", "status"
     );
     println!(
         "  {}",
-        "-".repeat(120)
+        "-".repeat(126)
     );
 
     let mut stats_topp3tcp6 = PerRetimerStats::default();
@@ -490,8 +495,9 @@ fn slicer_real_world() {
     println!();
     println!("Aggregate stats across all {} problems:", problems.len());
     println!(
-        "  {:<20} {:>4}/{:<4} {:>10} {:>10} {:>10} {:>10} {:>10} {:>10}",
-        "retimer", "succ", "run", "mean_ms", "max_ms", "mean_dur", "mean_max_u", "mean_dev", "max_dev"
+        "  {:<20} {:>4}/{:<4} {:>10} {:>10} {:>10} {:>10} {:>10} {:>10} {:>10}",
+        "retimer", "succ", "run", "mean_ms", "max_ms", "mean_dur", "mean_max_u", "peak_u",
+        "mean_dev", "max_dev"
     );
     for (name, s) in [
         ("topp3tcp6", &stats_topp3tcp6),
@@ -500,7 +506,7 @@ fn slicer_real_world() {
         ("topp-speed", &stats_topp_speed),
     ] {
         println!(
-            "  {:<20} {:>4}/{:<4} {:>10.1} {:>10.1} {:>10.3} {:>10.3} {:>10.4} {:>10.4}",
+            "  {:<20} {:>4}/{:<4} {:>10.1} {:>10.1} {:>10.3} {:>10.3} {:>10.3} {:>10.4} {:>10.4}",
             name,
             s.successes,
             s.runs,
@@ -508,6 +514,7 @@ fn slicer_real_world() {
             s.solve_ms_max,
             s.mean_duration(),
             s.mean_max_u(),
+            s.peak_u_max,
             s.mean_dev(),
             s.dev_max,
         );

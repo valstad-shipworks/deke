@@ -79,6 +79,10 @@ fn straight_short_path_with_large_jerk_limits_solves() {
         search: SearchOptions {
             dt: 0.05,
             verify_dt: 0.05,
+            output_dt: None,
+            jerk_smoothing_passes: 0,
+            fd_safety_slack: 0.05,
+            max_jerk_jump: None,
             start_sdot: 0.0,
             end_sdot: 0.0,
             max_sdot: 10.0,

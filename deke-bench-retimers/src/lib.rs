@@ -257,6 +257,11 @@ pub struct Utilization {
     /// Only averaged over samples where every component is defined
     /// (`k in 3..n`, plus TCP availability if a TCP cap is set).
     pub max_u: f64,
+    /// Peak (max over samples) of the per-sample tightest-limit reading. Same
+    /// expression as [`max_u`](Self::max_u), but taken as the maximum across
+    /// samples instead of the mean. The relevant figure for "did the
+    /// backward-FD readout ever cross 1.05 × limit" checks.
+    pub peak_u: f64,
 }
 
 /// Single retimer's run against one problem.
@@ -552,6 +557,7 @@ pub fn average_utilization<const N: usize, FK: FKChain<N, f64>>(
     // samples where every component is defined (k in 3..n — jerk needs four
     // points). TCP enters the max only when a TCP cap was set.
     let mut sum_max_u = 0.0_f64;
+    let mut peak_max_u = 0.0_f64;
     let mut cnt_max_u = 0usize;
     for k in 3..n {
         let q0 = traj[k].0;
@@ -593,6 +599,9 @@ pub fn average_utilization<const N: usize, FK: FKChain<N, f64>>(
             sample_max = sample_max.max(tcps[k]);
         }
         sum_max_u += sample_max;
+        if sample_max > peak_max_u {
+            peak_max_u = sample_max;
+        }
         cnt_max_u += 1;
     }
 
@@ -606,6 +615,7 @@ pub fn average_utilization<const N: usize, FK: FKChain<N, f64>>(
         } else {
             0.0
         },
+        peak_u: peak_max_u,
     })
 }
 
@@ -895,7 +905,32 @@ fn run_topp3tcp_spline_inner<const N: usize, FK: FKChain<N, f64>>(
         // than the other retimers; column comparisons reflect that.
         search: SearchOptions {
             dt: 0.12,
-            verify_dt: 0.12,
+            // Tighter `verify_dt`: check fused-utilization at the output
+            // sample step inside each DFS segment, not just at the
+            // segment endpoint. Catches intra-segment analytical
+            // violations that the endpoint check alone would miss.
+            // Cost: ~30× DFS-work per node at this dt ratio, but DFS
+            // typically has ≪ depth=20 so total impact is bounded.
+            verify_dt: 1.0 / problem.sample_rate_hz,
+            // Emit at the problem's configured sample rate so this
+            // retimer's output cadence lines up with the others; the
+            // coarse DFS dt above is just the internal search step.
+            output_dt: Some(1.0 / problem.sample_rate_hz),
+            jerk_smoothing_passes: 0,
+            fd_safety_slack: 0.05,
+            // Cap on `|sdddot[k+1] − sdddot[k]|` between DFS segments —
+            // bounds the FD-jerk spike directly at source. Set to the
+            // largest per-axis joint jerk limit; empirically this is a
+            // good starting point (spike contribution scales as
+            // `|qp| × Δsdddot`, and `|qp|` is bounded by 1 for the
+            // unit-arclength spline path).
+            max_jerk_jump: Some(
+                problem
+                    .j_max
+                    .iter()
+                    .copied()
+                    .fold(0.0_f64, f64::max),
+            ),
             start_sdot: 0.0,
             end_sdot: 0.0,
             max_sdot: 10.0,

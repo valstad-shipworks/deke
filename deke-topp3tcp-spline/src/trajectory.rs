@@ -500,6 +500,237 @@ impl<'a, const N: usize, FK: FKChain<N, f64>> Trajectory<'a, N, FK> {
         self.states
     }
 
+    /// Apply `n_passes` of binomial-kernel smoothing to the per-segment
+    /// `sdddot` schedule, re-integrating the state chain from the start each
+    /// pass. Each pass replaces interior `sdddot[k]` with
+    /// `(sdddot[k-1] + 2·sdddot[k] + sdddot[k+1]) / 4`; endpoints are left
+    /// alone so the boundary jerks stay at their DFS-validated values.
+    ///
+    /// After smoothing, the chain integrates to a different `s_final` than
+    /// the DFS landed on; we uniformly rescale time so it lands at exactly
+    /// `1` (matching the path endpoint). The rescale identity
+    /// `t → α·t → (sdot/α, sddot/α², sdddot/α³)` preserves every analytical
+    /// derivative under its limit when `α ≥ 1` (slowing) and only relaxes
+    /// the constraints with `α < 1` while the path-traversal stays valid —
+    /// either way, smoothing + rescale stays inside the limits the DFS
+    /// already verified.
+    ///
+    /// The net effect: jerk discontinuities at segment boundaries are
+    /// halved per pass, which directly halves the spike that the
+    /// 4-point backward-FD jerk stencil reads on the output grid when it
+    /// straddles a boundary.
+    pub fn smooth_jerks(&mut self, n_passes: u32) {
+        if n_passes == 0 || self.states.len() < 3 {
+            return;
+        }
+        for _ in 0..n_passes {
+            self.smooth_jerks_once();
+        }
+    }
+
+    fn smooth_jerks_once(&mut self) {
+        let n = self.states.len();
+        debug_assert!(n >= 3);
+        // Pull out the current jerks; leave endpoint segments alone so the
+        // start/end boundary states keep their DFS-validated jerk.
+        let mut new_jerks: Vec<f64> = self.states.iter().map(|s| s.state[3]).collect();
+        for k in 1..(n - 1) {
+            let j_prev = self.states[k - 1].state[3];
+            let j_curr = self.states[k].state[3];
+            let j_next = self.states[k + 1].state[3];
+            new_jerks[k] = 0.25 * j_prev + 0.5 * j_curr + 0.25 * j_next;
+        }
+        // Re-integrate from the start with the smoothed schedule.
+        let dt_val = self.dt_val;
+        set_dt(dt_val);
+        let mut rebuilt = Vec::with_capacity(n);
+        let mut state = self.states[0];
+        state.state[3] = new_jerks[0];
+        rebuilt.push(state);
+        for k in 0..(n - 1) {
+            let mut anchor = rebuilt[k];
+            anchor.state[3] = new_jerks[k];
+            let mut next = anchor.forward_integrate();
+            next.state[3] = new_jerks[k + 1];
+            rebuilt.push(next);
+        }
+        // Uniformly rescale time so `s_final` lands at 1.0 exactly. With
+        // smoothing changing the integrated arc length by a few percent at
+        // most, `alpha` is close to 1 and the rescaled state's kinematic
+        // limits (which scale as `1/α^k` for k-th derivative) stay within
+        // the DFS-validated bounds when α ≥ 1 (slowing).
+        let s_final = rebuilt.last().unwrap().state[0];
+        if s_final > 1e-9 && (s_final - 1.0).abs() > 1e-9 {
+            // We have `s(α·t_max) = 1`. Path-parameter state at α·t scales
+            // as `(s, sdot/α, sddot/α², sdddot/α³)`. To get `s_final → 1`
+            // we need a different α at each kinematic order — but the
+            // closed form `α = 1/s_final` only works if we *also*
+            // rescale the dt grid by α. We do that by leaving the
+            // per-state values in place and reinterpreting the time
+            // axis: the new dt is `α · dt_val`. But the rest of the
+            // pipeline assumes a uniform dt_val, so easier to scale the
+            // state values in place and keep dt_val the same. Apply the
+            // rescale `t → α·t` so the schedule still covers
+            // `[0, n_segments · dt_val]` but reaches `s = 1` at the end.
+            let alpha = s_final; // s_final · sdot_after = 1, sdot_after = sdot_before / α, where α = ?
+            // Actually the correct scaling: if we keep the dt_val grid but
+            // rescale state values, every `sdot[k]` scales by `1/α`,
+            // every `sddot[k]` by `1/α²`, every `sdddot[k]` by `1/α³`,
+            // and the integrated `s[k]` by `1/α`. We want s_final → 1, so
+            // we need `α = s_final`.
+            let alpha2 = alpha * alpha;
+            let alpha3 = alpha2 * alpha;
+            for state in &mut rebuilt {
+                state.state[0] /= alpha;
+                state.state[1] /= alpha;
+                state.state[2] /= alpha2;
+                state.state[3] /= alpha3;
+            }
+            // After this rescale, `s_final = 1.0` (within FP). All
+            // kinematic readings are smaller in magnitude (when alpha > 1
+            // / slowing) so analytical limits remain satisfied.
+        }
+        self.states = rebuilt;
+    }
+
+    /// Measure the peak backward-FD readout overshoot across the resampled
+    /// output. Returns the smallest time-rescale factor `α ≥ 1` such that
+    /// after the trajectory is slowed by `α`, every sample's backward-FD
+    /// V/A/J reading lands at or below `1.0 + slack` of its limit.
+    ///
+    /// Returns `1.0` when no rescale is needed.
+    ///
+    /// Stencils: 2-point backward FD for joint & TCP velocity, 3-point for
+    /// joint acceleration, 4-point for joint jerk. Order-aware scaling:
+    /// a velocity overshoot `r` needs `α = r`, acceleration needs
+    /// `α = √r`, jerk needs `α = ³√r` (since `v` scales as `1/α`, `a`
+    /// as `1/α²`, `j` as `1/α³`). The returned `α` is the max across
+    /// all three orders.
+    pub fn peak_fd_overshoot_scale(
+        &self,
+        samples: &[SRobotQ<N, f64>],
+        output_dt: f64,
+        slack: f64,
+    ) -> DekeResult<f64> {
+        if samples.len() < 4 || output_dt <= 0.0 {
+            return Ok(1.0);
+        }
+        let limit = 1.0 + slack.max(0.0);
+        let v_max = &self.constraints.joint.v_max;
+        let a_max = &self.constraints.joint.a_max;
+        let j_max = &self.constraints.joint.j_max;
+        let tcp = &self.constraints.tcp;
+        let dt = output_dt;
+        let dt2 = dt * dt;
+        let dt3 = dt2 * dt;
+        let mut scale = 1.0_f64;
+        // Cache FK end-effector positions for the TCP-velocity FD reading.
+        // The pose is needed at every sample regardless of constraint, so
+        // hoist out of the inner loop.
+        let mut tcp_pos: Vec<[f64; 3]> = Vec::with_capacity(samples.len());
+        for q in samples {
+            let pose = self.fk.fk_end(q).map_err(|e| e.into())?;
+            let t = pose.translation();
+            tcp_pos.push([t.x(), t.y(), t.z()]);
+        }
+        for k in 3..samples.len() {
+            let q0 = samples[k];
+            let q1 = samples[k - 1];
+            let q2 = samples[k - 2];
+            let q3 = samples[k - 3];
+            for j in 0..N {
+                let v = (q0.0[j] - q1.0[j]) / dt;
+                let u = v.abs() / v_max.0[j];
+                if u > limit {
+                    scale = scale.max(u / limit);
+                }
+                let a = (q0.0[j] - 2.0 * q1.0[j] + q2.0[j]) / dt2;
+                let u = a.abs() / a_max.0[j];
+                if u > limit {
+                    scale = scale.max((u / limit).sqrt());
+                }
+                let jk = (q0.0[j] - 3.0 * q1.0[j] + 3.0 * q2.0[j] - q3.0[j]) / dt3;
+                let u = jk.abs() / j_max.0[j];
+                if u > limit {
+                    scale = scale.max((u / limit).cbrt());
+                }
+            }
+            let p0 = tcp_pos[k];
+            let p1 = tcp_pos[k - 1];
+            let dv = [(p0[0] - p1[0]) / dt, (p0[1] - p1[1]) / dt, (p0[2] - p1[2]) / dt];
+            let v = (dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2]).sqrt();
+            let u = v / tcp.v_max;
+            if u > limit {
+                scale = scale.max(u / limit);
+            }
+        }
+        Ok(scale)
+    }
+
+    /// Uniformly slow the state schedule by factor `alpha ≥ 1`. The path
+    /// is preserved exactly (every `s` value unchanged); the time axis
+    /// stretches by `α`, which scales `sdot → sdot/α`, `sddot → sddot/α²`,
+    /// `sdddot → sdddot/α³`. After this rescale, calling `resample_to`
+    /// produces a sample sequence that takes `α × original_time` and
+    /// whose backward-FD readings scale down accordingly.
+    pub fn rescale_time_in_place(&mut self, alpha: f64) {
+        if !(alpha > 1.0) || !alpha.is_finite() {
+            return;
+        }
+        let inv = 1.0 / alpha;
+        let inv2 = inv * inv;
+        let inv3 = inv2 * inv;
+        for state in &mut self.states {
+            // s unchanged
+            state.state[1] *= inv;
+            state.state[2] *= inv2;
+            state.state[3] *= inv3;
+        }
+        self.dt_val *= alpha;
+    }
+
+    /// Resample the converged state list onto an arbitrary `output_dt` grid.
+    ///
+    /// The DFS produces one state per `self.dt_val` (the search step). Each
+    /// segment carries constant `sdddot`, so within a segment the state is a
+    /// closed-form cubic in elapsed time — we just call
+    /// [`TrajPCS::forward_integrate_dt`] from the segment anchor.
+    ///
+    /// Output samples are placed at `t = 0, output_dt, 2·output_dt, …` up to
+    /// and including the trajectory end (the final state is pinned exactly,
+    /// regardless of whether `total_time` lands on the `output_dt` grid).
+    /// If `output_dt <= 0` or there's nothing to resample, a clone of the
+    /// existing states is returned unchanged.
+    pub fn resample_to(&self, output_dt: f64) -> Vec<TrajPCS> {
+        let dt_dfs = self.dt_val;
+        if output_dt <= 0.0 || self.states.len() < 2 || dt_dfs <= 0.0 {
+            return self.states.clone();
+        }
+        let n_segments = self.states.len() - 1;
+        let total_time = n_segments as f64 * dt_dfs;
+        let n_samples = ((total_time / output_dt).floor() as usize).max(1) + 1;
+        let mut out = Vec::with_capacity(n_samples + 1);
+        for i in 0..n_samples {
+            let t = i as f64 * output_dt;
+            let mut k = (t / dt_dfs).floor() as usize;
+            if k >= n_segments {
+                k = n_segments - 1;
+            }
+            let tau = t - k as f64 * dt_dfs;
+            out.push(self.states[k].forward_integrate_dt(tau));
+        }
+        // Pin the endpoint to the exact final DFS state. Either append (if
+        // `total_time` didn't land on the output grid) or overwrite the
+        // last sample (if it did, within FP tolerance).
+        let last_t = (n_samples - 1) as f64 * output_dt;
+        if (total_time - last_t).abs() > 1e-9 {
+            out.push(*self.states.last().unwrap());
+        } else {
+            *out.last_mut().unwrap() = *self.states.last().unwrap();
+        }
+        out
+    }
+
     /// Sample TCP position (linear part of `fk_end`) at joint configuration `q`.
     #[allow(dead_code)]
     fn tcp_position(&self, q: &SRobotQ<N, f64>) -> DekeResult<[f64; 3]> {
@@ -611,6 +842,22 @@ impl<'a, const N: usize, FK: FKChain<N, f64>> Trajectory<'a, N, FK> {
 
                 let (sdddot_min, sdddot_max) =
                     self.jerk_range_from_jerk_constraints(&next_node)?;
+                // Optional jerk-jump cap: restrict the next segment's
+                // jerk to within `max_jerk_jump` of the prior segment's
+                // jerk (= `next_node.state[3]`, the jerk just applied
+                // to produce `next_node`). Bounds the FD-jerk spike at
+                // the upcoming segment boundary, which scales as
+                // `|qp| × |Δsdddot|`. Smaller caps reduce spikes but
+                // also shrink the DFS's effective branching factor.
+                let (sdddot_min, sdddot_max) = match self.constraints.search.max_jerk_jump {
+                    Some(max_jump) if max_jump > 0.0 => {
+                        let prev_jerk = next_node.state[3];
+                        let lo = (prev_jerk - max_jump).max(sdddot_min);
+                        let hi = (prev_jerk + max_jump).min(sdddot_max);
+                        (lo, hi)
+                    }
+                    _ => (sdddot_min, sdddot_max),
+                };
                 if sdddot_max < sdddot_min {
                     continue;
                 }

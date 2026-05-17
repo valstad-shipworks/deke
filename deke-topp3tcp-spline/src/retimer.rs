@@ -74,18 +74,65 @@ impl<const N: usize> Retimer<N, f64> for Topp3TcpSpline {
 
         match result {
             Ok(()) => {
+                // Phase B-lite: smooth the per-segment jerk schedule to
+                // halve the FD-jerk spike the backward-FD stencil reads
+                // when it straddles a DFS boundary. Each pass binomially
+                // averages interior jerks and renormalizes via uniform
+                // time-rescale so `s_final` lands at 1.
+                traj.smooth_jerks(constraints.search.jerk_smoothing_passes);
+
                 let dt_val = traj.dt();
-                let states = traj.into_states();
+                // Decouple the consumer-visible sample step from the DFS
+                // search step: if `output_dt` is set, analytically resample
+                // the converged constant-jerk segments onto that grid.
+                let dt_emit = constraints.search.output_dt.unwrap_or(dt_val);
+                let mut states_for_eval = if constraints.search.output_dt.is_some() {
+                    traj.resample_to(dt_emit)
+                } else {
+                    traj.states().to_vec()
+                };
+
+                // Phase C: FD-readout safety. Walk the output samples with
+                // the consumer-visible stencils; if any per-sample max_u
+                // exceeds the slack ceiling, uniformly slow the trajectory.
+                // Bounded loop — in practice fires only when smoothing
+                // can't absorb the boundary spike entirely.
+                let safety_slack = constraints.search.fd_safety_slack;
+                for _ in 0..3 {
+                    // Build the sample-q list for the overshoot check.
+                    let q_samples: Vec<SRobotQ<N, f64>> = states_for_eval
+                        .iter()
+                        .map(|st| spline_path.eval(st.s()).0)
+                        .collect();
+                    let alpha = match traj.peak_fd_overshoot_scale(
+                        &q_samples,
+                        dt_emit,
+                        safety_slack,
+                    ) {
+                        Ok(a) => a,
+                        Err(_) => break,
+                    };
+                    if !(alpha > 1.0 + 1e-9) {
+                        break;
+                    }
+                    traj.rescale_time_in_place(alpha);
+                    states_for_eval = match constraints.search.output_dt {
+                        Some(h) if h > 0.0 => traj.resample_to(h),
+                        _ => traj.states().to_vec(),
+                    };
+                }
+
+                let states = states_for_eval;
                 diag.output_states = states.len();
                 diag.total_time = Duration::from_secs_f64(
-                    (states.len() as f64 - 1.0).max(0.0) * dt_val,
+                    (states.len() as f64 - 1.0).max(0.0) * dt_emit,
                 );
                 diag.status = SolveStatus::Success;
 
                 // Reconstruct joint samples at every state by evaluating the
                 // spline at `s`. Re-prime the thread-local dt cache so any
                 // forward_integrate the user calls afterwards matches.
-                set_dt(dt_val);
+                set_dt(dt_emit);
                 let mut waypoints: Vec<SRobotQ<N, f64>> = states
                     .iter()
                     .map(|st| {
@@ -113,7 +160,7 @@ impl<const N: usize> Retimer<N, f64> for Topp3TcpSpline {
                         return (Err(e), diag);
                     }
                 };
-                let dt_out = Duration::from_secs_f64(dt_val);
+                let dt_out = Duration::from_secs_f64(dt_emit);
                 (Ok(SRobotTraj::new(dt_out, srpath)), diag)
             }
             Err(e) => {
