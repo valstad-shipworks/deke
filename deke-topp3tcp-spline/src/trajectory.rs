@@ -426,6 +426,7 @@ impl<'a, const N: usize, FK: FKChain<N, f64>> Trajectory<'a, N, FK> {
         let qddot = qpp * sdot2 + qp * sddot;
         let qdddot = qppp * (sdot2 * sdot) + qpp * (3.0 * sdot * sddot) + qp * sdddot;
 
+        // --- Joint side -----------------------------------------------------
         let joint_vel_util = qdot
             .elementwise_div(&self.constraints.joint.v_max)
             .abs()
@@ -439,10 +440,17 @@ impl<'a, const N: usize, FK: FKChain<N, f64>> Trajectory<'a, N, FK> {
             .abs()
             .max_element();
         let joint_util = joint_vel_util.max(joint_acc_util).max(joint_jrk_util);
-        if joint_util >= 1.0 {
-            return Ok(joint_util);
-        }
 
+        // --- TCP side -------------------------------------------------------
+        // Always computed alongside `joint_util` rather than gated behind a
+        // `joint_util < 1.0` early-exit. Skipping TCP when joint was already
+        // saturated meant the TCP cap could never *co-bind* with joint at
+        // ≥ 1.0 — the DFS would prune candidates the moment joint hit limit,
+        // even when those candidates were equally-binding on TCP. The cost
+        // is three FK Jacobian calls per intermediate-check; with the
+        // `verify_dt = output_dt` tightening this is the dominant cost
+        // anyway, and the resulting search picks jerks that respect both
+        // limit families simultaneously.
         let j_mat = self.fk.jacobian(&q).map_err(|e| e.into())?;
         let jd_mat = self.fk.jacobian_dot(&q, &qdot).map_err(|e| e.into())?;
         let jdd_mat = self
@@ -465,11 +473,12 @@ impl<'a, const N: usize, FK: FKChain<N, f64>> Trajectory<'a, N, FK> {
             j_pos_dot(&jdd_mat, &qdot),
         );
         let tcp_jrk_util = vec3_norm(tcp_jrk) / tcp.j_max;
+        let tcp_util = tcp_vel_util.max(tcp_acc_util).max(tcp_jrk_util);
 
-        Ok(joint_util
-            .max(tcp_vel_util)
-            .max(tcp_acc_util)
-            .max(tcp_jrk_util))
+        // Return the binding side; downstream pruning only cares about
+        // `≥ 1.0`, so the relative ordering of joint vs. TCP doesn't matter
+        // beyond which one carries the larger reading.
+        Ok(joint_util.max(tcp_util))
     }
 
     /// Return `(times, s, sdot, sddot, sdddot)` arrays.
