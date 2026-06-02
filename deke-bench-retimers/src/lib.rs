@@ -1,7 +1,7 @@
 //! Comparative analysis across the four `deke_types::Retimer` implementations:
 //!
-//! - [`deke_topp3tcp6::Topp3Tcp6`] (continuous NLP)
-//! - [`deke_topp3tcp6_discrete::Topp3Tcp6Discrete`] (discrete NLP)
+//! - [`deke_topp3tcp_nlp::continuous::Topp3Tcp6`] (continuous NLP)
+//! - [`deke_topp3tcp_nlp::discrete::Topp3Tcp6Discrete`] (discrete NLP)
 //! - [`deke_topp3tcp_spline::Topp3TcpSpline`] (B-spline + DFS over jerk)
 //! - [`deke_topp_speed::ToppSolver`] (real-time jerk-limited shaper)
 //!
@@ -20,20 +20,19 @@
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+use deke_kin::{JointLimits as KinLimits, Kinematics, URDFJoint};
+use deke_types::ContinuousFKChain;
 use deke_types::{
-    DekeResult, FKChain, JointValidator, Retimer, SRobotPath, SRobotQ, SRobotTraj, URDFChain,
-    URDFJoint,
+    DekeResult, JointValidator, Retimer, SRobotPath, SRobotQ, SRobotTraj,
 };
 
-// ---------------------------------------------------------------------------
 // Production 6-DOF URDF chain + canonical limits
 //
-// Lifted verbatim from `deke-topp3tcp6/tests/external_failures.rs`. All bench
+// Lifted verbatim from `deke-topp3tcp-nlp/tests/continuous_external_failures.rs`. All bench
 // problems target this chain so the comparison runs against the same FK and
 // kinematic ceilings the captured-failure tests exercise. If the chain ever
 // changes in the producing project, update both arrays here AND in the
 // `external_failures.rs` fixture.
-// ---------------------------------------------------------------------------
 
 const URDF_JOINTS: [URDFJoint; 6] = [
     URDFJoint::revolute(
@@ -79,11 +78,11 @@ const URDF_FIXED_SUFFIX: [URDFJoint; 1] = [URDFJoint::fixed(
 
 /// Builds the production 6-DOF URDF chain (`f64`). Panics on construction
 /// failure — that would be a fixture bug, not a retimer bug.
-pub fn production_urdf_chain() -> URDFChain<6, f64> {
-    URDFChain::<6, f64>::new_f64(URDF_JOINTS)
-        .expect("URDFChain::new_f64 failed on the production joints")
-        .with_fixed_suffix_f64(&URDF_FIXED_SUFFIX)
-        .expect("URDF fixed-suffix attach failed on the production joints")
+pub fn production_urdf_chain() -> Kinematics<6, f64> {
+    let mut joints: Vec<URDFJoint> = URDF_JOINTS.to_vec();
+    joints.extend_from_slice(&URDF_FIXED_SUFFIX);
+    Kinematics::<6, f64>::from_urdf(&joints, KinLimits::symmetric(f64::INFINITY), &[])
+        .expect("URDF fixture build failed on the production joints")
 }
 
 /// Production per-joint velocity ceilings (rad/s).
@@ -118,7 +117,6 @@ pub const PRODUCTION_TCP_V_MAX: f64 = 2.0;
 /// Production output sample rate (Hz).
 pub const PRODUCTION_SAMPLE_RATE_HZ: f64 = 125.0;
 
-// ---------------------------------------------------------------------------
 // Slicer-logged kinematic configs (production data, 6-DOF subset)
 //
 // Two robot configurations appear in the slicer's `traj_gen` call logs:
@@ -131,7 +129,6 @@ pub const PRODUCTION_SAMPLE_RATE_HZ: f64 = 125.0;
 // Both run at the slicer's `interval_s = 0.008` (125 Hz). TCP cap is
 // `2.0 m/s / 20.0 m/s² / 200.0 m/s³`. The 7th DOF in the original calls is
 // always the external rail / positioner — ignored here.
-// ---------------------------------------------------------------------------
 
 pub const MATERIAL_V_MAX: [f64; 6] = [
     0.8246680715673207,
@@ -356,7 +353,7 @@ pub fn joint_fd_metrics<const N: usize>(traj: &SRobotTraj<N, f64>) -> JointFdMet
 
 /// Peak TCP linear-velocity magnitude `‖Δp/dt‖` across the output trajectory.
 /// `p` is the end-effector translation evaluated via `fk_end` at each sample.
-pub fn tcp_fd_metrics<const N: usize, FK: FKChain<N, f64>>(
+pub fn tcp_fd_metrics<const N: usize, FK: ContinuousFKChain<N, f64>>(
     traj: &SRobotTraj<N, f64>,
     fk: &FK,
 ) -> DekeResult<TcpFdMetrics> {
@@ -368,7 +365,7 @@ pub fn tcp_fd_metrics<const N: usize, FK: FKChain<N, f64>>(
     let mut prev: Option<[f64; 3]> = None;
     let mut peak = 0.0_f64;
     for q in traj.iter() {
-        let pose = fk.fk_end(q).map_err(|e| e.into())?;
+        let pose = fk.fk_end(q)?;
         let t = pose.translation;
         let cur = [t.x, t.y, t.z];
         if let Some(p) = prev {
@@ -446,7 +443,7 @@ pub fn max_path_deviation<const N: usize>(
 /// samples. Velocity samples come from a 2-point backward FD (`k in 1..n`),
 /// acceleration from 3-point (`k in 2..n`), jerk from 4-point (`k in 3..n`),
 /// and TCP velocity from a forward FD on `fk_end`-evaluated positions.
-pub fn average_utilization<const N: usize, FK: FKChain<N, f64>>(
+pub fn average_utilization<const N: usize, FK: ContinuousFKChain<N, f64>>(
     traj: &SRobotTraj<N, f64>,
     fk: &FK,
     problem: &BenchProblem<N>,
@@ -531,7 +528,7 @@ pub fn average_utilization<const N: usize, FK: FKChain<N, f64>>(
         let limit = tcp_limit.unwrap();
         let mut positions = Vec::with_capacity(n);
         for q in traj.iter() {
-            let pose = fk.fk_end(q).map_err(|e| e.into())?;
+            let pose = fk.fk_end(q)?;
             let t = pose.translation;
             positions.push([t.x, t.y, t.z]);
         }
@@ -629,7 +626,7 @@ pub fn wide_validator<const N: usize>() -> JointValidator<N, f64> {
 }
 
 /// Build a per-trajectory [`BenchResult`] from a [`Retimer`] output.
-fn finalize_result<const N: usize, FK: FKChain<N, f64>>(
+fn finalize_result<const N: usize, FK: ContinuousFKChain<N, f64>>(
     name: &'static str,
     status: String,
     solve_time: Duration,
@@ -700,11 +697,7 @@ fn timeout_result<const N: usize>(name: &'static str) -> BenchResult<N> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Per-retimer adapters
-// ---------------------------------------------------------------------------
-
-pub fn run_topp3tcp6<const N: usize, FK: FKChain<N, f64> + 'static>(
+pub fn run_topp3tcp6<const N: usize, FK: ContinuousFKChain<N, f64> + 'static>(
     problem: &BenchProblem<N>,
     fk: &FK,
 ) -> BenchResult<N> {
@@ -714,11 +707,11 @@ pub fn run_topp3tcp6<const N: usize, FK: FKChain<N, f64> + 'static>(
         .unwrap_or_else(|| timeout_result::<N>("topp3tcp6"))
 }
 
-fn run_topp3tcp6_inner<const N: usize, FK: FKChain<N, f64>>(
+fn run_topp3tcp6_inner<const N: usize, FK: ContinuousFKChain<N, f64>>(
     problem: &BenchProblem<N>,
     fk: &FK,
 ) -> BenchResult<N> {
-    use deke_topp3tcp6::{
+    use deke_topp3tcp_nlp::continuous::{
         BoundaryConditions, DensificationOptions, JointLimits, SolverOptions, TcpLimits,
         Topp3Tcp6, Topp3Tcp6Constraints,
     };
@@ -761,13 +754,13 @@ fn run_topp3tcp6_inner<const N: usize, FK: FKChain<N, f64>>(
 
     let validator = wide_validator::<N>();
     let t0 = Instant::now();
-    let (result, diag) = Topp3Tcp6.retime(&cfg, &path, fk, &validator, &());
+    let (result, diag) = Topp3Tcp6::new(fk).retime(&cfg, &path, &validator, &());
     let solve_time = t0.elapsed();
     let status = format!("{:?}", diag.status);
     finalize_result("topp3tcp6", status, solve_time, result, problem, fk)
 }
 
-pub fn run_topp3tcp6_discrete<const N: usize, FK: FKChain<N, f64> + 'static>(
+pub fn run_topp3tcp6_discrete<const N: usize, FK: ContinuousFKChain<N, f64> + 'static>(
     problem: &BenchProblem<N>,
     fk: &FK,
 ) -> BenchResult<N> {
@@ -777,11 +770,11 @@ pub fn run_topp3tcp6_discrete<const N: usize, FK: FKChain<N, f64> + 'static>(
         .unwrap_or_else(|| timeout_result::<N>("topp3tcp6-discrete"))
 }
 
-fn run_topp3tcp6_discrete_inner<const N: usize, FK: FKChain<N, f64>>(
+fn run_topp3tcp6_discrete_inner<const N: usize, FK: ContinuousFKChain<N, f64>>(
     problem: &BenchProblem<N>,
     fk: &FK,
 ) -> BenchResult<N> {
-    use deke_topp3tcp6_discrete::{
+    use deke_topp3tcp_nlp::discrete::{
         BoundaryConditions, DensificationOptions, DiscreteSolverOptions, JointLimits, TcpLimits,
         Topp3Tcp6Discrete, Topp3Tcp6DiscreteConstraints,
     };
@@ -824,7 +817,7 @@ fn run_topp3tcp6_discrete_inner<const N: usize, FK: FKChain<N, f64>>(
 
     let validator = wide_validator::<N>();
     let t0 = Instant::now();
-    let (result, diag) = Topp3Tcp6Discrete.retime(&cfg, &path, fk, &validator, &());
+    let (result, diag) = Topp3Tcp6Discrete::new(fk).retime(&cfg, &path, &validator, &());
     let solve_time = t0.elapsed();
     let status = format!("{:?}", diag.status);
     finalize_result(
@@ -837,7 +830,7 @@ fn run_topp3tcp6_discrete_inner<const N: usize, FK: FKChain<N, f64>>(
     )
 }
 
-pub fn run_topp3tcp_spline<const N: usize, FK: FKChain<N, f64> + 'static>(
+pub fn run_topp3tcp_spline<const N: usize, FK: ContinuousFKChain<N, f64> + 'static>(
     problem: &BenchProblem<N>,
     fk: &FK,
 ) -> BenchResult<N> {
@@ -847,7 +840,7 @@ pub fn run_topp3tcp_spline<const N: usize, FK: FKChain<N, f64> + 'static>(
         .unwrap_or_else(|| timeout_result::<N>("topp3tcp-spline"))
 }
 
-fn run_topp3tcp_spline_inner<const N: usize, FK: FKChain<N, f64>>(
+fn run_topp3tcp_spline_inner<const N: usize, FK: ContinuousFKChain<N, f64>>(
     problem: &BenchProblem<N>,
     fk: &FK,
 ) -> BenchResult<N> {
@@ -939,13 +932,13 @@ fn run_topp3tcp_spline_inner<const N: usize, FK: FKChain<N, f64>>(
 
     let validator = wide_validator::<N>();
     let t0 = Instant::now();
-    let (result, diag) = Topp3TcpSpline.retime(&cfg, &path, fk, &validator, &());
+    let (result, diag) = Topp3TcpSpline::new(fk).retime(&cfg, &path, &validator, &());
     let solve_time = t0.elapsed();
     let status = format!("{:?}", diag.status);
     finalize_result("topp3tcp-spline", status, solve_time, result, problem, fk)
 }
 
-pub fn run_topp_speed<const N: usize, FK: FKChain<N, f64> + 'static>(
+pub fn run_topp_speed<const N: usize, FK: ContinuousFKChain<N, f64> + 'static>(
     problem: &BenchProblem<N>,
     fk: &FK,
 ) -> BenchResult<N> {
@@ -955,7 +948,7 @@ pub fn run_topp_speed<const N: usize, FK: FKChain<N, f64> + 'static>(
         .unwrap_or_else(|| timeout_result::<N>("topp-speed"))
 }
 
-fn run_topp_speed_inner<const N: usize, FK: FKChain<N, f64>>(
+fn run_topp_speed_inner<const N: usize, FK: ContinuousFKChain<N, f64>>(
     problem: &BenchProblem<N>,
     fk: &FK,
 ) -> BenchResult<N> {
@@ -996,11 +989,11 @@ fn run_topp_speed_inner<const N: usize, FK: FKChain<N, f64>>(
     spec.coordination = Coordination::PhaseLocked;
 
     let dt = Duration::from_secs_f64(1.0 / problem.sample_rate_hz);
-    let solver = ToppSolver::<N, f64>::new(dt);
+    let solver = ToppSolver::<N, f64, _>::new(dt, fk);
 
     let validator = wide_validator::<N>();
     let t0 = Instant::now();
-    let (result, diag) = solver.retime(&spec, &path, fk, &validator, &());
+    let (result, diag) = solver.retime(&spec, &path, &validator, &());
     let solve_time = t0.elapsed();
     let status = format!("{:?}", diag.status);
     finalize_result("topp-speed", status, solve_time, result, problem, fk)
@@ -1008,7 +1001,7 @@ fn run_topp_speed_inner<const N: usize, FK: FKChain<N, f64>>(
 
 /// Runs all four retimers on `problem` and returns one [`BenchResult`] per
 /// retimer in fixed order.
-pub fn run_all<const N: usize, FK: FKChain<N, f64> + 'static>(
+pub fn run_all<const N: usize, FK: ContinuousFKChain<N, f64> + 'static>(
     problem: &BenchProblem<N>,
     fk: &FK,
 ) -> Vec<BenchResult<N>> {

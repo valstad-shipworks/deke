@@ -5,7 +5,14 @@ use std::{
 };
 
 pub use glam;
-pub use wide;
+
+pub mod rexports {
+    pub use glam;
+    pub use glam_traits_ext;
+    pub use ndarray;
+    pub use num_traits;
+    pub use smallvec;
+}
 
 mod fk;
 mod path;
@@ -14,11 +21,7 @@ mod traj;
 mod validator;
 mod validator_dynamic;
 
-pub use fk::{
-    BoxFK, DHChain, DHJoint, DynamicDHChain, DynamicHPChain, DynamicURDFChain, FKChain, FKScalar,
-    FPDispatch, HPChain, HPJoint, PrismaticFK, TransformedFK, URDFBuildError, URDFChain,
-    URDFJoint, URDFJointType, compose_fixed_joints, compose_fixed_joints_f64,
-};
+pub use fk::{BoxFK, ContinuousFKChain, FKChain, KinScalar, JointSpec, KinSpec, IkOutcome, IkSolver, IkSolutions, check_finite};
 pub use path::{RobotPath, SRobotPath};
 pub use q::{RobotQ, SRobotQ, robotq, SRobotQLike};
 pub use traj::{RobotTraj, SRobotTraj};
@@ -71,6 +74,10 @@ pub enum DekeError {
     },
     #[error("URDFChain<{expected}> requires {expected} revolute joints, found {found}")]
     URDFRevoluteCountMismatch { expected: usize, found: usize },
+    #[error("IkSolver failed to converge: {0}")]
+    IkSolverFailed(f64),
+    #[error("inverse kinematics is not viable for this chain: {0}")]
+    IkNotViable(String),
     #[error("Super error")]
     SuperError,
 }
@@ -83,34 +90,31 @@ impl From<Infallible> for DekeError {
 
 pub type DekeResult<T> = Result<T, DekeError>;
 
-pub trait Planner<const N: usize, F: fk::FKScalar = f32, R: ValidatorRet = ()>: Sized + Clone + Debug + Send + Sync + 'static {
-    type Diagnostic: Display + Send + Sync;
+pub trait Planner<const N: usize, F: KinScalar = f32, R: ValidatorRet = ()>: Sized {
+    type Diagnostic: Display + Debug;
     type Config;
+    type Waypoints;
 
     fn plan<
         E: Into<DekeError>,
-        A: SRobotQLike<N, E, F>,
-        B: SRobotQLike<N, E, F>,
         V: Validator<N, R, F>,
     >(
         &self,
         config: &Self::Config,
-        start: A,
-        goal: B,
+        waypoints: &Self::Waypoints,
         validator: &V,
         ctx: &V::Context<'_>,
     ) -> (DekeResult<SRobotPath<N, F>>, Self::Diagnostic);
 }
 
-pub trait Retimer<const N: usize, F: fk::FKScalar = f32, R: ValidatorRet = ()>: Sized + Clone + Debug + Send + Sync + 'static {
-    type Diagnostic: Display + Send + Sync;
+pub trait Retimer<const N: usize, F: KinScalar = f32, R: ValidatorRet = ()>: Sized {
+    type Diagnostic: Display + Debug;
     type Constraints;
 
     fn retime<V: Validator<N, R, F>>(
         &self,
         constraints: &Self::Constraints,
         path: &SRobotPath<N, F>,
-        fk: &impl FKChain<N, F>,
         validator: &V,
         ctx: &V::Context<'_>,
     ) -> (DekeResult<SRobotTraj<N, F>>, Self::Diagnostic);

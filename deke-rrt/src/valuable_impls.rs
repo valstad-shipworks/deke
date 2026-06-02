@@ -11,10 +11,6 @@ use crate::{
     RandomizerType, RrtDiagnostic, RrtTermination, RrtcSettings,
 };
 
-// ---------------------------------------------------------------------------
-// RrtTermination
-// ---------------------------------------------------------------------------
-
 const TERMINATION_VARIANTS: &[VariantDef<'static>] = &[
     VariantDef::new("NotStarted", Fields::Unnamed(0)),
     VariantDef::new("DegenerateStartGoal", Fields::Unnamed(0)),
@@ -59,10 +55,6 @@ impl Enumerable for RrtTermination {
     }
 }
 
-// ---------------------------------------------------------------------------
-// ExtensionStats
-// ---------------------------------------------------------------------------
-
 const EXTENSION_STATS_FIELDS: &[NamedField<'static>] = &[
     NamedField::new("extension_attempts"),
     NamedField::new("dynamic_domain_rejections"),
@@ -98,10 +90,6 @@ impl Structable for ExtensionStats {
     }
 }
 
-// ---------------------------------------------------------------------------
-// AnytimeInfo
-// ---------------------------------------------------------------------------
-
 const ANYTIME_INFO_FIELDS: &[NamedField<'static>] = &[
     NamedField::new("initial_cost"),
     NamedField::new("initial_iterations"),
@@ -132,10 +120,6 @@ impl Structable for AnytimeInfo {
         StructDef::new_static("AnytimeInfo", Fields::Named(ANYTIME_INFO_FIELDS))
     }
 }
-
-// ---------------------------------------------------------------------------
-// RrtDiagnostic
-// ---------------------------------------------------------------------------
 
 const RRT_DIAG_FIELDS: &[NamedField<'static>] = &[
     NamedField::new("iterations"),
@@ -182,10 +166,6 @@ impl Structable for RrtDiagnostic {
     }
 }
 
-// ---------------------------------------------------------------------------
-// RandomizerType
-// ---------------------------------------------------------------------------
-
 const RANDOMIZER_VARIANTS: &[VariantDef<'static>] = &[
     VariantDef::new("Wyrand", Fields::Unnamed(0)),
     VariantDef::new("SplitMix", Fields::Unnamed(0)),
@@ -217,10 +197,6 @@ impl Enumerable for RandomizerType {
         Variant::Static(&RANDOMIZER_VARIANTS[idx])
     }
 }
-
-// ---------------------------------------------------------------------------
-// JointKinLimits / KinematicLimits<N>
-// ---------------------------------------------------------------------------
 
 const JOINT_KIN_FIELDS: &[NamedField<'static>] = &[
     NamedField::new("v_max"),
@@ -264,10 +240,6 @@ impl<const N: usize> Structable for KinematicLimits<N> {
         StructDef::new_static("KinematicLimits", Fields::Named(KIN_LIMITS_FIELDS))
     }
 }
-
-// ---------------------------------------------------------------------------
-// RrtcSettings<N>
-// ---------------------------------------------------------------------------
 
 const RRTC_FIELDS: &[NamedField<'static>] = &[
     NamedField::new("range"),
@@ -332,10 +304,6 @@ impl<const N: usize> Structable for RrtcSettings<N> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// AorrtcSettings<N>
-// ---------------------------------------------------------------------------
-
 const AORRTC_FIELDS: &[NamedField<'static>] = &[
     NamedField::new("rrtc"),
     NamedField::new("max_iterations"),
@@ -392,10 +360,6 @@ impl<const N: usize> Structable for AorrtcSettings<N> {
         StructDef::new_static("AorrtcSettings", Fields::Named(AORRTC_FIELDS))
     }
 }
-
-// ---------------------------------------------------------------------------
-// KrrtcSettings<N>
-// ---------------------------------------------------------------------------
 
 const KRRTC_FIELDS: &[NamedField<'static>] = &[
     NamedField::new("range"),

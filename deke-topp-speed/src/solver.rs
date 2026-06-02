@@ -5,7 +5,7 @@
 //! and to the [`TargetSolver`] otherwise. After the per-solve runs, optionally
 //! enforces the position envelope on the produced plan.
 
-use deke_types::FKScalar;
+use deke_types::KinScalar;
 use num_traits::Float;
 
 use crate::modes::ControlMode;
@@ -25,12 +25,12 @@ fn from_f<F: Float>(x: f64) -> F {
 /// Selects between [`TargetSolver`] and [`WaypointSolver`] based on whether
 /// the [`MotionSpec`] carries intermediate waypoints.
 #[derive(Debug)]
-pub(crate) struct Solver<const N: usize, F: FKScalar> {
+pub(crate) struct Solver<const N: usize, F: KinScalar> {
     pub target: TargetSolver<N, F>,
     pub waypoint: WaypointSolver<N, F>,
 }
 
-impl<const N: usize, F: FKScalar> Solver<N, F> {
+impl<const N: usize, F: KinScalar> Solver<N, F> {
     pub fn new() -> Self {
         Self {
             target: TargetSolver::new(),
@@ -83,7 +83,7 @@ impl<const N: usize, F: FKScalar> Solver<N, F> {
     }
 }
 
-impl<const N: usize, F: FKScalar> Default for Solver<N, F> {
+impl<const N: usize, F: KinScalar> Default for Solver<N, F> {
     fn default() -> Self {
         Self::new()
     }

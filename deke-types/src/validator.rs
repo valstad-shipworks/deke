@@ -1,6 +1,6 @@
 use std::{fmt::Debug, sync::Arc};
 
-use crate::{DekeError, DekeResult, FKScalar, SRobotQ, SRobotQLike};
+use crate::{DekeError, DekeResult, KinScalar, SRobotQ, SRobotQLike};
 
 
 pub trait ValidatorContext: Sized {}
@@ -133,7 +133,7 @@ impl ValidatorRet for f64 {
     }
 }
 
-pub trait Validator<const N: usize, R: ValidatorRet = (), F: FKScalar = f32>: Sized + Clone + Debug + Send + Sync + 'static {
+pub trait Validator<const N: usize, R: ValidatorRet = (), F: KinScalar = f32>: Sized + Clone + Debug + Send + Sync + 'static {
     type Context<'ctx>: ValidatorContext;
     const VALIDATE_MOTION_IS_CONTINUOUS: bool = false;
 
@@ -170,7 +170,7 @@ impl<A, B> ValidatorAnd<A, B> {
     /// dispatch through the trait are safe either way.
     ///
     /// [`combine_validators!`]: deke-cricket
-    pub fn new<const N: usize, R: ValidatorRet, F: FKScalar>(a: A, b: B) -> Self
+    pub fn new<const N: usize, R: ValidatorRet, F: KinScalar>(a: A, b: B) -> Self
     where
         A: Validator<N, R, F>,
         B: Validator<N, R, F>,
@@ -181,7 +181,7 @@ impl<A, B> ValidatorAnd<A, B> {
 
 impl<A, B> ValidatorOr<A, B> {
     /// See [`ValidatorAnd::new`].
-    pub fn new<const N: usize, R: ValidatorRet, F: FKScalar>(a: A, b: B) -> Self
+    pub fn new<const N: usize, R: ValidatorRet, F: KinScalar>(a: A, b: B) -> Self
     where
         A: Validator<N, R, F>,
         B: Validator<N, R, F>,
@@ -194,7 +194,7 @@ impl<A> ValidatorNot<A> {
     /// Construct a NOT combinator after a compile-time assertion that `A`
     /// implements `Validator<N, (), F>`. `Not` is restricted to the unit
     /// return type because inverting a scalar score isn't well-defined.
-    pub fn new<const N: usize, F: FKScalar>(a: A) -> Self
+    pub fn new<const N: usize, F: KinScalar>(a: A) -> Self
     where
         A: Validator<N, (), F>,
     {
@@ -206,7 +206,7 @@ impl<A> ValidatorNot<A> {
 /// validators implement: a single generic `impl` over `R` and `F` (and `N`
 /// since validators are const-generic over DOF) means monomorphization
 /// fires the impl for every shared signature without manual enumeration.
-impl<const N: usize, F: FKScalar, R: ValidatorRet, A, B> Validator<N, R, F>
+impl<const N: usize, F: KinScalar, R: ValidatorRet, A, B> Validator<N, R, F>
     for ValidatorAnd<A, B>
 where
     A: Validator<N, R, F>,
@@ -236,7 +236,7 @@ where
     }
 }
 
-impl<const N: usize, F: FKScalar, R: ValidatorRet, A, B> Validator<N, R, F> for ValidatorOr<A, B>
+impl<const N: usize, F: KinScalar, R: ValidatorRet, A, B> Validator<N, R, F> for ValidatorOr<A, B>
 where
     A: Validator<N, R, F>,
     B: Validator<N, R, F>,
@@ -272,7 +272,7 @@ where
 /// `Not` is only meaningful for `R = ()` (a pass/fail validator). For
 /// scalar-returning validators the inversion of the return value isn't
 /// well-defined, so the impl is restricted to the unit case.
-impl<const N: usize, F: FKScalar, A> Validator<N, (), F> for ValidatorNot<A>
+impl<const N: usize, F: KinScalar, A> Validator<N, (), F> for ValidatorNot<A>
 where
     A: Validator<N, (), F>,
 {
@@ -310,7 +310,7 @@ pub enum MaybeValidator<V> {
     Disabled,
 }
 
-impl<const N: usize, F: FKScalar, R: ValidatorRet, V> Validator<N, R, F> for MaybeValidator<V>
+impl<const N: usize, F: KinScalar, R: ValidatorRet, V> Validator<N, R, F> for MaybeValidator<V>
 where
     V: Validator<N, R, F>,
 {
@@ -342,13 +342,13 @@ where
 }
 
 #[derive(Clone)]
-pub struct JointValidator<const N: usize, F: FKScalar = f32> {
+pub struct JointValidator<const N: usize, F: KinScalar = f32> {
     lower: SRobotQ<N, F>,
     upper: SRobotQ<N, F>,
     extras: Option<Arc<[Box<dyn Fn(&SRobotQ<N, F>) -> bool + Send + Sync>]>>,
 }
 
-impl<const N: usize, F: FKScalar> Debug for JointValidator<N, F> {
+impl<const N: usize, F: KinScalar> Debug for JointValidator<N, F> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("JointValidator")
             .field("lower", &self.lower)
@@ -364,7 +364,7 @@ impl<const N: usize, F: FKScalar> Debug for JointValidator<N, F> {
     }
 }
 
-impl<const N: usize, F: FKScalar> JointValidator<N, F> {
+impl<const N: usize, F: KinScalar> JointValidator<N, F> {
     pub fn new(lower: SRobotQ<N, F>, upper: SRobotQ<N, F>) -> Self {
         Self {
             lower,
@@ -386,7 +386,7 @@ impl<const N: usize, F: FKScalar> JointValidator<N, F> {
     }
 }
 
-impl<const N: usize, F: FKScalar> Validator<N, (), F> for JointValidator<N, F> {
+impl<const N: usize, F: KinScalar> Validator<N, (), F> for JointValidator<N, F> {
     type Context<'ctx> = ();
 
     #[inline]

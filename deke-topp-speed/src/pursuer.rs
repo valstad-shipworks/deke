@@ -14,7 +14,7 @@
 
 use std::time::Duration;
 
-use deke_types::{FKScalar, SRobotQ};
+use deke_types::{KinScalar, SRobotQ};
 
 use crate::kin_state::KinThirdPose;
 use crate::modes::{Coordination, DurationGrid, FollowMode};
@@ -43,8 +43,7 @@ pub type PredictionModel<const N: usize, F> =
 /// advances both. Call [`Pursuer::reset`] to force a fresh solve on the next
 /// tick.
 #[derive(Debug)]
-pub struct Pursuer<const N: usize, F: FKScalar = f32> {
-    // -------- Public configuration ----------------------------------------
+pub struct Pursuer<const N: usize, F: KinScalar = f32> {
     /// Control-cycle interval. Stored as [`Duration`] for ergonomic use; the
     /// math internally converts to `F`.
     pub dt: Duration,
@@ -61,11 +60,9 @@ pub struct Pursuer<const N: usize, F: FKScalar = f32> {
     /// Optional user-supplied target-state predictor. See [`PredictionModel`].
     pub prediction_model: Option<PredictionModel<N, F>>,
 
-    // -------- Read-only diagnostics ---------------------------------------
     last_iterations_counter: usize,
     last_status: StepStatus,
 
-    // -------- Internal state ----------------------------------------------
     /// Last solve's input snapshot. When the next tick's input matches this,
     /// the cached trajectory can be re-sampled instead of re-solved.
     inp2: MotionSpec<N, F>,
@@ -90,7 +87,7 @@ pub struct Pursuer<const N: usize, F: FKScalar = f32> {
     solver: Solver<N, F>,
 }
 
-impl<const N: usize, F: FKScalar> Pursuer<N, F> {
+impl<const N: usize, F: KinScalar> Pursuer<N, F> {
     /// Create a new pursuer with default tracking gains. The default
     /// [`FollowMode`] is [`FollowMode::Tuned`].
     pub fn new(dt: Duration) -> Self {
@@ -155,10 +152,6 @@ impl<const N: usize, F: FKScalar> Pursuer<N, F> {
         self.last_iterations_counter
     }
 
-    // -----------------------------------------------------------------------
-    // Public entry point.
-    // -----------------------------------------------------------------------
-
     /// Advance the pursuer by one control cycle.
     ///
     /// Reads `target`, mutates `spec.current_*` to reflect the post-cycle
@@ -193,10 +186,6 @@ impl<const N: usize, F: FKScalar> Pursuer<N, F> {
         self.started = true;
         (self.res, out)
     }
-
-    // -----------------------------------------------------------------------
-    // Private helpers.
-    // -----------------------------------------------------------------------
 
     /// `delta_time` as the math scalar.
     #[inline]
@@ -718,7 +707,7 @@ impl<const N: usize, F: FKScalar> Pursuer<N, F> {
     }
 }
 
-impl<const N: usize, F: FKScalar> Clone for Pursuer<N, F> {
+impl<const N: usize, F: KinScalar> Clone for Pursuer<N, F> {
     fn clone(&self) -> Self {
         Self {
             dt: self.dt,
@@ -743,14 +732,14 @@ impl<const N: usize, F: FKScalar> Clone for Pursuer<N, F> {
     }
 }
 
-// Generic min/max for `F: FKScalar` (which doesn't bring `Ord`).
+// Generic min/max for `F: KinScalar` (which doesn't bring `Ord`).
 #[inline]
-fn fmin<F: FKScalar>(a: F, b: F) -> F {
+fn fmin<F: KinScalar>(a: F, b: F) -> F {
     if a < b { a } else { b }
 }
 
 #[inline]
-fn fmax<F: FKScalar>(a: F, b: F) -> F {
+fn fmax<F: KinScalar>(a: F, b: F) -> F {
     if a > b { a } else { b }
 }
 
@@ -759,9 +748,9 @@ fn fmax<F: FKScalar>(a: F, b: F) -> F {
 /// [`Pursuer::update_optimized`] to decide whether to re-solve or just
 /// resample the cached trajectory.
 #[inline]
-fn specs_match<const N: usize, F: FKScalar>(a: &MotionSpec<N, F>, b: &MotionSpec<N, F>) -> bool {
+fn specs_match<const N: usize, F: KinScalar>(a: &MotionSpec<N, F>, b: &MotionSpec<N, F>) -> bool {
     let eps = F::from(1e-12).unwrap_or_else(F::zero);
-    fn q_close<const N: usize, F: FKScalar>(a: &SRobotQ<N, F>, b: &SRobotQ<N, F>, eps: F) -> bool {
+    fn q_close<const N: usize, F: KinScalar>(a: &SRobotQ<N, F>, b: &SRobotQ<N, F>, eps: F) -> bool {
         for i in 0..N {
             if (a[i] - b[i]).abs() > eps {
                 return false;

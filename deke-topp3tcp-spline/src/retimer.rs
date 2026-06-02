@@ -3,7 +3,8 @@
 use std::time::{Duration, Instant};
 
 use deke_types::{
-    DekeError, DekeResult, FKChain, Retimer, SRobotPath, SRobotQ, SRobotTraj, Validator,
+    ContinuousFKChain, DekeError, DekeResult, Retimer, SRobotPath, SRobotQ, SRobotTraj,
+    Validator,
 };
 
 use crate::constraints::Topp3TcpSplineConstraints;
@@ -24,10 +25,18 @@ use crate::trajectory::{Trajectory, set_dt};
 ///    TCP v/a/j limits using the position rows of the geometric Jacobian.
 /// 3. Emits a uniformly time-sampled [`SRobotTraj`] at the configured
 ///    output `dt`.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Topp3TcpSpline;
+pub struct Topp3TcpSpline<'a, const N: usize, FK: ContinuousFKChain<N, f64>> {
+    fk: &'a FK,
+}
 
-impl<const N: usize> Retimer<N, f64> for Topp3TcpSpline {
+impl<'a, const N: usize, FK: ContinuousFKChain<N, f64>> Topp3TcpSpline<'a, N, FK> {
+    /// Construct the retimer over the forward-kinematics chain it will retime against.
+    pub fn new(fk: &'a FK) -> Self {
+        Self { fk }
+    }
+}
+
+impl<'a, const N: usize, FK: ContinuousFKChain<N, f64>> Retimer<N, f64> for Topp3TcpSpline<'a, N, FK> {
     type Diagnostic = Topp3TcpSplineDiagnostic;
     type Constraints = Topp3TcpSplineConstraints<N>;
 
@@ -35,10 +44,10 @@ impl<const N: usize> Retimer<N, f64> for Topp3TcpSpline {
         &self,
         constraints: &Self::Constraints,
         path: &SRobotPath<N, f64>,
-        fk: &impl FKChain<N, f64>,
         _validator: &V,
         _ctx: &V::Context<'_>,
     ) -> (DekeResult<SRobotTraj<N, f64>>, Self::Diagnostic) {
+        let fk = self.fk;
         let mut diag = Topp3TcpSplineDiagnostic {
             input_waypoints: path.len(),
             ..Default::default()

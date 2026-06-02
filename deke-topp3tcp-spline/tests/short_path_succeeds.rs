@@ -14,10 +14,12 @@ use deke_topp3tcp_spline::{
     JointLimits, SearchOptions, SplinePathOptions, TcpLimits, Topp3TcpSpline,
     Topp3TcpSplineConstraints,
 };
-use deke_types::{DHChain, DHJoint, JointValidator, Retimer, SRobotPath, SRobotQ};
+use deke_kin::{DHJoint, JointLimits as KinLimits, Kinematics};
+use deke_types::{JointValidator, Retimer, SRobotPath, SRobotQ};
 
-fn dh_6dof() -> DHChain<6, f64> {
-    DHChain::<6, f64>::from_joints([
+fn dh_6dof() -> Kinematics<6, f64> {
+    Kinematics::from_dh(
+        [
         DHJoint {
             a: 0.0,
             alpha: FRAC_PI_2,
@@ -54,7 +56,10 @@ fn dh_6dof() -> DHChain<6, f64> {
             d: 0.082,
             theta_offset: 0.0,
         },
-    ])
+        ],
+        KinLimits::symmetric(10.0),
+        &[],
+    )
 }
 
 #[test]
@@ -92,7 +97,7 @@ fn straight_short_path_with_large_jerk_limits_solves() {
         SRobotQ::from_array([-1e9; 6]),
         SRobotQ::from_array([1e9; 6]),
     );
-    let (result, diag) = Topp3TcpSpline.retime(&cfg, &path, &fk, &validator, &());
+    let (result, diag) = Topp3TcpSpline::new(&fk).retime(&cfg, &path, &validator, &());
     assert!(
         result.is_ok(),
         "spline retimer failed on a feasible short path: {}",

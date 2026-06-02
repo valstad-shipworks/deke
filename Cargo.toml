@@ -1,11 +1,10 @@
 [workspace]
 members = [
     "deke-types",
+    "deke-kin",
     "deke-wreck",
     "deke-rrt",
-    "deke-cricket",
-    "deke-topp3tcp6",
-    "deke-topp3tcp6-discrete",
+    "deke-topp3tcp-nlp",
     "deke-topp3tcp-spline",
     "deke-topp-speed",
     "deke-bench-retimers",

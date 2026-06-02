@@ -1,10 +1,10 @@
 //! Per-tick output of the live pursuer.
 
-use deke_types::{FKScalar, SRobotQ};
+use deke_types::{KinScalar, SRobotQ};
 
 /// A single discrete sample of the produced motion at a wall-clock instant.
 #[derive(Debug, Clone, Copy)]
-pub struct MotionSample<const N: usize, F: FKScalar = f32> {
+pub struct MotionSample<const N: usize, F: KinScalar = f32> {
     pub pose: SRobotQ<N, F>,
     pub vel: SRobotQ<N, F>,
     pub accel: SRobotQ<N, F>,
@@ -18,7 +18,7 @@ pub struct MotionSample<const N: usize, F: FKScalar = f32> {
     pub solve_micros: f64,
 }
 
-impl<const N: usize, F: FKScalar> MotionSample<N, F> {
+impl<const N: usize, F: KinScalar> MotionSample<N, F> {
     pub fn zero() -> Self {
         Self {
             pose: SRobotQ::zeros(),
@@ -35,7 +35,7 @@ impl<const N: usize, F: FKScalar> MotionSample<N, F> {
     }
 }
 
-impl<const N: usize, F: FKScalar> Default for MotionSample<N, F> {
+impl<const N: usize, F: KinScalar> Default for MotionSample<N, F> {
     fn default() -> Self {
         Self::zero()
     }
@@ -43,13 +43,13 @@ impl<const N: usize, F: FKScalar> Default for MotionSample<N, F> {
 
 /// The kinematic state of a moving goal that the live pursuer chases.
 #[derive(Debug, Clone, Copy)]
-pub struct PursuitTarget<const N: usize, F: FKScalar = f32> {
+pub struct PursuitTarget<const N: usize, F: KinScalar = f32> {
     pub pose: SRobotQ<N, F>,
     pub vel: SRobotQ<N, F>,
     pub accel: SRobotQ<N, F>,
 }
 
-impl<const N: usize, F: FKScalar> PursuitTarget<N, F> {
+impl<const N: usize, F: KinScalar> PursuitTarget<N, F> {
     pub fn zero() -> Self {
         Self {
             pose: SRobotQ::zeros(),
@@ -72,7 +72,7 @@ impl<const N: usize, F: FKScalar> PursuitTarget<N, F> {
     }
 }
 
-impl<const N: usize, F: FKScalar> Default for PursuitTarget<N, F> {
+impl<const N: usize, F: KinScalar> Default for PursuitTarget<N, F> {
     fn default() -> Self {
         Self::zero()
     }

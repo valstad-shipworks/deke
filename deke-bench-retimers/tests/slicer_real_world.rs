@@ -74,7 +74,6 @@ fn problems() -> Vec<(Robot, BenchProblem<6>)> {
     // value dropped. Paths with n=2 of near-equal positions (sub-mm
     // settling) are excluded — they reduce to a boundary-phase test.
 
-    // ============== nanopanel-material =============================
     out.push((
         Robot::Material,
         problem(
@@ -137,7 +136,6 @@ fn problems() -> Vec<(Robot, BenchProblem<6>)> {
         ),
     ));
 
-    // ============== nanopanel-welder ===============================
     out.push((
         Robot::Welder,
         problem(

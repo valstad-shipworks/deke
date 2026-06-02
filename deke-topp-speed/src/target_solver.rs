@@ -7,7 +7,7 @@
 //! shape as the limiting axis; if found, the cross-axis Step-B math is
 //! skipped entirely.
 
-use deke_types::{FKScalar, SRobotQ};
+use deke_types::{KinScalar, SRobotQ};
 
 use crate::feasible::Feasible;
 use crate::halt_segment::{second_order_pose, third_order_pose, third_order_vel};
@@ -29,7 +29,7 @@ use crate::vel_math;
 /// cross-axis Step-B time-synchronisation pass: feasible windows, resolved
 /// per-axis modes, and the bookkeeping arrays for candidate sync times.
 #[derive(Debug)]
-pub(crate) struct TargetSolver<const N: usize, F: FKScalar> {
+pub(crate) struct TargetSolver<const N: usize, F: KinScalar> {
     /// Phase-sync scale ratios. Populated by [`Self::set_phase_sync`].
     p_d: SRobotQ<N, F>,
     /// Signed pose offset cache, `goal - current` per axis.
@@ -53,7 +53,7 @@ pub(crate) struct TargetSolver<const N: usize, F: FKScalar> {
     step_a_scratch: [crate::segment::Segment<F>; 6],
 }
 
-impl<const N: usize, F: FKScalar> TargetSolver<N, F> {
+impl<const N: usize, F: KinScalar> TargetSolver<N, F> {
     /// Build a fresh solver with all per-axis caches zeroed.
     pub fn new() -> Self {
         let capacity = 3 * N + 1;
@@ -371,7 +371,6 @@ impl<const N: usize, F: FKScalar> TargetSolver<N, F> {
         let infinity = F::infinity();
         let eps = F::epsilon();
 
-        // ---- Per-axis Step-A: minimum-duration shaping. -------------------
         for dof_idx in 0..N {
             self.inp_min_velocity[dof_idx] = match spec.min_vel {
                 Some(arr) => arr[dof_idx],
@@ -590,7 +589,6 @@ impl<const N: usize, F: FKScalar> TargetSolver<N, F> {
             return StepStatus::InProgress;
         }
 
-        // ---- Cross-axis Step-B: pick a feasible global duration. ----------
         let mut limiting_dof: Option<usize> = None;
         let (sec0, _) = plan
             .profiles
@@ -659,7 +657,6 @@ impl<const N: usize, F: FKScalar> TargetSolver<N, F> {
             return StepStatus::InProgress;
         }
 
-        // ---- Phase-locked fast path. --------------------------------------
         let mut has_phase = false;
         for dof_idx in 0..N {
             if self.dof_sync[dof_idx] == Coordination::PhaseLocked {
@@ -786,7 +783,6 @@ impl<const N: usize, F: FKScalar> TargetSolver<N, F> {
             }
         }
 
-        // ---- Per-axis Step-B: synchronise each axis to the global time. ---
         for dof_idx in 0..N {
             let skip = (Some(dof_idx) == limiting_dof
                 || self.dof_sync[dof_idx] == Coordination::Independent)
@@ -903,7 +899,7 @@ impl<const N: usize, F: FKScalar> TargetSolver<N, F> {
     }
 }
 
-impl<const N: usize, F: FKScalar> Default for TargetSolver<N, F> {
+impl<const N: usize, F: KinScalar> Default for TargetSolver<N, F> {
     fn default() -> Self {
         Self::new()
     }

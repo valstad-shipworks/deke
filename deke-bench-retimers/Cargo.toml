@@ -1,13 +1,14 @@
 [package]
 name = "deke-bench-retimers"
-version = "0.0.0"
+version = "2.0.0"
 edition = "2024"
 publish = false
-description = "Comparative analysis across the deke retimer family (topp3tcp6, topp3tcp6-discrete, topp3tcp-spline, topp-speed)."
+description = "Comparative analysis across the deke retimer family (topp3tcp-nlp, topp3tcp-spline, topp-speed)."
+license = "Apache-2.0"
 
 [dependencies]
 deke-types = { path = "../deke-types" }
-deke-topp3tcp6 = { path = "../deke-topp3tcp6" }
-deke-topp3tcp6-discrete = { path = "../deke-topp3tcp6-discrete" }
+deke-kin = { version = "2.0", path = "../deke-kin" }
+deke-topp3tcp-nlp = { path = "../deke-topp3tcp-nlp" }
 deke-topp3tcp-spline = { path = "../deke-topp3tcp-spline" }
 deke-topp-speed = { path = "../deke-topp-speed" }

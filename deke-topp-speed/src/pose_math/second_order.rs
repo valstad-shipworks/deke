@@ -23,10 +23,6 @@ use crate::feasible::{Feasible, Span};
 use crate::kin_state::{KinSecondPose, LimitsSecondPose};
 use crate::segment::{Segment, SignBlock, Touched};
 
-// ---------------------------------------------------------------------------
-// StepA
-// ---------------------------------------------------------------------------
-
 /// Boundary-time step (Step-A): build the minimum-duration profile that
 /// drives `current` to `target` while respecting `limits`.
 pub struct StepA<F: Float> {
@@ -286,10 +282,6 @@ impl<F: Float> StepA<F> {
         block.pick_from_candidates(&mut profiles[..], cursor)
     }
 }
-
-// ---------------------------------------------------------------------------
-// StepB
-// ---------------------------------------------------------------------------
 
 /// Timed step (Step-B): build a profile that completes in exactly `tf`.
 pub struct StepB<F: Float> {

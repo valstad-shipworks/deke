@@ -3,13 +3,9 @@
 use crate::bspline::solve_dense;
 use crate::constraints::Topp3TcpSplineConstraints;
 use crate::path::SplineInterpolatedRobotPath;
-use deke_types::{DekeError, DekeResult, FKChain, SRobotQ};
+use deke_types::{ContinuousFKChain, DekeError, DekeResult, SRobotQ};
 use glam_traits_ext::{TAffine3, TVec3};
 use std::f64::consts::PI;
-
-// ---------------------------------------------------------------------------
-// TrajPCS
-// ---------------------------------------------------------------------------
 
 thread_local! {
     static DT_CACHE: std::cell::Cell<(f64, f64, f64)> =
@@ -148,10 +144,6 @@ impl TrajPCS {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Small fixed-size vector helpers
-// ---------------------------------------------------------------------------
-
 #[inline]
 fn vec3_add(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
@@ -186,12 +178,8 @@ fn j_pos_dot<const N: usize>(j: &[[f64; N]; 6], v: &SRobotQ<N, f64>) -> [f64; 3]
     out
 }
 
-// ---------------------------------------------------------------------------
-// Trajectory
-// ---------------------------------------------------------------------------
-
 /// Jerk-limited trajectory along a [`SplineInterpolatedRobotPath`].
-pub struct Trajectory<'a, const N: usize, FK: FKChain<N, f64>> {
+pub struct Trajectory<'a, const N: usize, FK: ContinuousFKChain<N, f64>> {
     pub(crate) fk: &'a FK,
     pub(crate) path: &'a SplineInterpolatedRobotPath<N>,
     pub(crate) dt_val: f64,
@@ -207,7 +195,7 @@ pub struct Trajectory<'a, const N: usize, FK: FKChain<N, f64>> {
     pub(crate) states: Vec<TrajPCS>,
 }
 
-impl<'a, const N: usize, FK: FKChain<N, f64>> Trajectory<'a, N, FK> {
+impl<'a, const N: usize, FK: ContinuousFKChain<N, f64>> Trajectory<'a, N, FK> {
     pub fn new(
         fk: &'a FK,
         path: &'a SplineInterpolatedRobotPath<N>,
@@ -342,12 +330,9 @@ impl<'a, const N: usize, FK: FKChain<N, f64>> Trajectory<'a, N, FK> {
         // TCP jerk: a quadratic in sdddot.  tcp_jerk = J·qdddot + 2·J̇·qddot + J̈·qdot
         // where qdddot = qp*sdddot + joint_base; the qp*sdddot part folds into the
         // linear coefficient and joint_base into the constant.
-        let j_mat = self.fk.jacobian(&q).map_err(|e| e.into())?;
-        let jd_mat = self.fk.jacobian_dot(&q, &qdot).map_err(|e| e.into())?;
-        let jdd_mat = self
-            .fk
-            .jacobian_ddot(&q, &qdot, &qddot)
-            .map_err(|e| e.into())?;
+        let j_mat = self.fk.jacobian(&q)?;
+        let jd_mat = self.fk.jacobian_dot(&q, &qdot)?;
+        let jdd_mat = self.fk.jacobian_ddot(&q, &qdot, &qddot)?;
 
         let tcp_base = {
             let a = j_pos_dot(&j_mat, &joint_base);
@@ -426,7 +411,6 @@ impl<'a, const N: usize, FK: FKChain<N, f64>> Trajectory<'a, N, FK> {
         let qddot = qpp * sdot2 + qp * sddot;
         let qdddot = qppp * (sdot2 * sdot) + qpp * (3.0 * sdot * sddot) + qp * sdddot;
 
-        // --- Joint side -----------------------------------------------------
         let joint_vel_util = qdot
             .elementwise_div(&self.constraints.joint.v_max)
             .abs()
@@ -441,7 +425,6 @@ impl<'a, const N: usize, FK: FKChain<N, f64>> Trajectory<'a, N, FK> {
             .max_element();
         let joint_util = joint_vel_util.max(joint_acc_util).max(joint_jrk_util);
 
-        // --- TCP side -------------------------------------------------------
         // Always computed alongside `joint_util` rather than gated behind a
         // `joint_util < 1.0` early-exit. Skipping TCP when joint was already
         // saturated meant the TCP cap could never *co-bind* with joint at
@@ -451,12 +434,9 @@ impl<'a, const N: usize, FK: FKChain<N, f64>> Trajectory<'a, N, FK> {
         // `verify_dt = output_dt` tightening this is the dominant cost
         // anyway, and the resulting search picks jerks that respect both
         // limit families simultaneously.
-        let j_mat = self.fk.jacobian(&q).map_err(|e| e.into())?;
-        let jd_mat = self.fk.jacobian_dot(&q, &qdot).map_err(|e| e.into())?;
-        let jdd_mat = self
-            .fk
-            .jacobian_ddot(&q, &qdot, &qddot)
-            .map_err(|e| e.into())?;
+        let j_mat = self.fk.jacobian(&q)?;
+        let jd_mat = self.fk.jacobian_dot(&q, &qdot)?;
+        let jdd_mat = self.fk.jacobian_ddot(&q, &qdot, &qddot)?;
 
         let tcp = &self.constraints.tcp;
         let tcp_vel = j_pos_dot(&j_mat, &qdot);
@@ -638,7 +618,7 @@ impl<'a, const N: usize, FK: FKChain<N, f64>> Trajectory<'a, N, FK> {
         // hoist out of the inner loop.
         let mut tcp_pos: Vec<[f64; 3]> = Vec::with_capacity(samples.len());
         for q in samples {
-            let pose = self.fk.fk_end(q).map_err(|e| e.into())?;
+            let pose = self.fk.fk_end(q)?;
             let t = pose.translation();
             tcp_pos.push([t.x(), t.y(), t.z()]);
         }
@@ -743,7 +723,7 @@ impl<'a, const N: usize, FK: FKChain<N, f64>> Trajectory<'a, N, FK> {
     /// Sample TCP position (linear part of `fk_end`) at joint configuration `q`.
     #[allow(dead_code)]
     fn tcp_position(&self, q: &SRobotQ<N, f64>) -> DekeResult<[f64; 3]> {
-        let pose = self.fk.fk_end(q).map_err(|e| e.into())?;
+        let pose = self.fk.fk_end(q)?;
         let t = pose.translation();
         Ok([t.x(), t.y(), t.z()])
     }

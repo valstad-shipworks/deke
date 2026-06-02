@@ -11,9 +11,10 @@ use deke_topp_speed::{
     ControlMode, Coordination, DurationGrid, FollowMode, GoalOutOfBounds, MotionSpec, Pursuer,
     PursuitTarget, Retimer, SRobotPath, SRobotQ, ToppSolver,
 };
-use deke_types::{DHChain, DHJoint, JointValidator};
+use deke_kin::{DHJoint, JointLimits, Kinematics};
+use deke_types::JointValidator;
 
-fn make_fk() -> DHChain<3, f64> {
+fn make_fk() -> Kinematics<3, f64> {
     let joints = [
         DHJoint::<f64> {
             a: 0.0,
@@ -34,7 +35,7 @@ fn make_fk() -> DHChain<3, f64> {
             theta_offset: 0.0,
         },
     ];
-    DHChain::<3, f64>::new_f64(joints)
+    Kinematics::from_dh(joints, JointLimits::symmetric(1e6), &[])
 }
 
 #[test]
@@ -66,7 +67,6 @@ fn topp_solver_compiles_with_retimer_trait() {
     let goal = SRobotQ::from_array([0.5, 1.0, 0.0]);
     let path = SRobotPath::from_two(start, goal);
 
-    let solver: ToppSolver<3, f64> = ToppSolver::new(Duration::from_millis(10));
     let fk = make_fk();
     let validator = JointValidator::<3, f64>::new(
         SRobotQ::from_array([-10.0, -10.0, -10.0]),
@@ -75,7 +75,8 @@ fn topp_solver_compiles_with_retimer_trait() {
 
     // Just verify retime() can be called; do not assert numerical content,
     // since the per-axis validators are currently permissive stubs.
-    let (_result, diagnostic) = solver.retime(&spec, &path, &fk, &validator, &());
+    let (_result, diagnostic) =
+        ToppSolver::new(Duration::from_millis(10), &fk).retime(&spec, &path, &validator, &());
     assert!(diagnostic.solve_micros >= 0.0);
 }
 

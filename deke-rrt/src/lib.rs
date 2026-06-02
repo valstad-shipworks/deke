@@ -1,6 +1,6 @@
 use std::fmt;
 
-use deke_types::{DekeError, DekeResult, Planner, SRobotPath, SRobotQLike, Validator};
+use deke_types::{DekeError, DekeResult, Planner, SRobotPath, SRobotQ, SRobotQLike, Validator};
 
 mod aorrtc;
 mod krrtc;
@@ -209,23 +209,6 @@ pub struct RrtDiagnostic {
     pub anytime: Option<AnytimeInfo>,
 }
 
-impl RrtDiagnostic {
-    fn empty() -> Self {
-        Self {
-            iterations: 0,
-            start_tree_size: 0,
-            goal_tree_size: 0,
-            path_cost: 0.0,
-            elapsed_ns: 0,
-            termination: RrtTermination::InputInvalid,
-            extension_stats: ExtensionStats::default(),
-            c_min: 0.0,
-            closest_approach: f64::INFINITY,
-            anytime: None,
-        }
-    }
-}
-
 impl fmt::Display for RrtDiagnostic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -248,6 +231,36 @@ impl fmt::Display for RrtDiagnostic {
     }
 }
 
+/// Start and goal configuration for a single-query planner. Build it with
+/// [`StartEnd::new`], which accepts any [`SRobotQLike`] inputs and resolves them
+/// to fixed-size configurations up front, so planning itself never has to parse
+/// the endpoints.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StartEnd<const N: usize> {
+    pub start: SRobotQ<N, f64>,
+    pub end: SRobotQ<N, f64>,
+}
+
+impl<const N: usize> StartEnd<N> {
+    /// Resolve a start and goal from any [`SRobotQLike`] inputs. The two
+    /// endpoints may be different input types (e.g. an `SRobotQ` start and a
+    /// `Vec` goal). Returns the input's conversion error (e.g.
+    /// [`DekeError::ShapeMismatch`]) if either cannot be made into an `N`-joint
+    /// configuration.
+    pub fn new<Es, Eg, S, G>(start: S, end: G) -> DekeResult<Self>
+    where
+        Es: Into<DekeError>,
+        Eg: Into<DekeError>,
+        S: SRobotQLike<N, Es, f64>,
+        G: SRobotQLike<N, Eg, f64>,
+    {
+        Ok(Self {
+            start: start.to_srobotq().map_err(Into::into)?,
+            end: end.to_srobotq().map_err(Into::into)?,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct RrtcPlanner<const N: usize>;
 
@@ -260,30 +273,17 @@ impl<const N: usize> RrtcPlanner<N> {
 impl<const N: usize> Planner<N, f64> for RrtcPlanner<N> {
     type Diagnostic = RrtDiagnostic;
     type Config = RrtcSettings<N>;
+    type Waypoints = StartEnd<N>;
 
-    fn plan<
-        E: Into<DekeError>,
-        A: SRobotQLike<N, E, f64>,
-        B: SRobotQLike<N, E, f64>,
-        V: Validator<N, (), f64>,
-    >(
+    fn plan<E: Into<DekeError>, V: Validator<N, (), f64>>(
         &self,
         config: &Self::Config,
-        start: A,
-        goal: B,
+        waypoints: &Self::Waypoints,
         validator: &V,
         ctx: &V::Context<'_>,
     ) -> (DekeResult<SRobotPath<N, f64>>, Self::Diagnostic) {
-        let start = match start.to_srobotq().map_err(Into::into) {
-            Ok(s) => s,
-            Err(e) => return (Err(e), RrtDiagnostic::empty()),
-        };
-        let goal = match goal.to_srobotq().map_err(Into::into) {
-            Ok(g) => g,
-            Err(e) => return (Err(e), RrtDiagnostic::empty()),
-        };
         let mut rng = DekeRand::<N>::new(config.randomizer, config.seed);
-        rrtc::solve(&start, &goal, validator, ctx, config, &mut rng)
+        rrtc::solve(&waypoints.start, &waypoints.end, validator, ctx, config, &mut rng)
     }
 }
 
@@ -299,33 +299,20 @@ impl<const N: usize> AorrtcPlanner<N> {
 impl<const N: usize> Planner<N, f64> for AorrtcPlanner<N> {
     type Diagnostic = RrtDiagnostic;
     type Config = AorrtcSettings<N>;
+    type Waypoints = StartEnd<N>;
 
-    fn plan<
-        E: Into<DekeError>,
-        A: SRobotQLike<N, E, f64>,
-        B: SRobotQLike<N, E, f64>,
-        V: Validator<N, (), f64>,
-    >(
+    fn plan<E: Into<DekeError>, V: Validator<N, (), f64>>(
         &self,
         config: &Self::Config,
-        start: A,
-        goal: B,
+        waypoints: &Self::Waypoints,
         validator: &V,
         ctx: &V::Context<'_>,
     ) -> (DekeResult<SRobotPath<N, f64>>, Self::Diagnostic) {
-        let start = match start.to_srobotq().map_err(Into::into) {
-            Ok(s) => s,
-            Err(e) => return (Err(e), RrtDiagnostic::empty()),
-        };
-        let goal = match goal.to_srobotq().map_err(Into::into) {
-            Ok(g) => g,
-            Err(e) => return (Err(e), RrtDiagnostic::empty()),
-        };
         let mut sample_rng = DekeRand::<N>::new(config.rrtc.randomizer, config.rrtc.seed);
         let mut aux_rng = DekeRand::<N>::new(config.aux_randomizer, config.aux_seed);
         aorrtc::solve(
-            &start,
-            &goal,
+            &waypoints.start,
+            &waypoints.end,
             validator,
             ctx,
             config,
@@ -347,29 +334,16 @@ impl<const N: usize> KrrtcPlanner<N> {
 impl<const N: usize> Planner<N, f64> for KrrtcPlanner<N> {
     type Diagnostic = RrtDiagnostic;
     type Config = KrrtcSettings<N>;
+    type Waypoints = StartEnd<N>;
 
-    fn plan<
-        E: Into<DekeError>,
-        A: SRobotQLike<N, E, f64>,
-        B: SRobotQLike<N, E, f64>,
-        V: Validator<N, (), f64>,
-    >(
+    fn plan<E: Into<DekeError>, V: Validator<N, (), f64>>(
         &self,
         config: &Self::Config,
-        start: A,
-        goal: B,
+        waypoints: &Self::Waypoints,
         validator: &V,
         ctx: &V::Context<'_>,
     ) -> (DekeResult<SRobotPath<N, f64>>, Self::Diagnostic) {
-        let start = match start.to_srobotq().map_err(Into::into) {
-            Ok(s) => s,
-            Err(e) => return (Err(e), RrtDiagnostic::empty()),
-        };
-        let goal = match goal.to_srobotq().map_err(Into::into) {
-            Ok(g) => g,
-            Err(e) => return (Err(e), RrtDiagnostic::empty()),
-        };
         let mut rng = DekeRand::<N>::new(config.randomizer, config.seed);
-        krrtc::solve(&start, &goal, validator, ctx, config, &mut rng)
+        krrtc::solve(&waypoints.start, &waypoints.end, validator, ctx, config, &mut rng)
     }
 }
