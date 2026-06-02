@@ -1,0 +1,227 @@
+use std::time::Duration;
+
+use deke_types::SRobotQ;
+
+/// Per-joint kinematic limits expressed in joint-space units (radians or meters / second^k).
+#[derive(Debug, Clone)]
+pub struct JointLimits<const N: usize> {
+    pub q_min: SRobotQ<N, f64>,
+    pub q_max: SRobotQ<N, f64>,
+    pub v_max: SRobotQ<N, f64>,
+    pub a_max: SRobotQ<N, f64>,
+    pub j_max: SRobotQ<N, f64>,
+}
+
+impl<const N: usize> JointLimits<N> {
+    /// Symmetric bounds with infinite positional range. Velocity, acceleration and jerk are each
+    /// set to the provided scalar on every joint.
+    pub fn symmetric(v_max: f64, a_max: f64, j_max: f64) -> Self {
+        Self {
+            q_min: SRobotQ::from_array([f64::NEG_INFINITY; N]),
+            q_max: SRobotQ::from_array([f64::INFINITY; N]),
+            v_max: SRobotQ::from_array([v_max; N]),
+            a_max: SRobotQ::from_array([a_max; N]),
+            j_max: SRobotQ::from_array([j_max; N]),
+        }
+    }
+}
+
+/// Scalar bounds on the translational component of the TCP (tool center point) trajectory.
+/// Rotational TCP bounds are out of scope for the v1 retimer.
+///
+/// Stored as `Option<TcpLimits>` on [`Topp3Tcp6Constraints`]: `None` means the retimer skips
+/// FK on every densified sample and skips every TCP constraint in the NLP. Individual axes
+/// can still be unbounded inside a `Some(..)` by setting the corresponding field to
+/// `f64::INFINITY` (or zero); only finite, positive values produce a constraint.
+#[derive(Debug, Clone, Copy)]
+pub struct TcpLimits {
+    pub v_max: f64,
+    pub a_max: f64,
+    pub j_max: f64,
+}
+
+/// Boundary conditions at the start and end of the trajectory.
+/// The user supplies joint-space velocity and acceleration vectors; the retimer projects them
+/// onto the path tangent and reports any residual as a pre-flight error.
+#[derive(Debug, Clone)]
+pub struct BoundaryConditions<const N: usize> {
+    pub v_start: SRobotQ<N, f64>,
+    pub a_start: SRobotQ<N, f64>,
+    pub v_end: SRobotQ<N, f64>,
+    pub a_end: SRobotQ<N, f64>,
+    /// Maximum allowed perpendicular-component norm during projection, in joint-space units.
+    /// Defaults to 1e-4.
+    pub projection_tolerance: f64,
+}
+
+impl<const N: usize> BoundaryConditions<N> {
+    /// Rest-to-rest boundary condition: zero velocity and acceleration at both ends.
+    pub fn rest_to_rest() -> Self {
+        Self {
+            v_start: SRobotQ::zeros(),
+            a_start: SRobotQ::zeros(),
+            v_end: SRobotQ::zeros(),
+            a_end: SRobotQ::zeros(),
+            projection_tolerance: 1e-4,
+        }
+    }
+}
+
+impl<const N: usize> Default for BoundaryConditions<N> {
+    fn default() -> Self {
+        Self::rest_to_rest()
+    }
+}
+
+/// Controls how the input path is densified before retiming.
+#[derive(Debug, Clone, Copy)]
+pub struct DensificationOptions {
+    /// Upper bound on the joint-space distance between consecutive densified waypoints.
+    /// `None` disables densification (rarely desirable).
+    pub max_segment_step: Option<f64>,
+    /// Hard cap on the number of densified waypoints — the retimer downsamples uniformly if the
+    /// densified path exceeds this.
+    pub max_samples: usize,
+    /// Minimum number of densified waypoints. Small paths are densified at least this far so the
+    /// finite-difference path derivatives stay meaningful.
+    pub min_samples: usize,
+    /// Pre-densification waypoint merge threshold, expressed as a fraction of the mean
+    /// segment length of the input path. Any interior waypoint whose chord distance to the
+    /// previous kept waypoint is below this threshold is dropped before densification — a
+    /// path with one 1e-6 segment and one 0.7 segment otherwise produces an integrator
+    /// equality whose `ds[k]` factors range across six orders of magnitude across adjacent
+    /// segments, which the IPM cannot scale away.
+    ///
+    /// Default 5e-3 (drop waypoints less than 0.5% of the mean segment apart). The actual
+    /// threshold is `max(min_segment_fraction × mean_segment, 1e-5)` — the absolute floor
+    /// catches "all segments are tiny" pathological inputs that would otherwise be
+    /// unfilterable. Set to 0.0 to disable merging.
+    pub min_segment_fraction: f64,
+}
+
+impl Default for DensificationOptions {
+    fn default() -> Self {
+        Self {
+            max_segment_step: Some(0.05),
+            max_samples: 200,
+            min_samples: 10,
+            min_segment_fraction: 5e-3,
+        }
+    }
+}
+
+/// Numerical options passed through to the sleipnir solver.
+#[derive(Debug, Clone, Copy)]
+pub struct SolverOptions {
+    pub tolerance: f64,
+    pub max_iterations: i32,
+    pub timeout: Option<Duration>,
+    pub diagnostics: bool,
+    /// Half-width of the slack box on the start/end velocity and acceleration boundary
+    /// "equalities". The retimer enforces `|sd[0] - start.sd| ≤ boundary_slack` (and three
+    /// more like it) instead of hard `sd[0] == start.sd`, because the IPM behaves badly when
+    /// rest-to-rest equalities pin variables to exactly zero at the cone tip — a small slack
+    /// box gives the line search room without observable change in output. Defaults to 1e-4.
+    pub boundary_slack: f64,
+    /// When true and TCP constraints are active, the retimer first solves the
+    /// TCP-disabled version of the problem (joint constraints + integrator only) and uses
+    /// the resulting `(sd, sdd, sddd, dt)` as the warm-start initial guess for the
+    /// TCP-enabled solve. The first solve is cheap (smaller constraint set, no quadratic
+    /// TCP terms) and gives stage 2 a feasible iterate to start from — converting "IPM
+    /// stuck in bad basin" failures into ~30-iter convergences. Defaults to true; set
+    /// false to disable for benchmarking the single-stage baseline.
+    pub two_stage_warm_start: bool,
+    /// Relative slack for the backward-difference V/A/J check on the resampled
+    /// output. Default `1e-1` — sized to absorb residual chord-linear FD overshoot
+    /// that no affine NLP row can pin tightly.
+    ///
+    /// The NLP enforces output-FD bounds at the segment endpoints `τ = 3h`,
+    /// `τ = dt[k]`, at densely-sampled interior τ = 5h, 7h, …, and a leading-order
+    /// cross-knot row `|D_k − D_{k−1}|·sd[k] / h^n ≤ limit` at every interior
+    /// densified knot. The residual that escapes those rows is the *combined* FD
+    /// reading at the worst-case post-knot sample, where the cross-knot spike
+    /// stacks with the analytical kinematic contribution `D·sddd` (jerk) or
+    /// `(D_k+D_{k−1})/2 · sdd` (acceleration). Bounding that sum strictly is
+    /// infeasible whenever the analytical row is near-binding — the two
+    /// contributions can't both reach their limit in the FD readout, but the
+    /// either-or is a disjunction the IPM can't express. Empirically the stacked
+    /// overshoot is ~5–10 % of the limit on sharp-corner paths; 10 % covers it.
+    pub resampled_check_slack: f64,
+    /// When true, the retimer applies a global time-rescale after the IPM solve so
+    /// that `total_time` is the smallest multiple of `cycle_time = 1/sample_rate_hz`
+    /// no smaller than the IPM's optimum. The rescale identity `t → α·t` with
+    /// `α = ceil(T/cyc)·cyc / T ≥ 1` transforms `(sd, sdd, sddd, dt) → (sd/α, sdd/α²,
+    /// sddd/α³, α·dt)` and preserves `ds[k] = sd·dt + ½·sdd·dt² + ⅙·sddd·dt³` exactly,
+    /// so every integrator equality still holds and every constraint LHS shrinks by
+    /// the same factor → no constraint violations introduced. Per-segment `dt[k]`
+    /// remains continuous; only the total lands on the cycle grid. The benefit is
+    /// that `resample_to_uniform` then produces output samples on a uniform
+    /// `cycle_time` spacing with the final sample at exactly `total_time` — no
+    /// last-sample clamp needed and no spurious backward-FD spike at the end.
+    /// Trajectory slowdown is bounded by `cycle_time / total_time` (≲ 1% for typical
+    /// 1-second-class trajectories at 125 Hz). Defaults to true.
+    pub discrete_dt: bool,
+}
+
+impl Default for SolverOptions {
+    fn default() -> Self {
+        Self {
+            tolerance: 1e-6,
+            // Budget tuned so a healthy retime converges well inside it (most tests land
+            // in 50–300 iter) and pathological inputs fail fast rather than burning
+            // minutes of CPU in the restoration phase. Long smooth paths with many
+            // extrema can need ~2k iter to converge under PCHIP, and some captured
+            // user trajectories (`bench_8wp`-shaped) need ~1.5–2k. Bumped to 2500 to
+            // catch them; per-call override still available for harder workloads.
+            max_iterations: 2500,
+            timeout: None,
+            diagnostics: false,
+            boundary_slack: 1e-4,
+            two_stage_warm_start: true,
+            resampled_check_slack: 1e-1,
+            discrete_dt: true,
+        }
+    }
+}
+
+/// Full constraint bundle consumed by [`crate::Topp3Tcp6::retime`].
+#[derive(Debug, Clone)]
+pub struct Topp3Tcp6Constraints<const N: usize> {
+    pub joint: JointLimits<N>,
+    /// `None` skips TCP entirely (no FK, no TCP rows in the NLP). `Some(..)` enables it.
+    pub tcp: Option<TcpLimits>,
+    pub boundary: BoundaryConditions<N>,
+    pub densification: DensificationOptions,
+    pub solver: SolverOptions,
+    /// Output sample rate in Hz. The output trajectory uses `dt = 1/sample_rate_hz`.
+    pub sample_rate_hz: f64,
+    /// Number of joints at the base of the kinematic tree that are held constant at their
+    /// starting value. The input path must have those joints identical at every waypoint.
+    pub locked_prefix: usize,
+    /// If true, the retimed trajectory is validated against the provided `validator` after retiming and rejected if invalid.
+    pub post_validation: bool,
+    /// If true, after the validator pass the retimer re-evaluates the analytical
+    /// per-sample joint and TCP kinematics from the converged NLP solution against the
+    /// configured [`JointLimits`] / [`TcpLimits`] and returns
+    /// [`deke_types::DekeError::ExceedsDynamicsLimits`] on the first violation. Useful
+    /// as a belt-and-braces guard against IPM convergence slop or upstream bugs.
+    pub check_output_dynamics: bool,
+}
+
+impl<const N: usize> Topp3Tcp6Constraints<N> {
+    /// Convenience constructor: no TCP constraints, symmetric joint limits, rest-to-rest
+    /// boundary, no locked joints, 125 Hz output.
+    pub fn symmetric(v_max: f64, a_max: f64, j_max: f64) -> Self {
+        Self {
+            joint: JointLimits::symmetric(v_max, a_max, j_max),
+            tcp: None,
+            boundary: BoundaryConditions::rest_to_rest(),
+            densification: DensificationOptions::default(),
+            solver: SolverOptions::default(),
+            sample_rate_hz: 125.0,
+            locked_prefix: 0,
+            post_validation: true,
+            check_output_dynamics: true,
+        }
+    }
+}

@@ -187,8 +187,6 @@ pub fn solve_cubic_count<F: Float>(out: &mut [F; 3], a: F, b: F, c: F) -> usize 
         out[2] = -cos_term / two + sin_term - a;
         3
     } else {
-        // sqrt(3) hoisted as a constant — was previously `F::from(3.0).sqrt()`
-        // on every call.
         let sqrt3 = F::from(1.7320508075688772).unwrap();
         let mut u = -signed_cbrt(q.abs() + (q_sq - p_cube).sqrt());
         if q < F::zero() {

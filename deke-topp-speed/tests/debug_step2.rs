@@ -7,7 +7,8 @@ use deke_topp_speed::{
     ControlMode, Coordination, DurationGrid, GoalOutOfBounds, MotionSpec, Retimer, SRobotPath,
     SRobotQ, ToppSolver,
 };
-use deke_types::{DHChain, DHJoint, JointValidator};
+use deke_kin::{DHJoint, JointLimits, Kinematics};
+use deke_types::JointValidator;
 
 #[test]
 fn debug_long_motion_failure() {
@@ -27,7 +28,6 @@ fn debug_long_motion_failure() {
     spec.goal_overflow = GoalOutOfBounds::Reject;
 
     let path = SRobotPath::from_two(spec.current_pose, spec.goal_pose);
-    let solver: ToppSolver<3, f64> = ToppSolver::new(Duration::from_millis(10));
 
     let joint = DHJoint::<f64> {
         a: 0.0,
@@ -35,11 +35,13 @@ fn debug_long_motion_failure() {
         d: 0.0,
         theta_offset: 0.0,
     };
-    let fk: DHChain<3, f64> = DHChain::<3, f64>::new_f64([joint, joint, joint]);
+    let fk: Kinematics<3, f64> =
+        Kinematics::from_dh([joint, joint, joint], JointLimits::symmetric(1e6), &[]);
     let validator: JointValidator<3, f64> =
         JointValidator::new(SRobotQ::splat(-1e6), SRobotQ::splat(1e6));
 
-    let (result, diag) = solver.retime(&spec, &path, &fk, &validator, &());
+    let (result, diag) =
+        ToppSolver::new(Duration::from_millis(10), &fk).retime(&spec, &path, &validator, &());
     eprintln!("diagnostic: {diag}");
     let traj = result.expect("retime ok");
     eprintln!("samples: {}, dt: {:?}", traj.len(), traj.dt());

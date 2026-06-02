@@ -7,19 +7,20 @@
 use std::time::Duration;
 
 use deke_topp_speed::{MotionSpec, Retimer, SRobotPath, SRobotQ, ToppSolver};
-use deke_types::{DHChain, DHJoint, FKChain, JointValidator};
+use deke_kin::{DHJoint, JointLimits, Kinematics};
+use deke_types::{ContinuousFKChain, JointValidator};
 
 /// Three revolute joints all rotating about z, link lengths 1 + 1 + 0.5.
 /// At any configuration the wrist is 2.5 m from the base axis, so the TCP
 /// speed produced by joint-1 motion alone is `2.5 · q̇₁`.
-fn planar_arm() -> DHChain<3, f64> {
+fn planar_arm() -> Kinematics<3, f64> {
     let make = |a: f64| DHJoint::<f64> {
         a,
         alpha: 0.0,
         d: 0.0,
         theta_offset: 0.0,
     };
-    DHChain::<3, f64>::new_f64([make(1.0), make(1.0), make(0.5)])
+    Kinematics::from_dh([make(1.0), make(1.0), make(0.5)], JointLimits::symmetric(1e6), &[])
 }
 
 fn fast_spec() -> MotionSpec<3, f64> {
@@ -43,11 +44,11 @@ fn no_tcp_limit_leaves_diagnostic_empty() {
         SRobotQ::from_array([0.0, 0.0, 0.0]),
         SRobotQ::from_array([1.0, 0.0, 0.0]),
     );
-    let solver: ToppSolver<3, f64> = ToppSolver::new(Duration::from_micros(500));
     let fk = planar_arm();
+    let solver = ToppSolver::new(Duration::from_micros(500), &fk);
     let val = validator();
 
-    let (res, diag) = solver.retime(&spec, &path, &fk, &val, &());
+    let (res, diag) = solver.retime(&spec, &path, &val, &());
     assert!(res.is_ok(), "baseline retime should succeed");
     assert!(
         diag.tcp_speed_scale.is_none(),
@@ -74,12 +75,12 @@ fn no_tcp_limit_produces_identical_trajectory() {
         SRobotQ::from_array([0.6, 0.0, 0.8]),
     ])
     .expect("valid multi-waypoint path");
-    let solver: ToppSolver<3, f64> = ToppSolver::new(Duration::from_micros(500));
     let fk = planar_arm();
+    let solver = ToppSolver::new(Duration::from_micros(500), &fk);
     let val = validator();
 
-    let (res_a, diag_a) = solver.retime(&spec_a, &path, &fk, &val, &());
-    let (res_b, diag_b) = solver.retime(&spec_b, &path, &fk, &val, &());
+    let (res_a, diag_a) = solver.retime(&spec_a, &path, &val, &());
+    let (res_b, diag_b) = solver.retime(&spec_b, &path, &val, &());
     let traj_a = res_a.expect("retime a");
     let traj_b = res_b.expect("retime b");
 
@@ -119,11 +120,11 @@ fn slack_tcp_limit_leaves_trajectory_alone() {
         SRobotQ::from_array([0.0, 0.0, 0.0]),
         SRobotQ::from_array([1.0, 0.0, 0.0]),
     );
-    let solver: ToppSolver<3, f64> = ToppSolver::new(Duration::from_micros(500));
     let fk = planar_arm();
+    let solver = ToppSolver::new(Duration::from_micros(500), &fk);
     let val = validator();
 
-    let (_res, slack_diag) = solver.retime(&spec, &path, &fk, &val, &());
+    let (_res, slack_diag) = solver.retime(&spec, &path, &val, &());
     let slack_scale = slack_diag.tcp_speed_scale.expect("scale reported");
     let slack_peak = slack_diag.tcp_peak_speed.expect("peak reported");
     assert!(slack_peak < 100.0, "peak should be below the slack limit");
@@ -136,9 +137,9 @@ fn slack_tcp_limit_leaves_trajectory_alone() {
     // same trajectory length as the slack run.
     let mut baseline_spec = spec.clone();
     baseline_spec.max_tcp_speed = None;
-    let (baseline_res, _) = solver.retime(&baseline_spec, &path, &fk, &val, &());
+    let (baseline_res, _) = solver.retime(&baseline_spec, &path, &val, &());
     let baseline_traj = baseline_res.expect("baseline retime");
-    let (slack_res, _) = solver.retime(&spec, &path, &fk, &val, &());
+    let (slack_res, _) = solver.retime(&spec, &path, &val, &());
     let slack_traj = slack_res.expect("slack retime");
     assert_eq!(
         baseline_traj.len(),
@@ -157,7 +158,7 @@ fn slack_tcp_limit_leaves_trajectory_alone() {
 fn per_section_scaling_beats_global_on_mixed_sections() {
     let fk = planar_arm();
     let val = validator();
-    let solver: ToppSolver<3, f64> = ToppSolver::new(Duration::from_micros(500));
+    let solver = ToppSolver::new(Duration::from_micros(500), &fk);
 
     let path = SRobotPath::try_new(vec![
         SRobotQ::from_array([0.0, 0.0, 0.0]),
@@ -184,14 +185,14 @@ fn per_section_scaling_beats_global_on_mixed_sections() {
 
     // Baseline (no TCP limit) — gives us the un-throttled duration and the
     // peak TCP we'd have to scale away with a global pass.
-    let (baseline_res, _baseline_diag) = solver.retime(&base_spec, &path, &fk, &val, &());
+    let (baseline_res, _baseline_diag) = solver.retime(&base_spec, &path, &val, &());
     let baseline_traj = baseline_res.expect("baseline retime");
     let baseline_dur = baseline_traj.duration().as_secs_f64();
 
     // Limited run.
     let mut spec = base_spec.clone();
     spec.max_tcp_speed = Some(1.0);
-    let (limited_res, limited_diag) = solver.retime(&spec, &path, &fk, &val, &());
+    let (limited_res, limited_diag) = solver.retime(&spec, &path, &val, &());
     let limited_traj = limited_res.expect("limited retime");
     let limited_dur = limited_traj.duration().as_secs_f64();
 
@@ -217,7 +218,7 @@ fn per_section_scaling_beats_global_on_mixed_sections() {
 }
 
 /// Helper: numerically differentiate the trajectory and sweep TCP speed.
-fn max_tcp_in(traj: &deke_types::SRobotTraj<3, f64>, fk: &DHChain<3, f64>) -> f64 {
+fn max_tcp_in(traj: &deke_types::SRobotTraj<3, f64>, fk: &Kinematics<3, f64>) -> f64 {
     let mut max = 0.0_f64;
     for i in 0..traj.len() {
         let q = traj.get(i).unwrap();
@@ -248,11 +249,11 @@ fn tcp_limit_bounds_cartesian_speed() {
         SRobotQ::from_array([0.0, 0.0, 0.0]),
         SRobotQ::from_array([1.0, 0.0, 0.0]),
     );
-    let solver: ToppSolver<3, f64> = ToppSolver::new(Duration::from_micros(500));
     let fk = planar_arm();
+    let solver = ToppSolver::new(Duration::from_micros(500), &fk);
     let val = validator();
 
-    let (res, diag) = solver.retime(&spec, &path, &fk, &val, &());
+    let (res, diag) = solver.retime(&spec, &path, &val, &());
     let traj = res.expect("retime should succeed");
 
     // Diagnostic sanity: the unscaled peak must exceed the limit; the

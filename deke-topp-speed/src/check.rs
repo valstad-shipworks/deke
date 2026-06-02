@@ -37,10 +37,6 @@ fn one_sixth<F: Float>() -> F {
     F::one() / F::from(6.0).unwrap()
 }
 
-// ---------------------------------------------------------------------------
-// First-order pose validator.
-// ---------------------------------------------------------------------------
-
 pub mod first_order_pose {
     use super::*;
 
@@ -119,10 +115,6 @@ pub mod first_order_pose {
         check_profile(profile, signs, touched, cruise_velocity)
     }
 }
-
-// ---------------------------------------------------------------------------
-// Second-order pose validator.
-// ---------------------------------------------------------------------------
 
 pub mod second_order_pose {
     use super::*;
@@ -287,10 +279,6 @@ pub mod second_order_pose {
         check_profile(profile, signs, touched, accel0, accel1, limits)
     }
 }
-
-// ---------------------------------------------------------------------------
-// Third-order pose validator.
-// ---------------------------------------------------------------------------
 
 pub mod third_order_pose {
     use super::*;
@@ -556,10 +544,6 @@ pub mod third_order_pose {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Second-order velocity validator.
-// ---------------------------------------------------------------------------
-
 pub mod second_order_vel {
     use super::*;
 
@@ -631,10 +615,6 @@ pub mod second_order_vel {
         check_profile(profile, signs, touched, a_avg)
     }
 }
-
-// ---------------------------------------------------------------------------
-// Third-order velocity validator.
-// ---------------------------------------------------------------------------
 
 pub mod third_order_vel {
     use super::*;

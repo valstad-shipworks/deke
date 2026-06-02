@@ -10,7 +10,7 @@
 //! 3. Three-segment sliding-window relaxation.
 //! 4. Two-segment sliding-window relaxation.
 
-use deke_types::{FKScalar, SRobotQ};
+use deke_types::{KinScalar, SRobotQ};
 use num_traits::Float;
 
 use crate::feasible::Feasible;
@@ -23,10 +23,6 @@ use crate::pose_math;
 use crate::segment::Segment;
 use crate::spec::MotionSpec;
 use crate::status::StepStatus;
-
-// ---------------------------------------------------------------------------
-// Small helpers
-// ---------------------------------------------------------------------------
 
 #[inline]
 fn from_f<F: Float>(x: f64) -> F {
@@ -47,10 +43,6 @@ fn fmax<F: Float>(a: F, b: F) -> F {
 fn fabs<F: Float>(x: F) -> F {
     if x < F::zero() { F::zero() - x } else { x }
 }
-
-// ---------------------------------------------------------------------------
-// FullLimits: third-order limits + optional pose envelope
-// ---------------------------------------------------------------------------
 
 /// Per-section, per-joint kinematic limits including an optional pose
 /// envelope.
@@ -92,10 +84,6 @@ impl<F: Float> FullLimits<F> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// GradientContribution: per-section, per-joint gradient accumulator
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Clone, Copy)]
 struct GradientContribution<F: Float> {
     delta_v: F,
@@ -118,10 +106,6 @@ impl<F: Float> GradientContribution<F> {
         self.scale = F::one();
     }
 }
-
-// ---------------------------------------------------------------------------
-// Segment2Segment: per-section synchronisation helper
-// ---------------------------------------------------------------------------
 
 /// Per-section bookkeeping for synchronising the per-joint single-axis
 /// profiles to a common section duration. Holds one [`Feasible`] per DoF, the
@@ -284,10 +268,6 @@ impl<const N: usize, F: Float> Segment2Segment<N, F> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// SearchState: optimiser loop indices and step sizes
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Clone)]
 struct SearchState<F: Float> {
     global_step_index: usize,
@@ -320,22 +300,16 @@ impl<F: Float> SearchState<F> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// WaypointSolver
-// ---------------------------------------------------------------------------
-
 /// Multi-waypoint trajectory solver. See module documentation for the
 /// optimisation strategy.
 #[derive(Debug)]
-pub(crate) struct WaypointSolver<const N: usize, F: FKScalar> {
-    // Settings -----------------------------------------------------------
+pub(crate) struct WaypointSolver<const N: usize, F: KinScalar> {
     number_global_steps: usize,
     number_local_steps: usize,
     number_smoothing_steps: usize,
     number_acceleration_smoothing_steps: usize,
     min_global_steps: usize,
     duration_break_eps: F,
-    // Per-solve state ---------------------------------------------------
     search_state: SearchState<F>,
     section_positions: Vec<SRobotQ<N, F>>,
     segments: Vec<Segment2Segment<N, F>>,
@@ -354,7 +328,7 @@ pub(crate) struct WaypointSolver<const N: usize, F: FKScalar> {
     step_a_scratch: [Segment<F>; 6],
 }
 
-impl<const N: usize, F: FKScalar> WaypointSolver<N, F> {
+impl<const N: usize, F: KinScalar> WaypointSolver<N, F> {
     pub fn new() -> Self {
         let mut s = Self {
             number_global_steps: 0,
@@ -419,10 +393,6 @@ impl<const N: usize, F: FKScalar> WaypointSolver<N, F> {
                 .resize(self.waypoint_states.len(), [zero_state; N]);
         }
     }
-
-    // -------------------------------------------------------------------
-    // Static helpers (mirror C++ static methods)
-    // -------------------------------------------------------------------
 
     #[inline]
     fn copy_boundary_state(
@@ -521,10 +491,6 @@ impl<const N: usize, F: FKScalar> WaypointSolver<N, F> {
         }
     }
 
-    // -------------------------------------------------------------------
-    // Optimisation passes
-    // -------------------------------------------------------------------
-
     /// Outer gradient-descent loop. For each global iteration:
     /// - reset gradient accumulators
     /// - sum each section's analytic Jacobian into the bracketing waypoint
@@ -535,19 +501,18 @@ impl<const N: usize, F: FKScalar> WaypointSolver<N, F> {
     /// Stops when the duration plateau is hit (and the synchronising joint
     /// stays put) or when the per-solve time budget is exceeded.
     fn run_global_optimization_pass(&mut self, profile_buffer: &mut Vec<[Segment<F>; N]>) {
-        // The big `self.segments_tmp = self.segments.clone()` is gone: every
-        // trial rewrites `segments_tmp`'s cells before reading them
-        // (non-zero-gradient (seg, dof) cells via StepA; zero-gradient cells
-        // via the explicit refresh inside the trial loop;
-        // sync_time/sync_dof_index/block_selector via find_feasible_time).
-        // The one site that previously *read* a stale `segments_tmp[].sync_time`
-        // (the prev_sync_time tracker in apply_step_length_update) now reads
-        // from `segments[]` instead.
+        // Each trial rewrites every `segments_tmp` cell before reading it:
+        // non-zero-gradient (seg, dof) cells via StepA, zero-gradient cells
+        // via the explicit refresh inside the trial loop, and
+        // sync_time/sync_dof_index/block_selector via find_feasible_time.
+        // The prev_sync_time tracker in apply_step_length_update reads
+        // from `segments[]` rather than `segments_tmp[]` to avoid a stale
+        // value.
         if self.segments_tmp.len() != self.segments.len() {
             self.segments_tmp
                 .resize_with(self.segments.len(), Segment2Segment::new);
         }
-        // `states_buffer` *does* need an initial sync because
+        // `states_buffer` needs an initial sync because
         // `clamp_state_with_gradient` only writes the interior states (indices
         // 1..=n_segments−1); the start (index 0) and goal (last) entries are
         // read by StepA but never written by the optimizer. The buffer is tiny
@@ -1334,10 +1299,6 @@ impl<const N: usize, F: FKScalar> WaypointSolver<N, F> {
         false
     }
 
-    // -------------------------------------------------------------------
-    // Smoothing
-    // -------------------------------------------------------------------
-
     /// Per-non-controlling-DoF smoothing of waypoint velocity/acceleration
     /// states using finite differences. Accepts a tentative update only when
     /// every section's profile stays feasible and unblocked.
@@ -1609,10 +1570,6 @@ impl<const N: usize, F: FKScalar> WaypointSolver<N, F> {
         }
     }
 
-    // -------------------------------------------------------------------
-    // Finalize
-    // -------------------------------------------------------------------
-
     fn finalize_second_order(
         &mut self,
         spec: &MotionSpec<N, F>,
@@ -1699,10 +1656,6 @@ impl<const N: usize, F: FKScalar> WaypointSolver<N, F> {
         plan.duration = *plan.intermediate_durations.last().unwrap_or(&F::zero());
         StepStatus::Done
     }
-
-    // -------------------------------------------------------------------
-    // Section setup helpers (used by solve and continue_solve)
-    // -------------------------------------------------------------------
 
     /// Compress consecutive identical waypoints into a single section. Mirrors
     /// the per-DoF "no-movement" filter on the C++ side (the special-cased 1-DoF
@@ -1840,10 +1793,6 @@ impl<const N: usize, F: FKScalar> WaypointSolver<N, F> {
         plan.intermediate_durations.resize(section_cnt, F::zero());
     }
 
-    // -------------------------------------------------------------------
-    // Main entry points
-    // -------------------------------------------------------------------
-
     /// Solve the full multi-waypoint trajectory in one shot.
     pub fn solve(&mut self, spec: &MotionSpec<N, F>, plan: &mut Plan<N, F>) -> StepStatus {
         plan.waypoint_iterations = 0;
@@ -1932,20 +1881,16 @@ impl<const N: usize, F: FKScalar> WaypointSolver<N, F> {
     }
 }
 
-impl<const N: usize, F: FKScalar> Default for WaypointSolver<N, F> {
+impl<const N: usize, F: KinScalar> Default for WaypointSolver<N, F> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-// ---------------------------------------------------------------------------
-// Local third-order Step-B dispatcher
-// ---------------------------------------------------------------------------
-
 /// Wrap the third-order Step-B in a uniform success/failure call. The
 /// underlying [`pose_math::third_order::StepB::get_profile`] takes `&mut self`;
 /// this helper forwards through.
-fn step_b_get_profile<F: FKScalar>(
+fn step_b_get_profile<F: KinScalar>(
     step: &mut pose_math::third_order::StepB<F>,
     profile: &mut Segment<F>,
 ) -> bool {

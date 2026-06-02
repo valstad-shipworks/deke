@@ -85,10 +85,6 @@ impl<F: Float> Segment<F> {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Private extrema-search helpers.
-    // -----------------------------------------------------------------------
-
     /// If `delta_time` falls strictly inside `(0, duration)`, integrate the
     /// state and update the position extrema accordingly.
     fn extend_position_extrema_at(
@@ -225,10 +221,6 @@ impl<F: Float> Segment<F> {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Public extrema queries.
-    // -----------------------------------------------------------------------
-
     /// Bound on the position reached by this segment, including the optional
     /// pre-halt ramp and the terminal `pf` value.
     pub fn get_position_extrema(&self) -> Extent<F> {
@@ -311,10 +303,6 @@ impl<F: Float> Segment<F> {
         bound
     }
 
-    // -----------------------------------------------------------------------
-    // Boundary-state setters.
-    // -----------------------------------------------------------------------
-
     /// Initialise the section-0 state and the final velocity/acceleration.
     /// The final position `pf` is set elsewhere.
     pub fn set_initial(&mut self, p0: F, v0: F, a0: F, vf: F, af: F) {
@@ -346,10 +334,6 @@ impl<F: Float> Segment<F> {
         self.vf = vf;
         self.pf = pf;
     }
-
-    // -----------------------------------------------------------------------
-    // Time-at-value root finders.
-    // -----------------------------------------------------------------------
 
     /// Find the earliest time `t >= t_min` at which the segment reaches the
     /// position `value`. On success writes the time into `*out_t` and returns
@@ -437,10 +421,6 @@ impl<F: Float> Segment<F> {
         }
         false
     }
-
-    // -----------------------------------------------------------------------
-    // Scaling.
-    // -----------------------------------------------------------------------
 
     /// Scale the segment in time and position.
     pub fn scale(&mut self, position_scale: F, time_scale: F) {

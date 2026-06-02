@@ -10,7 +10,7 @@
 //! the `Pursuer`) projects samples out as [`SRobotQ`] tuples or as packaged
 //! [`crate::sample::MotionSample`]s.
 
-use deke_types::{DekeError, DekeResult, FKScalar, SRobotQ};
+use deke_types::{DekeError, DekeResult, KinScalar, SRobotQ};
 
 use crate::extent::Extent;
 use crate::kin_state::KinThirdPose;
@@ -23,7 +23,7 @@ use crate::segment::Segment;
 /// holds the trajectory time at which section `i` ends, so
 /// `intermediate_durations.last()` equals [`Plan::duration`].
 #[derive(Debug, Clone)]
-pub(crate) struct Plan<const N: usize, F: FKScalar = f32> {
+pub(crate) struct Plan<const N: usize, F: KinScalar = f32> {
     /// One [`Segment`] per joint per section.
     pub(crate) profiles: Vec<[Segment<F>; N]>,
     /// Cumulative end-time of each section, in trajectory time.
@@ -42,7 +42,7 @@ pub(crate) struct Plan<const N: usize, F: FKScalar = f32> {
 }
 
 #[allow(dead_code)] // inspection / public-API surface kept for parity even when unused internally
-impl<const N: usize, F: FKScalar> Plan<N, F> {
+impl<const N: usize, F: KinScalar> Plan<N, F> {
     /// Construct an empty plan: one zero-length section, all states at the
     /// origin.
     pub(crate) fn empty() -> Self {
@@ -71,10 +71,6 @@ impl<const N: usize, F: FKScalar> Plan<N, F> {
     pub(crate) fn independent_min_durations(&self) -> SRobotQ<N, F> {
         self.independent_min_durations
     }
-
-    // -----------------------------------------------------------------------
-    // Time-domain sampling.
-    // -----------------------------------------------------------------------
 
     /// Locate which interior step of a single-joint segment contains the
     /// given local time. On entry `time_ref` is the section-local time; on
@@ -299,7 +295,6 @@ impl<const N: usize, F: FKScalar> Plan<N, F> {
                 let halt = &segment.halt;
                 let halt_end = section_t0 + halt.duration;
 
-                // -- Halt phase (only on section 0) -----------------------
                 if step_idx < 0 {
                     let sub = if step_idx == -2 { 0usize } else { 1usize };
                     let halt_p = halt.p[sub];
@@ -331,7 +326,6 @@ impl<const N: usize, F: FKScalar> Plan<N, F> {
                     continue;
                 }
 
-                // -- Body phase: 7 steps ---------------------------------
                 if step_idx >= 7 {
                     // Past body in this section — move on.
                     section_idx += 1;
@@ -410,10 +404,6 @@ impl<const N: usize, F: FKScalar> Plan<N, F> {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Per-axis extrema across the whole trajectory.
-    // -----------------------------------------------------------------------
-
     /// Recompute and return the per-joint position extrema across all
     /// sections. Times are expressed in trajectory time.
     pub(crate) fn position_extrema(&mut self) -> [Extent<F>; N] {
@@ -460,10 +450,6 @@ impl<const N: usize, F: FKScalar> Plan<N, F> {
         self.velocity_extrema
     }
 
-    // -----------------------------------------------------------------------
-    // Time-at-value root finders.
-    // -----------------------------------------------------------------------
-
     /// First trajectory time at which joint `dof` reaches position `value`,
     /// restricted to `t >= t_min`. Returns `None` when the value is never
     /// reached or `dof` is out of range.
@@ -505,10 +491,6 @@ impl<const N: usize, F: FKScalar> Plan<N, F> {
         }
         None
     }
-
-    // -----------------------------------------------------------------------
-    // Scaling / composition.
-    // -----------------------------------------------------------------------
 
     /// Scale the trajectory in time and position. `position_scale` rescales
     /// the position-domain quantities (positions, velocities, accelerations,
@@ -557,7 +539,7 @@ impl<const N: usize, F: FKScalar> Plan<N, F> {
     }
 }
 
-impl<const N: usize, F: FKScalar> Default for Plan<N, F> {
+impl<const N: usize, F: KinScalar> Default for Plan<N, F> {
     fn default() -> Self {
         Self::empty()
     }

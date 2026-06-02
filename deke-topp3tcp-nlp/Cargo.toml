@@ -1,0 +1,25 @@
+[package]
+name = "deke-topp3tcp-nlp"
+version = "2.0.0"
+edition = "2024"
+description = "Time-optimal path-parameterization (TOPP-3TCP) retimers over an NLP: continuous and discrete formulations."
+license = "Apache-2.0"
+
+[features]
+default = []
+valuable = ["dep:valuable", "deke-types/valuable", "glam-traits-ext/Valuable"]
+
+[dependencies]
+deke-types = { version = "2.0" }
+deke-topp-speed = { path = "../deke-topp-speed" }
+glam-traits-ext = { version = "0.32.3", features = ["approx"] }
+sleipnir = { git = "https://github.com/oh-yes-0-fps/Sleipnir.git", branch = "rust-with-regularized-ldlt-patch", default-features = false }
+ndarray = { version = "0.17.2", features = ["approx"] }
+glam = "0.32.1"
+num-traits = "0.2.19"
+thiserror = "2.0.18"
+valuable = { version = "0.1", default-features = false, features = ["alloc"], optional = true }
+
+[dev-dependencies]
+approx = "0.5.1"
+deke-kin = { version = "2.0", path = "../deke-kin" }

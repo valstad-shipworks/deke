@@ -1,0 +1,39 @@
+[package]
+name = "deke-kin"
+version = "2.0.0"
+edition = "2024"
+description = "Pure-Rust port of EAIK — Efficient Analytical Inverse Kinematics for 1–6R serial manipulators."
+license = "MIT"
+
+[dependencies]
+deke-types = { path = "../deke-types" }
+const_soft_float = "0.1.4"
+glam = "0.32.1"
+glam-traits-ext = "0.32.3"
+thiserror = "2.0.18"
+num-traits = "0.2"
+
+# `num-complex` is the polynomial-root scalar field used by the vendored ik-geo
+# subproblem kernels (see src/ik_geo/).
+num-complex = "0.4"
+
+# General (non-symmetric) eigenvalue solve for the Raghavan–Roth/Manocha–Canny
+# general-6R IK (src/rr_ik.rs): the degree-16 characteristic roots are the
+# eigenvalues of the companion linearisation of the 12×12 quadratic matrix
+# polynomial. API used: `Mat::eigen_from_real` / `eigenvalues_from_real`.
+faer = "0.24.0"
+
+[dev-dependencies]
+criterion = "0.8.2"
+
+[[bench]]
+name = "ik"
+harness = false
+
+[[bench]]
+name = "fk"
+harness = false
+
+[[bench]]
+name = "rr_ik"
+harness = false

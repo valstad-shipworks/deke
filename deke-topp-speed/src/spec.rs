@@ -1,7 +1,7 @@
 //! Kinematic-limit specification and goal description used by both the
 //! offline solver and the live pursuer.
 
-use deke_types::{FKScalar, SRobotQ};
+use deke_types::{KinScalar, SRobotQ};
 
 use crate::modes::{ControlMode, Coordination, DurationGrid, GoalOutOfBounds};
 
@@ -10,18 +10,15 @@ use crate::modes::{ControlMode, Coordination, DurationGrid, GoalOutOfBounds};
 /// Field naming follows the convention `current_*`, `goal_*` and `max_*` /
 /// `min_*` for limits. Most fields are optional or carry a sensible default.
 #[derive(Debug, Clone)]
-pub struct MotionSpec<const N: usize, F: FKScalar = f32> {
-    // --- Current kinematic state ---
+pub struct MotionSpec<const N: usize, F: KinScalar = f32> {
     pub current_pose: SRobotQ<N, F>,
     pub current_vel: SRobotQ<N, F>,
     pub current_accel: SRobotQ<N, F>,
 
-    // --- Goal state ---
     pub goal_pose: SRobotQ<N, F>,
     pub goal_vel: SRobotQ<N, F>,
     pub goal_accel: SRobotQ<N, F>,
 
-    // --- Kinematic ceilings (always required) ---
     pub max_vel: SRobotQ<N, F>,
     pub max_accel: SRobotQ<N, F>,
     pub max_jerk: SRobotQ<N, F>,
@@ -34,35 +31,27 @@ pub struct MotionSpec<const N: usize, F: FKScalar = f32> {
     /// trajectory is slowed even when only a small region binds).
     pub max_tcp_speed: Option<F>,
 
-    // --- Kinematic floors (None → -max_*) ---
     pub min_vel: Option<SRobotQ<N, F>>,
     pub min_accel: Option<SRobotQ<N, F>>,
 
-    // --- Position envelope ---
     pub max_pose: Option<SRobotQ<N, F>>,
     pub min_pose: Option<SRobotQ<N, F>>,
 
-    // --- Per-axis enabled mask ---
     pub axis_active: [bool; N],
 
-    // --- Global modes ---
     pub control_mode: ControlMode,
     pub coordination: Coordination,
     pub duration_grid: DurationGrid,
     pub goal_overflow: GoalOutOfBounds,
 
-    // --- Duration constraints ---
     pub min_duration: Option<F>,
     pub compute_budget: Option<F>, // microseconds
 
-    // --- Per-axis overrides ---
     pub per_axis_control_mode: Option<[ControlMode; N]>,
     pub per_axis_coordination: Option<[Coordination; N]>,
 
-    // --- Intermediate waypoints (for multi-segment solves) ---
     pub waypoint_poses: Vec<SRobotQ<N, F>>,
 
-    // --- Per-section limits ---
     pub per_section_max_vel: Option<Vec<SRobotQ<N, F>>>,
     pub per_section_max_accel: Option<Vec<SRobotQ<N, F>>>,
     pub per_section_max_jerk: Option<Vec<SRobotQ<N, F>>>,
@@ -73,7 +62,7 @@ pub struct MotionSpec<const N: usize, F: FKScalar = f32> {
     pub per_section_min_duration: Option<Vec<F>>,
 }
 
-impl<const N: usize, F: FKScalar> MotionSpec<N, F> {
+impl<const N: usize, F: KinScalar> MotionSpec<N, F> {
     /// Construct a spec at the origin with all limits set to one (so the user
     /// must overwrite them before use).
     pub fn new() -> Self {
@@ -114,7 +103,7 @@ impl<const N: usize, F: FKScalar> MotionSpec<N, F> {
     }
 }
 
-impl<const N: usize, F: FKScalar> Default for MotionSpec<N, F> {
+impl<const N: usize, F: KinScalar> Default for MotionSpec<N, F> {
     fn default() -> Self {
         Self::new()
     }

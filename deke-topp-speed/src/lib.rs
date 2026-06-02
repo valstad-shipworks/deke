@@ -6,7 +6,7 @@
 //!
 //! The number of joints is fixed at compile time via the const generic `N`.
 //! All numerics are generic over the scalar `F`, which must implement
-//! [`deke_types::FKScalar`] (so this works with `f32` or `f64`).
+//! [`deke_types::KinScalar`] (so this works with `f32` or `f64`).
 //!
 //! # Public surface
 //!
@@ -25,7 +25,7 @@
 //!   reached.
 
 pub use deke_types::{
-    DekeError, DekeResult, FKChain, FKScalar, Retimer, SRobotPath, SRobotQ, SRobotTraj, Validator,
+    DekeError, DekeResult, FKChain, KinScalar, Retimer, SRobotPath, SRobotQ, SRobotTraj, Validator,
 };
 
 mod check;

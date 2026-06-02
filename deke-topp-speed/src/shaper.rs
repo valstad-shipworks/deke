@@ -4,7 +4,8 @@ use core::fmt;
 use std::time::Duration;
 
 use deke_types::{
-    DekeError, DekeResult, FKChain, FKScalar, Retimer, SRobotPath, SRobotQ, SRobotTraj, Validator,
+    ContinuousFKChain, DekeError, DekeResult, KinScalar, Retimer, SRobotPath, SRobotQ, SRobotTraj,
+    Validator,
 };
 
 use crate::solver::Solver;
@@ -13,18 +14,19 @@ use crate::status::StepStatus;
 
 /// Stateless offline solver. Holds only the sampling interval used to
 /// resample the analytical trajectory into a discrete [`SRobotTraj`].
-#[derive(Debug, Clone)]
-pub struct ToppSolver<const N: usize, F: FKScalar = f32> {
+pub struct ToppSolver<'a, const N: usize, F: KinScalar, FK: ContinuousFKChain<N, F>> {
     pub dt: Duration,
+    fk: &'a FK,
     _marker: core::marker::PhantomData<fn() -> F>,
 }
 
-impl<const N: usize, F: FKScalar> ToppSolver<N, F> {
-    /// Create a solver that samples the produced trajectory at the given
-    /// control-cycle interval.
-    pub fn new(dt: Duration) -> Self {
+impl<'a, const N: usize, F: KinScalar, FK: ContinuousFKChain<N, F>> ToppSolver<'a, N, F, FK> {
+    /// Create a solver that retimes against `fk`, sampling the produced
+    /// trajectory at the given control-cycle interval.
+    pub fn new(dt: Duration, fk: &'a FK) -> Self {
         Self {
             dt,
+            fk,
             _marker: core::marker::PhantomData,
         }
     }
@@ -60,7 +62,7 @@ impl fmt::Display for SolveDiagnostic {
     }
 }
 
-impl<const N: usize, F: FKScalar> Retimer<N, F, ()> for ToppSolver<N, F> {
+impl<'a, const N: usize, F: KinScalar, FK: ContinuousFKChain<N, F>> Retimer<N, F, ()> for ToppSolver<'a, N, F, FK> {
     type Diagnostic = SolveDiagnostic;
     type Constraints = MotionSpec<N, F>;
 
@@ -68,10 +70,10 @@ impl<const N: usize, F: FKScalar> Retimer<N, F, ()> for ToppSolver<N, F> {
         &self,
         constraints: &Self::Constraints,
         path: &SRobotPath<N, F>,
-        fk: &impl FKChain<N, F>,
         _validator: &V,
         _ctx: &V::Context<'_>,
     ) -> (DekeResult<SRobotTraj<N, F>>, Self::Diagnostic) {
+        let fk = self.fk;
         let mut diag = SolveDiagnostic {
             status: StepStatus::Failure,
             solve_micros: 0.0,
@@ -204,7 +206,7 @@ struct TcpOutcome<F> {
 /// The per-joint `max_vel`/`max_accel`/`max_jerk` ceilings on `spec` are
 /// upheld at every stage: the per-section caps are strictly tighter than
 /// (or equal to) the global ceilings.
-fn enforce_tcp_speed_limit_per_section<const N: usize, F: FKScalar, FK: FKChain<N, F>>(
+fn enforce_tcp_speed_limit_per_section<const N: usize, F: KinScalar, FK: ContinuousFKChain<N, F>>(
     solver: &mut Solver<N, F>,
     plan: &mut crate::plan::Plan<N, F>,
     spec: &mut MotionSpec<N, F>,
@@ -229,13 +231,11 @@ fn enforce_tcp_speed_limit_per_section<const N: usize, F: FKScalar, FK: FKChain<
         });
     }
 
-    // --- Step 1: per-section peak sampling. -------------------------------
     let n_sections = plan.profiles.len();
     let mut peaks: Vec<F> = Vec::with_capacity(n_sections);
     sample_section_tcp_peaks(plan, fk, &mut peaks)?;
     let baseline_peak = peaks.iter().copied().fold(zero, |a, b| if b > a { b } else { a });
 
-    // --- Step 2: per-section scale factors. -------------------------------
     let mut needs_resolve = false;
     let mut k_factors: Vec<F> = Vec::with_capacity(n_sections);
     for &p in peaks.iter() {
@@ -258,7 +258,6 @@ fn enforce_tcp_speed_limit_per_section<const N: usize, F: FKScalar, FK: FKChain<
         });
     }
 
-    // --- Step 2b: do per-section caps actually help over a global scale? --
     // Uniform global scaling multiplies the whole plan by `baseline_peak /
     // limit`. Per-section caps + re-solve scale each section by its own
     // `k_i`. Per-section yields a shorter trajectory iff the sections have
@@ -299,7 +298,6 @@ fn enforce_tcp_speed_limit_per_section<const N: usize, F: FKScalar, FK: FKChain<
         });
     }
 
-    // --- Step 3: install per-section caps and re-solve. -------------------
     // For each section, the effective cap entering this pass is whatever the
     // user (or a previous TCP pass) set in `per_section_max_*`, falling
     // back to the global `max_*`. We divide that effective cap by powers of
@@ -344,7 +342,6 @@ fn enforce_tcp_speed_limit_per_section<const N: usize, F: FKScalar, FK: FKChain<
         });
     }
 
-    // --- Step 4: verify + (rare) safety-net global scale. -----------------
     // A single re-solve isn't guaranteed to land exactly at the limit because
     // the waypoint solver may have shifted intermediate boundary velocities
     // when it accepted the tighter caps. Re-sample the result; if any
@@ -375,7 +372,7 @@ fn enforce_tcp_speed_limit_per_section<const N: usize, F: FKScalar, FK: FKChain<
 /// Sample each section of `plan` at fine resolution, computing the peak
 /// Cartesian TCP speed ‖J_v(q)·q̇‖ observed within the section. The peaks
 /// are appended to `out` (one entry per section, in section order).
-fn sample_section_tcp_peaks<const N: usize, F: FKScalar, FK: FKChain<N, F>>(
+fn sample_section_tcp_peaks<const N: usize, F: KinScalar, FK: ContinuousFKChain<N, F>>(
     plan: &crate::plan::Plan<N, F>,
     fk: &FK,
     out: &mut Vec<F>,
@@ -434,7 +431,7 @@ fn sample_section_tcp_peaks<const N: usize, F: FKScalar, FK: FKChain<N, F>>(
 
 /// Sample the entire plan at uniform fine resolution and return the maximum
 /// Cartesian TCP speed observed. Used post-resolve as a safety-net check.
-fn sample_overall_tcp_peak<const N: usize, F: FKScalar, FK: FKChain<N, F>>(
+fn sample_overall_tcp_peak<const N: usize, F: KinScalar, FK: ContinuousFKChain<N, F>>(
     plan: &crate::plan::Plan<N, F>,
     fk: &FK,
     samples: usize,
@@ -476,7 +473,7 @@ fn sample_overall_tcp_peak<const N: usize, F: FKScalar, FK: FKChain<N, F>>(
 ///
 /// Samples are placed at `t = 0, dt, 2*dt, ...`, with one extra sample at the
 /// exact trajectory end-time so the returned path always reaches `goal_pose`.
-fn resample_plan<const N: usize, F: FKScalar>(
+fn resample_plan<const N: usize, F: KinScalar>(
     plan: &crate::plan::Plan<N, F>,
     dt: Duration,
     scratch: &mut Vec<SRobotQ<N, F>>,

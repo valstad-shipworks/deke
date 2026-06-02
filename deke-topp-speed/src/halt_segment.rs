@@ -115,10 +115,6 @@ fn eps<F: Float>() -> F {
     F::from(EPS).unwrap_or_else(F::epsilon)
 }
 
-// ---------------------------------------------------------------------------
-// Per-order ramp generators.
-// ---------------------------------------------------------------------------
-
 /// Second-order position-domain halt: drive an axis back inside its velocity
 /// envelope using a single constant-acceleration ramp.
 pub mod second_order_pose {

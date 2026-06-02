@@ -8,10 +8,6 @@ use ::valuable::{
 
 use crate::{CollisionFilter, WreckValidatorContext};
 
-// ---------------------------------------------------------------------------
-// CollisionFilter<N>
-// ---------------------------------------------------------------------------
-
 const FILTER_FIELDS: &[NamedField<'static>] = &[
     NamedField::new("links"),
     NamedField::new("ee"),
@@ -42,16 +38,11 @@ impl<const N: usize> Structable for CollisionFilter<N> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// WreckValidatorContext<'a, N>
-//
 // `extra_attachments` and `environment` are surfaced as their counts/markers
 // rather than full structures: `Attachment` and `Collider` are large composites
 // (uuids, vec-of-colliders, etc.) that don't have `Valuable` impls and would
 // pull this crate in deeper than warranted. Inspectors that need full detail
 // can drill into `wreck::Collider` directly via its own `valuable` feature.
-// ---------------------------------------------------------------------------
-
 const CONTEXT_FIELDS: &[NamedField<'static>] = &[
     NamedField::new("num_extra_attachments"),
     NamedField::new("self_collisions"),
