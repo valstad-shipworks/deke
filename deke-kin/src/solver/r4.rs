@@ -6,7 +6,7 @@ use crate::ik_geo::subproblems::auxiliary::rot as axis_angle;
 use crate::ik_geo::subproblems::{subproblem1, subproblem2, subproblem3, subproblem4, subproblem5};
 use crate::kinematics::{create_normal_vector, inverse_homogeneous, reverse_chain};
 use crate::remodel::{calc_intersection, is_point_on_axis, remodel_kinematics};
-use crate::solver::{Chain4, Joints};
+use crate::solver::{Chain4, Solutions};
 
 #[derive(Debug, Clone, Copy)]
 #[allow(dead_code)]
@@ -68,7 +68,7 @@ impl R4 {
         }
     }
 
-    pub fn solve(&self, pose: &DMat4) -> Vec<Joints> {
+    pub fn solve(&self, pose: &DMat4) -> Solutions {
         match self.class {
             Class4::ThirdFourthIntersecting => self.solve_third_fourth_intersecting(pose),
             Class4::SecondThirdIntersecting => self.solve_second_third_intersecting(pose),
@@ -86,10 +86,10 @@ impl R4 {
                     }
                     sols
                 } else {
-                    Vec::new()
+                    Solutions::new()
                 }
             }
-            Class4::Unknown => Vec::new(),
+            Class4::Unknown => Solutions::new(),
         }
     }
 
@@ -104,7 +104,7 @@ impl R4 {
         (p_14, r_04)
     }
 
-    fn solve_third_fourth_intersecting(&self, pose: &DMat4) -> Vec<Joints> {
+    fn solve_third_fourth_intersecting(&self, pose: &DMat4) -> Solutions {
         let (p_14, r_04) = self.p14(pose);
         let h0 = self.chain.h[0];
         let h1 = self.chain.h[1];
@@ -113,7 +113,7 @@ impl R4 {
         let p1 = self.chain.p[1];
         let p2 = self.chain.p[2];
 
-        let mut out: Vec<Joints> = Vec::with_capacity(8);
+        let mut out: Solutions = Solutions::new();
         let sp3_q1 = subproblem3(&p_14, &p1, &(-h0), p2.length());
         for q1 in sp3_q1.get_all() {
             let sp3_q2 = subproblem3(&p2, &(-p1), &h1, p_14.length());
@@ -130,7 +130,7 @@ impl R4 {
         out
     }
 
-    fn solve_second_third_intersecting(&self, pose: &DMat4) -> Vec<Joints> {
+    fn solve_second_third_intersecting(&self, pose: &DMat4) -> Solutions {
         let (p_14, r_04) = self.p14(pose);
         let h0 = self.chain.h[0];
         let h1 = self.chain.h[1];
@@ -139,7 +139,7 @@ impl R4 {
         let p1 = self.chain.p[1];
         let p3 = self.chain.p[3];
 
-        let mut out: Vec<Joints> = Vec::with_capacity(8);
+        let mut out: Solutions = Solutions::new();
         let sp3 = subproblem3(&p1, &p_14, &h0, p3.length());
         for q1 in sp3.get_all() {
             let r_10 = axis_angle(&(-h0), q1);
@@ -160,7 +160,7 @@ impl R4 {
         out
     }
 
-    fn solve_first_second_parallel(&self, pose: &DMat4) -> Vec<Joints> {
+    fn solve_first_second_parallel(&self, pose: &DMat4) -> Solutions {
         let (p_14, r_04) = self.p14(pose);
         let h0 = self.chain.h[0];
         let h1 = self.chain.h[1];
@@ -170,7 +170,7 @@ impl R4 {
         let p2 = self.chain.p[2];
         let p3 = self.chain.p[3];
 
-        let mut out: Vec<Joints> = Vec::with_capacity(8);
+        let mut out: Solutions = Solutions::new();
         let sp4_q3 = subproblem4(&h0, &p3, &h2, h0.dot(p_14 - p1 - p2));
         for q3 in sp4_q3.get_all() {
             let r_23 = axis_angle(&h2, q3);
@@ -196,7 +196,7 @@ impl R4 {
         out
     }
 
-    fn solve_second_third_parallel(&self, pose: &DMat4) -> Vec<Joints> {
+    fn solve_second_third_parallel(&self, pose: &DMat4) -> Solutions {
         let (p_14, r_04) = self.p14(pose);
         let h0 = self.chain.h[0];
         let h1 = self.chain.h[1];
@@ -206,7 +206,7 @@ impl R4 {
         let p2 = self.chain.p[2];
         let p3 = self.chain.p[3];
 
-        let mut out: Vec<Joints> = Vec::with_capacity(8);
+        let mut out: Solutions = Solutions::new();
         let sp4 = subproblem4(&h1, &p_14, &(-h0), h1.dot(p1 + p2 + p3));
         for q1 in sp4.get_all() {
             let r_10 = axis_angle(&(-h0), q1);
@@ -230,7 +230,7 @@ impl R4 {
         out
     }
 
-    fn solve_none_parallel(&self, pose: &DMat4) -> Vec<Joints> {
+    fn solve_none_parallel(&self, pose: &DMat4) -> Solutions {
         let (p_14, r_04) = self.p14(pose);
         let h0 = self.chain.h[0];
         let h1 = self.chain.h[1];
@@ -240,7 +240,7 @@ impl R4 {
         let p2 = self.chain.p[2];
         let p3 = self.chain.p[3];
 
-        let mut out: Vec<Joints> = Vec::with_capacity(8);
+        let mut out: Solutions = Solutions::new();
         let set = subproblem5(&(-p1), &p_14, &p2, &p3, &(-h0), &h1, &h2);
         let hn = create_normal_vector(&h3);
         for (q1, q2, q3) in set.get_all() {
@@ -258,7 +258,7 @@ impl R4 {
         out
     }
 
-    fn solve_first_two_last_two(&self, pose: &DMat4) -> Vec<Joints> {
+    fn solve_first_two_last_two(&self, pose: &DMat4) -> Solutions {
         let (p_14, r_04) = self.p14(pose);
         let h0 = self.chain.h[0];
         let h1 = self.chain.h[1];
@@ -266,7 +266,7 @@ impl R4 {
         let h3 = self.chain.h[3];
         let p2 = self.chain.p[2];
 
-        let mut out: Vec<Joints> = Vec::with_capacity(8);
+        let mut out: Solutions = Solutions::new();
         let set12 = subproblem2(&p_14, &p2, &(-h0), &h1);
         for (q1, q2) in set12.get_all() {
             let r_01 = axis_angle(&h0, q1);
@@ -281,7 +281,7 @@ impl R4 {
         out
     }
 
-    fn solve_spherical_wrist(&self, pose: &DMat4) -> Vec<Joints> {
+    fn solve_spherical_wrist(&self, pose: &DMat4) -> Solutions {
         let (p_14, r_04) = self.p14(pose);
         let h0 = self.chain.h[0];
         let h1 = self.chain.h[1];
@@ -289,7 +289,7 @@ impl R4 {
         let h3 = self.chain.h[3];
         let p1 = self.chain.p[1];
 
-        let mut out: Vec<Joints> = Vec::with_capacity(8);
+        let mut out: Solutions = Solutions::new();
         let Some(q1) = subproblem1(&p1, &p_14, &h0) else {
             return out;
         };

@@ -2,8 +2,10 @@
 
 use glam::{DMat4, DVec3};
 
+use smallvec::smallvec;
+
 use crate::ik_geo::subproblems::subproblem1;
-use crate::solver::{Chain1, Joints};
+use crate::solver::{Chain1, Solutions};
 
 pub struct R1 {
     chain: Chain1,
@@ -16,12 +18,12 @@ impl R1 {
         }
     }
 
-    pub fn solve(&self, pose: &DMat4) -> Vec<Joints> {
+    pub fn solve(&self, pose: &DMat4) -> Solutions {
         let p_t = pose.w_axis.truncate();
         let p_1t = p_t - self.chain.p[0];
         match subproblem1(&self.chain.p[1], &p_1t, &self.chain.h[0]) {
-            Some(theta) => vec![crate::solver::pack(&[theta])],
-            None => Vec::new(),
+            Some(theta) => smallvec![crate::solver::pack(&[theta])],
+            None => Solutions::new(),
         }
     }
 }

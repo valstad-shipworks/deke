@@ -5,7 +5,7 @@ use glam::{DMat3, DMat4, DVec3};
 use crate::ik_geo::subproblems::auxiliary::rot as axis_angle;
 use crate::ik_geo::subproblems::{subproblem1, subproblem2, subproblem3, subproblem4};
 use crate::kinematics::create_normal_vector;
-use crate::solver::{Chain3, Joints};
+use crate::solver::{Chain3, Solutions};
 
 pub struct R3 {
     chain: Chain3,
@@ -20,7 +20,7 @@ impl R3 {
         }
     }
 
-    pub fn solve(&self, pose: &DMat4) -> Vec<Joints> {
+    pub fn solve(&self, pose: &DMat4) -> Solutions {
         let zt = self.zero_thresh;
         let p_t = pose.w_axis.truncate();
         let r_03 = DMat3::from_cols(
@@ -40,7 +40,7 @@ impl R3 {
         let p_13 = p_t - p0 - r_03 * p3;
 
         let mut solution_t_12: Vec<[f64; 2]> = Vec::new();
-        let mut out: Vec<Joints> = Vec::with_capacity(8);
+        let mut out: Solutions = Solutions::new();
 
         let h12_cross = h1.cross(h2);
         let h01_cross = h0.cross(h1);

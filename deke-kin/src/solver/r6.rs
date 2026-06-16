@@ -8,6 +8,8 @@ use crate::ik_geo::subproblems::{
 use crate::ik_geo::subproblems::auxiliary::{rot as axis_angle, rot_vec};
 use crate::kinematics::{create_normal_vector, inverse_homogeneous, reverse_chain};
 use crate::remodel::{calc_intersection, do_axes_intersect, is_point_on_axis, remodel_kinematics};
+use smallvec::SmallVec;
+
 use crate::solver::Chain6;
 
 #[derive(Debug, Clone, Copy)]
@@ -93,7 +95,7 @@ impl R6 {
         }
     }
 
-    pub fn solve(&self, pose: &DMat4) -> Vec<crate::solver::Joints> {
+    pub fn solve(&self, pose: &DMat4) -> crate::solver::Solutions {
         match self.class {
             Class6::ThreeParallelTwoIntersecting => self.solve_3par_2int(pose),
             Class6::ThreeInnerParallel => self.solve_three_inner_parallel(pose),
@@ -111,10 +113,10 @@ impl R6 {
                     }
                     sols
                 } else {
-                    Vec::new()
+                    crate::solver::Solutions::new()
                 }
             }
-            Class6::Unknown => Vec::new(),
+            Class6::Unknown => crate::solver::Solutions::new(),
         }
     }
 
@@ -125,7 +127,7 @@ impl R6 {
         (p_16, r_06)
     }
 
-    fn solve_3par_2int(&self, pose: &DMat4) -> Vec<crate::solver::Joints> {
+    fn solve_3par_2int(&self, pose: &DMat4) -> crate::solver::Solutions {
         let (p_16, r_06) = self.pose_decompose(pose);
         let h0 = self.chain.h[0];
         let h1 = self.chain.h[1];
@@ -141,7 +143,7 @@ impl R6 {
         let d = h0.dot(p_16 - p1 - p2 - p3);
         let set4_q4 = subproblem4(&h0, &p4, &h3, d);
 
-        let mut out: Vec<crate::solver::Joints> = Vec::with_capacity(8);
+        let mut out: crate::solver::Solutions = crate::solver::Solutions::new();
         for q4 in set4_q4.get_all() {
             let r_34 = axis_angle(&h3, q4);
             let set4_q6 =
@@ -185,7 +187,7 @@ impl R6 {
         out
     }
 
-    fn solve_three_inner_parallel(&self, pose: &DMat4) -> Vec<crate::solver::Joints> {
+    fn solve_three_inner_parallel(&self, pose: &DMat4) -> crate::solver::Solutions {
         let (p_16, r_06) = self.pose_decompose(pose);
         let zt = self.zero_thresh;
         let h0 = self.chain.h[0];
@@ -198,8 +200,8 @@ impl R6 {
         let p4 = self.chain.p[4];
         let p5 = self.chain.p[5];
 
-        let mut theta1: Vec<f64> = Vec::new();
-        let mut theta5: Vec<f64> = Vec::new();
+        let mut theta1: SmallVec<[f64; 8]> = SmallVec::new();
+        let mut theta5: SmallVec<[f64; 8]> = SmallVec::new();
 
         let h45_cross = h4.cross(h5);
         if h45_cross.length() >= zt && h45_cross.dot(p5).abs() < zt {
@@ -225,7 +227,7 @@ impl R6 {
             }
         }
 
-        let mut out: Vec<crate::solver::Joints> = Vec::with_capacity(8);
+        let mut out: crate::solver::Solutions = crate::solver::Solutions::new();
         for i in 0..theta1.len() {
             let q1 = theta1[i];
             let q5 = theta5[i];
@@ -257,7 +259,7 @@ impl R6 {
         out
     }
 
-    fn solve_sph_12_parallel(&self, pose: &DMat4) -> Vec<crate::solver::Joints> {
+    fn solve_sph_12_parallel(&self, pose: &DMat4) -> crate::solver::Solutions {
         let (p_16, r_06) = self.pose_decompose(pose);
         let h0 = self.chain.h[0];
         let h1 = self.chain.h[1];
@@ -266,7 +268,7 @@ impl R6 {
         let p2 = self.chain.p[2];
         let p3 = self.chain.p[3];
 
-        let mut position_solutions = Vec::new();
+        let mut position_solutions: SmallVec<[[f64; 3]; 8]> = SmallVec::new();
         let set4 = subproblem4(&h0, &p3, &h2, h0.dot(p_16 - p1 - p2));
         let nh0 = -h0;
         for q3 in set4.get_all() {
@@ -283,7 +285,7 @@ impl R6 {
         self.spherical_wrist_orientation(&position_solutions, &r_06)
     }
 
-    fn solve_sph_23_parallel(&self, pose: &DMat4) -> Vec<crate::solver::Joints> {
+    fn solve_sph_23_parallel(&self, pose: &DMat4) -> crate::solver::Solutions {
         let (p_16, r_06) = self.pose_decompose(pose);
         let h0 = self.chain.h[0];
         let h1 = self.chain.h[1];
@@ -292,7 +294,7 @@ impl R6 {
         let p2 = self.chain.p[2];
         let p3 = self.chain.p[3];
 
-        let mut position_solutions = Vec::new();
+        let mut position_solutions: SmallVec<[[f64; 3]; 8]> = SmallVec::new();
         let set4 = subproblem4(&h1, &p_16, &(-h0), h1.dot(p1 + p2 + p3));
         let nh0 = -h0;
         for q1 in set4.get_all() {
@@ -308,7 +310,7 @@ impl R6 {
         self.spherical_wrist_orientation(&position_solutions, &r_06)
     }
 
-    fn solve_sph_12_intersecting(&self, pose: &DMat4) -> Vec<crate::solver::Joints> {
+    fn solve_sph_12_intersecting(&self, pose: &DMat4) -> crate::solver::Solutions {
         let (p_16, r_06) = self.pose_decompose(pose);
         let h0 = self.chain.h[0];
         let h1 = self.chain.h[1];
@@ -316,7 +318,7 @@ impl R6 {
         let p2 = self.chain.p[2];
         let p3 = self.chain.p[3];
 
-        let mut position_solutions = Vec::new();
+        let mut position_solutions: SmallVec<[[f64; 3]; 8]> = SmallVec::new();
         let set3 = subproblem3(&p3, &(-p2), &h2, p_16.length());
         for q3 in set3.get_all() {
             let rot_3_p3 = rot_vec(&h2, q3, p3);
@@ -328,7 +330,7 @@ impl R6 {
         self.spherical_wrist_orientation(&position_solutions, &r_06)
     }
 
-    fn solve_sph_23_intersecting(&self, pose: &DMat4) -> Vec<crate::solver::Joints> {
+    fn solve_sph_23_intersecting(&self, pose: &DMat4) -> crate::solver::Solutions {
         let (p_16, r_06) = self.pose_decompose(pose);
         let h0 = self.chain.h[0];
         let h1 = self.chain.h[1];
@@ -336,7 +338,7 @@ impl R6 {
         let p1 = self.chain.p[1];
         let p3 = self.chain.p[3];
 
-        let mut position_solutions = Vec::new();
+        let mut position_solutions: SmallVec<[[f64; 3]; 8]> = SmallVec::new();
         let set3 = subproblem3(&p_16, &p1, &(-h0), p3.length());
         let nh0 = -h0;
         for q1 in set3.get_all() {
@@ -349,7 +351,7 @@ impl R6 {
         self.spherical_wrist_orientation(&position_solutions, &r_06)
     }
 
-    fn solve_sph_general(&self, pose: &DMat4) -> Vec<crate::solver::Joints> {
+    fn solve_sph_general(&self, pose: &DMat4) -> crate::solver::Solutions {
         let (p_16, r_06) = self.pose_decompose(pose);
         let h0 = self.chain.h[0];
         let h1 = self.chain.h[1];
@@ -359,7 +361,7 @@ impl R6 {
         let p3 = self.chain.p[3];
 
         let set5 = subproblem5(&(-p1), &p_16, &p2, &p3, &(-h0), &h1, &h2);
-        let mut position_solutions = Vec::new();
+        let mut position_solutions: SmallVec<[[f64; 3]; 8]> = SmallVec::new();
         for (q1, q2, q3) in set5.get_all() {
             position_solutions.push([q1, q2, q3]);
         }
@@ -370,7 +372,7 @@ impl R6 {
         &self,
         position_solutions: &[[f64; 3]],
         r_06: &DMat3,
-    ) -> Vec<crate::solver::Joints> {
+    ) -> crate::solver::Solutions {
         let h0 = self.chain.h[0];
         let h1 = self.chain.h[1];
         let h2 = self.chain.h[2];
@@ -378,7 +380,7 @@ impl R6 {
         let h4 = self.chain.h[4];
         let h5 = self.chain.h[5];
 
-        let mut out: Vec<crate::solver::Joints> = Vec::with_capacity(8);
+        let mut out: crate::solver::Solutions = crate::solver::Solutions::new();
         for qpos in position_solutions {
             let q1 = qpos[0];
             let q2 = qpos[1];

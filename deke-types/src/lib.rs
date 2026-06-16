@@ -26,6 +26,8 @@ pub use path::{RobotPath, SRobotPath};
 pub use q::{RobotQ, SRobotQ, robotq, SRobotQLike};
 pub use traj::{RobotTraj, SRobotTraj};
 pub use validator::{JointValidator, Validator, ValidatorAnd, ValidatorNot, ValidatorOr, MaybeValidator, ValidatorContext, Leaf, FromFlattened};
+#[doc(hidden)]
+pub use validator::BatchLimits;
 pub use validator_dynamic::DynamicJointValidator;
 
 use crate::validator::ValidatorRet;

@@ -49,6 +49,7 @@
 //! - Reference (read, not copied; unlicensed): haijunsu-osu/IK_6R_RR_1993
 //!   (`phase3/ik_6r_general.py`) and Manocha's C (`reduce.c`).
 
+use arrayvec::ArrayVec;
 use faer::Mat;
 
 /// Classic DH parameters for one joint: link length `a`, twist `alpha`,
@@ -197,46 +198,66 @@ impl DMat {
     fn set(&mut self, i: usize, j: usize, v: f64) {
         self.d[i * self.c + j] = v;
     }
-    fn matmul(&self, o: &DMat) -> DMat {
-        debug_assert_eq!(self.c, o.r);
-        let mut out = DMat::zeros(self.r, o.c);
-        for i in 0..self.r {
-            for k in 0..self.c {
-                let a = self.at(i, k);
-                if a == 0.0 {
-                    continue;
-                }
-                for j in 0..o.c {
-                    out.d[i * out.c + j] += a * o.at(k, j);
-                }
+}
+
+/// Fixed-shape, stack-allocated dense matrix (row-major `[[f64; C]; R]`). The
+/// general-6R pipeline's constant-dimension linear algebra runs entirely on
+/// these; only the runtime-sized companion/Gram matrices stay on [`DMat`].
+#[derive(Clone, Debug)]
+struct SMat<const R: usize, const C: usize> {
+    d: [[f64; C]; R],
+}
+
+impl<const R: usize, const C: usize> SMat<R, C> {
+    fn zeros() -> Self {
+        Self { d: [[0.0; C]; R] }
+    }
+    #[inline]
+    fn at(&self, i: usize, j: usize) -> f64 {
+        self.d[i][j]
+    }
+    #[inline]
+    fn set(&mut self, i: usize, j: usize, v: f64) {
+        self.d[i][j] = v;
+    }
+    fn transpose(&self) -> SMat<C, R> {
+        let mut out = SMat::<C, R>::zeros();
+        for i in 0..R {
+            for j in 0..C {
+                out.d[j][i] = self.d[i][j];
             }
         }
         out
     }
-    fn transpose(&self) -> DMat {
-        let mut out = DMat::zeros(self.c, self.r);
-        for i in 0..self.r {
-            for j in 0..self.c {
-                out.set(j, i, self.at(i, j));
+    fn matmul<const C2: usize>(&self, o: &SMat<C, C2>) -> SMat<R, C2> {
+        let mut out = SMat::<R, C2>::zeros();
+        for i in 0..R {
+            for k in 0..C {
+                let a = self.d[i][k];
+                if a == 0.0 {
+                    continue;
+                }
+                for j in 0..C2 {
+                    out.d[i][j] += a * o.d[k][j];
+                }
             }
         }
         out
     }
 }
 
-/// Solve a square `n×n` system `A x = b` (multiple RHS columns) by Gaussian
-/// elimination with partial pivoting. `a` is consumed; `b` has `n` rows and any
-/// number of columns. Returns `None` if singular.
-fn gauss_solve(mut a: DMat, mut b: DMat) -> Option<DMat> {
-    let n = a.r;
-    debug_assert_eq!(a.c, n);
-    debug_assert_eq!(b.r, n);
-    let m = b.c;
-    for col in 0..n {
+/// Solve a square `N×N` system `A x = b` (`M` RHS columns) by Gaussian
+/// elimination with partial pivoting. `a` is consumed. Returns `None` if
+/// singular.
+fn gauss_solve<const N: usize, const M: usize>(
+    mut a: SMat<N, N>,
+    mut b: SMat<N, M>,
+) -> Option<SMat<N, M>> {
+    for col in 0..N {
         let mut piv = col;
-        let mut best = a.at(col, col).abs();
-        for r in (col + 1)..n {
-            let v = a.at(r, col).abs();
+        let mut best = a.d[col][col].abs();
+        for r in (col + 1)..N {
+            let v = a.d[r][col].abs();
             if v > best {
                 best = v;
                 piv = r;
@@ -246,53 +267,65 @@ fn gauss_solve(mut a: DMat, mut b: DMat) -> Option<DMat> {
             return None;
         }
         if piv != col {
-            for j in 0..n {
-                a.d.swap(col * n + j, piv * n + j);
-            }
-            for j in 0..m {
-                b.d.swap(col * m + j, piv * m + j);
-            }
+            a.d.swap(col, piv);
+            b.d.swap(col, piv);
         }
-        let d = a.at(col, col);
-        for r in (col + 1)..n {
-            let f = a.at(r, col) / d;
+        let d = a.d[col][col];
+        for r in (col + 1)..N {
+            let f = a.d[r][col] / d;
             if f == 0.0 {
                 continue;
             }
-            for j in col..n {
-                let v = a.at(r, j) - f * a.at(col, j);
-                a.set(r, j, v);
+            for j in col..N {
+                a.d[r][j] -= f * a.d[col][j];
             }
-            for j in 0..m {
-                let v = b.at(r, j) - f * b.at(col, j);
-                b.set(r, j, v);
+            for j in 0..M {
+                b.d[r][j] -= f * b.d[col][j];
             }
         }
     }
-    let mut x = DMat::zeros(n, m);
-    for col in (0..n).rev() {
-        for j in 0..m {
-            let mut s = b.at(col, j);
-            for k in (col + 1)..n {
-                s -= a.at(col, k) * x.at(k, j);
+    let mut x = SMat::<N, M>::zeros();
+    for col in (0..N).rev() {
+        for j in 0..M {
+            let mut s = b.d[col][j];
+            for k in (col + 1)..N {
+                s -= a.d[col][k] * x.d[k][j];
             }
-            x.set(col, j, s / a.at(col, col));
+            x.d[col][j] = s / a.d[col][col];
         }
     }
     Some(x)
 }
 
-/// Determinant of a square matrix via LU with partial pivoting.
-fn det(a0: &DMat) -> f64 {
-    let n = a0.r;
-    let mut a = a0.clone();
-    let mut sign = 1.0;
+/// `|det(S·Sᵀ)|` where `S` is the `k×8` submatrix of `q` whose rows are given by
+/// `rows` (`k ≤ 8`). The Gram matrix and its LU factorisation are formed on the
+/// stack, so the pivot-row search never allocates. Used as a conditioning proxy
+/// for row independence.
+fn gram_det(q: &SMat<14, 8>, rows: impl Iterator<Item = usize>, k: usize) -> f64 {
+    let mut s = [[0.0f64; 8]; 8];
+    for (a, r) in rows.enumerate() {
+        for j in 0..8 {
+            s[a][j] = q.at(r, j);
+        }
+    }
+    let mut g = [[0.0f64; 8]; 8];
+    for a in 0..k {
+        for b in 0..k {
+            let mut acc = 0.0;
+            for j in 0..8 {
+                acc += s[a][j] * s[b][j];
+            }
+            g[a][b] = acc;
+        }
+    }
+    // det of the leading k×k block via LU with partial pivoting (G is PSD, so the
+    // magnitude is all the conditioning proxy needs).
     let mut d = 1.0;
-    for col in 0..n {
+    for col in 0..k {
         let mut piv = col;
-        let mut best = a.at(col, col).abs();
-        for r in (col + 1)..n {
-            let v = a.at(r, col).abs();
+        let mut best = g[col][col].abs();
+        for r in (col + 1)..k {
+            let v = g[r][col].abs();
             if v > best {
                 best = v;
                 piv = r;
@@ -302,25 +335,21 @@ fn det(a0: &DMat) -> f64 {
             return 0.0;
         }
         if piv != col {
-            for j in 0..n {
-                a.d.swap(col * n + j, piv * n + j);
-            }
-            sign = -sign;
+            g.swap(col, piv);
         }
-        let pivot = a.at(col, col);
+        let pivot = g[col][col];
         d *= pivot;
-        for r in (col + 1)..n {
-            let f = a.at(r, col) / pivot;
+        for r in (col + 1)..k {
+            let f = g[r][col] / pivot;
             if f == 0.0 {
                 continue;
             }
-            for j in col..n {
-                let v = a.at(r, j) - f * a.at(col, j);
-                a.set(r, j, v);
+            for j in col..k {
+                g[r][j] -= f * g[col][j];
             }
         }
     }
-    sign * d
+    d.abs()
 }
 
 // ----- angle helpers -------------------------------------------------------
@@ -383,7 +412,7 @@ fn m12(t1: f64, t2: f64) -> [f64; 8] {
 /// loop equation `a2s·A3·A4·A5 = aiv(θ2)⁻¹·A1⁻¹·T·A6⁻¹`. `p` is the translation
 /// column, `l` the third rotation column (free of θ6 on the left).
 fn pl_vectors(c: &[M4; 6], target: &M4, q: &[f64; 6]) -> ([f64; 3], [f64; 3], [f64; 3], [f64; 3]) {
-    let a: Vec<M4> = (0..6).map(|i| a_link(&c[i], q[i])).collect();
+    let a: [M4; 6] = std::array::from_fn(|i| a_link(&c[i], q[i]));
     let a2s = c[1];
     let left = m4_mul(&m4_mul(&m4_mul(&a2s, &a[2]), &a[3]), &a[4]);
     let a2v_inv = m4_inv_se3(&aiv(q[1]));
@@ -441,8 +470,8 @@ fn eqs14(c: &[M4; 6], target: &M4, q: &[f64; 6]) -> [f64; 14] {
 }
 
 /// The constant 17×17 feature matrix `F` rows `[m45(θ4,θ5) | −m12(θ1,θ2)]`.
-fn feature_matrix() -> DMat {
-    let mut f = DMat::zeros(17, 17);
+fn feature_matrix() -> SMat<17, 17> {
+    let mut f = SMat::<17, 17>::zeros();
     for (i, s) in SAMPLE_ANGLES.iter().enumerate() {
         let a = m45(s[2], s[3]);
         let b = m12(s[0], s[1]);
@@ -458,9 +487,9 @@ fn feature_matrix() -> DMat {
 
 /// Recover `P` (14×9) and `Q` (14×8) at a fixed `x3` by solving `F·U = Y`,
 /// `Y[i] = eqs14(sample_i with θ3 = 2·atan(x3))`.
-fn pq_at_x3(c: &[M4; 6], target: &M4, x3: f64, finv_solver: &FInv) -> (DMat, DMat) {
+fn pq_at_x3(c: &[M4; 6], target: &M4, x3: f64, finv_solver: &FInv) -> (SMat<14, 9>, SMat<14, 8>) {
     let theta3 = 2.0 * x3.atan();
-    let mut y = DMat::zeros(17, 14);
+    let mut y = SMat::<17, 14>::zeros();
     for (i, s) in SAMPLE_ANGLES.iter().enumerate() {
         let q = [s[0], s[1], theta3, s[2], s[3], 0.0];
         let e = eqs14(c, target, &q);
@@ -469,8 +498,8 @@ fn pq_at_x3(c: &[M4; 6], target: &M4, x3: f64, finv_solver: &FInv) -> (DMat, DMa
         }
     }
     let coeff = finv_solver.apply(&y); // (17×14) = F⁻¹ Y
-    let mut p = DMat::zeros(14, 9);
-    let mut q = DMat::zeros(14, 8);
+    let mut p = SMat::<14, 9>::zeros();
+    let mut q = SMat::<14, 8>::zeros();
     for k in 0..14 {
         for j in 0..9 {
             p.set(k, j, coeff.at(j, k));
@@ -485,14 +514,14 @@ fn pq_at_x3(c: &[M4; 6], target: &M4, x3: f64, finv_solver: &FInv) -> (DMat, DMa
 /// Precomputed `F⁻¹` applied as a solver (we keep `F` factored implicitly by
 /// storing its inverse, since it is constant across the whole solve).
 struct FInv {
-    inv: DMat, // 17×17
+    inv: SMat<17, 17>,
 }
 
 impl FInv {
     fn new() -> Self {
         let f = feature_matrix();
         let id = {
-            let mut m = DMat::zeros(17, 17);
+            let mut m = SMat::<17, 17>::zeros();
             for i in 0..17 {
                 m.set(i, i, 1.0);
             }
@@ -501,7 +530,7 @@ impl FInv {
         let inv = gauss_solve(f, id).expect("sample-angle feature matrix is invertible");
         Self { inv }
     }
-    fn apply(&self, y: &DMat) -> DMat {
+    fn apply(&self, y: &SMat<17, 14>) -> SMat<17, 14> {
         self.inv.matmul(y)
     }
 }
@@ -509,16 +538,16 @@ impl FInv {
 /// sin/cos-θ3 affine model of `P` and the constant `Q`: `P(θ3) = Ps·sinθ3 +
 /// Pc·cosθ3 + P1`. Sampled at three θ3 values and interpolated exactly.
 struct PqModel {
-    ps: DMat,
-    pc: DMat,
-    p1: DMat,
-    q: DMat,
+    ps: SMat<14, 9>,
+    pc: SMat<14, 9>,
+    p1: SMat<14, 9>,
+    q: SMat<14, 8>,
 }
 
 fn build_pq_model(c: &[M4; 6], target: &M4, finv: &FInv) -> PqModel {
     let grid = [-2.1f64, -0.2, 1.3];
     let basis = {
-        let mut b = DMat::zeros(3, 3);
+        let mut b = SMat::<3, 3>::zeros();
         for (i, &t) in grid.iter().enumerate() {
             b.set(i, 0, t.sin());
             b.set(i, 1, t.cos());
@@ -526,55 +555,52 @@ fn build_pq_model(c: &[M4; 6], target: &M4, finv: &FInv) -> PqModel {
         }
         b
     };
-    let mut p_samples = Vec::with_capacity(3);
-    let mut q_acc = DMat::zeros(14, 8);
-    for &t3 in &grid {
-        let x3 = (0.5 * t3).tan();
+    let mut q_acc = SMat::<14, 8>::zeros();
+    let p_samples: [SMat<14, 9>; 3] = std::array::from_fn(|i| {
+        let x3 = (0.5 * grid[i]).tan();
         let (p, q) = pq_at_x3(c, target, x3, finv);
-        for idx in 0..q_acc.d.len() {
-            q_acc.d[idx] += q.d[idx] / 3.0;
+        for k in 0..14 {
+            for j in 0..8 {
+                q_acc.d[k][j] += q.d[k][j] / 3.0;
+            }
         }
-        p_samples.push(p);
-    }
-    // Solve basis · [Ps;Pc;P1] = [P(t3_0);P(t3_1);P(t3_2)] per entry.
-    let mut rhs = DMat::zeros(3, 14 * 9);
+        p
+    });
+    // Solve basis · [Ps;Pc;P1] = [P(t3_0);P(t3_1);P(t3_2)] per entry. The 14×9 P
+    // is flattened row-major into the 126 columns of the RHS.
+    let mut rhs = SMat::<3, { 14 * 9 }>::zeros();
     for (row, p) in p_samples.iter().enumerate() {
-        for idx in 0..(14 * 9) {
-            rhs.set(row, idx, p.d[idx]);
+        for k in 0..14 {
+            for j in 0..9 {
+                rhs.set(row, k * 9 + j, p.at(k, j));
+            }
         }
     }
     let coeff = gauss_solve(basis, rhs).expect("3-point sin/cos interpolation is nonsingular");
-    let mut ps = DMat::zeros(14, 9);
-    let mut pc = DMat::zeros(14, 9);
-    let mut p1 = DMat::zeros(14, 9);
-    for idx in 0..(14 * 9) {
-        ps.d[idx] = coeff.at(0, idx);
-        pc.d[idx] = coeff.at(1, idx);
-        p1.d[idx] = coeff.at(2, idx);
+    let mut ps = SMat::<14, 9>::zeros();
+    let mut pc = SMat::<14, 9>::zeros();
+    let mut p1 = SMat::<14, 9>::zeros();
+    for k in 0..14 {
+        for j in 0..9 {
+            ps.set(k, j, coeff.at(0, k * 9 + j));
+            pc.set(k, j, coeff.at(1, k * 9 + j));
+            p1.set(k, j, coeff.at(2, k * 9 + j));
+        }
     }
     PqModel { ps, pc, p1, q: q_acc }
 }
 
 /// Greedily choose 8 well-conditioned independent rows of `Q` (14×8).
-fn select_pivot_rows(q: &DMat) -> Option<[usize; 8]> {
-    let mut idx: Vec<usize> = Vec::new();
-    let mut remaining: Vec<usize> = (0..q.r).collect();
+fn select_pivot_rows(q: &SMat<14, 8>) -> Option<[usize; 8]> {
+    let mut idx: ArrayVec<usize, 8> = ArrayVec::new();
+    let mut remaining: ArrayVec<usize, 14> = (0..14).collect();
     while idx.len() < 8 && !remaining.is_empty() {
         let mut best_row = None;
         let mut best_score = f64::INFINITY;
         for &r in &remaining {
-            let mut cand = idx.clone();
-            cand.push(r);
-            // condition via Gram determinant magnitude (cheap rank/cond proxy)
-            let k = cand.len();
-            let mut sub = DMat::zeros(k, 8);
-            for (a, &cr) in cand.iter().enumerate() {
-                for j in 0..8 {
-                    sub.set(a, j, q.at(cr, j));
-                }
-            }
-            let gram = sub.matmul(&sub.transpose()); // k×k
-            let dg = det(&gram).abs();
+            // candidate = current pivot rows plus row r (no need to materialise it)
+            let k = idx.len() + 1;
+            let dg = gram_det(q, idx.iter().copied().chain(std::iter::once(r)), k);
             if dg <= 1e-18 {
                 continue;
             }
@@ -586,29 +612,29 @@ fn select_pivot_rows(q: &DMat) -> Option<[usize; 8]> {
         }
         let br = best_row?;
         idx.push(br);
-        remaining.retain(|&x| x != br);
+        remaining.retain(|x| *x != br);
     }
     if idx.len() != 8 {
         return None;
     }
     let mut out = [0usize; 8];
-    out.copy_from_slice(&idx);
+    out.copy_from_slice(&idx[..]);
     Some(out)
 }
 
 /// Left elimination matrix `N` (6×14): rows span the left null space of `Q`,
 /// built from a fixed 8-row pivot block so it is identical across x3 samples.
 /// In permuted order `[pivot, rest]`, `N = [−Qr·Qp⁻¹ | I₆]`.
-fn left_elim_matrix(q: &DMat, pivot: &[usize; 8]) -> Option<DMat> {
-    let rest: Vec<usize> = (0..14).filter(|r| !pivot.contains(r)).collect();
+fn left_elim_matrix(q: &SMat<14, 8>, pivot: &[usize; 8]) -> Option<SMat<6, 14>> {
+    let rest: ArrayVec<usize, 6> = (0..14).filter(|r| !pivot.contains(r)).collect();
     debug_assert_eq!(rest.len(), 6);
-    let mut qp = DMat::zeros(8, 8);
+    let mut qp = SMat::<8, 8>::zeros();
     for (a, &pr) in pivot.iter().enumerate() {
         for j in 0..8 {
             qp.set(a, j, q.at(pr, j));
         }
     }
-    let mut qr = DMat::zeros(6, 8);
+    let mut qr = SMat::<6, 8>::zeros();
     for (a, &rr) in rest.iter().enumerate() {
         for j in 0..8 {
             qr.set(a, j, q.at(rr, j));
@@ -616,7 +642,7 @@ fn left_elim_matrix(q: &DMat, pivot: &[usize; 8]) -> Option<DMat> {
     }
     // X = Qr · Qp⁻¹  =>  Xᵀ = (Qpᵀ)⁻¹ Qrᵀ ; solve Qpᵀ Y = Qrᵀ, X = Yᵀ.
     let x = gauss_solve(qp.transpose(), qr.transpose())?.transpose(); // 6×8
-    let mut n = DMat::zeros(6, 14);
+    let mut n = SMat::<6, 14>::zeros();
     for a in 0..6 {
         for (b, &pc) in pivot.iter().enumerate() {
             n.set(a, pc, -x.at(a, b));
@@ -629,8 +655,8 @@ fn left_elim_matrix(q: &DMat, pivot: &[usize; 8]) -> Option<DMat> {
 /// 9×9 map taking the sin/cos basis `[s4s5,s4c5,c4s5,c4c5,s4,c4,s5,c5,1]` to the
 /// half-angle-cleared monomial basis `[x4²x5²,x4²x5,x4x5²,x4x5,x4²,x5²,x4,x5,1]`
 /// (after multiplying each equation by `(1+x4²)(1+x5²)`).
-fn halfangle_map() -> DMat {
-    let mut t = DMat::zeros(9, 9);
+fn halfangle_map() -> SMat<9, 9> {
+    let mut t = SMat::<9, 9>::zeros();
     t.set(0, 3, 4.0);
     t.set(1, 2, -2.0);
     t.set(1, 6, 2.0);
@@ -662,10 +688,10 @@ fn halfangle_map() -> DMat {
 /// Build the 12×12 dialytic matrix from `E9` (6×9, rows are polynomials in the
 /// `[x4²x5²,…,1]` monomials): each row appears unmultiplied and multiplied by
 /// `x4`, expanding into the 12-monomial basis.
-fn dialytic_12(e9: &DMat) -> DMat {
-    let mut m = DMat::zeros(12, 12);
+fn dialytic_12(e9: &SMat<6, 9>) -> SMat<12, 12> {
+    let mut m = SMat::<12, 12>::zeros();
     for i in 0..6 {
-        let c: Vec<f64> = (0..9).map(|j| e9.at(i, j)).collect();
+        let c: [f64; 9] = std::array::from_fn(|j| e9.at(i, j));
         // unmultiplied row
         m.set(i, 3, c[0]);
         m.set(i, 4, c[1]);
@@ -691,12 +717,14 @@ fn dialytic_12(e9: &DMat) -> DMat {
 }
 
 /// `E9(x3)` at a single x3 from the affine `P` model and fixed `N`.
-fn e9_at_x3(model: &PqModel, n: &DMat, map: &DMat, x3: f64) -> DMat {
+fn e9_at_x3(model: &PqModel, n: &SMat<6, 14>, map: &SMat<9, 9>, x3: f64) -> SMat<6, 9> {
     let theta3 = 2.0 * x3.atan();
     let (s, c) = theta3.sin_cos();
-    let mut p = DMat::zeros(14, 9);
-    for idx in 0..p.d.len() {
-        p.d[idx] = model.ps.d[idx] * s + model.pc.d[idx] * c + model.p1.d[idx];
+    let mut p = SMat::<14, 9>::zeros();
+    for k in 0..14 {
+        for j in 0..9 {
+            p.d[k][j] = model.ps.d[k][j] * s + model.pc.d[k][j] * c + model.p1.d[k][j];
+        }
     }
     let e45 = n.matmul(&p); // 6×9
     e45.matmul(map) // 6×9
@@ -704,15 +732,21 @@ fn e9_at_x3(model: &PqModel, n: &DMat, map: &DMat, x3: f64) -> DMat {
 
 /// Coefficient triple `(M0, M1, M2)` of `Σ(x3) = M0 + M1 x3 + M2 x3²`, the
 /// 12×12 matrix quadratic obtained after clearing `(1+x3²)`.
-fn sigma_coeffs(model: &PqModel, n: &DMat, map: &DMat) -> (DMat, DMat, DMat) {
+fn sigma_coeffs(
+    model: &PqModel,
+    n: &SMat<6, 14>,
+    map: &SMat<9, 9>,
+) -> (SMat<12, 12>, SMat<12, 12>, SMat<12, 12>) {
     // (1+x3²)P = (P1−Pc)x3² + 2Ps·x3 + (P1+Pc)
-    let mut p2 = DMat::zeros(14, 9);
-    let mut p1l = DMat::zeros(14, 9);
-    let mut p0 = DMat::zeros(14, 9);
-    for idx in 0..p2.d.len() {
-        p2.d[idx] = model.p1.d[idx] - model.pc.d[idx];
-        p1l.d[idx] = 2.0 * model.ps.d[idx];
-        p0.d[idx] = model.p1.d[idx] + model.pc.d[idx];
+    let mut p2 = SMat::<14, 9>::zeros();
+    let mut p1l = SMat::<14, 9>::zeros();
+    let mut p0 = SMat::<14, 9>::zeros();
+    for k in 0..14 {
+        for j in 0..9 {
+            p2.d[k][j] = model.p1.d[k][j] - model.pc.d[k][j];
+            p1l.d[k][j] = 2.0 * model.ps.d[k][j];
+            p0.d[k][j] = model.p1.d[k][j] + model.pc.d[k][j];
+        }
     }
     let e2 = n.matmul(&p2).matmul(map);
     let e1 = n.matmul(&p1l).matmul(map);
@@ -765,7 +799,7 @@ fn gen_eig(a: &DMat, b: &DMat) -> Vec<(f64, f64)> {
 
 /// Real x3 roots of `det Σ(x3) = 0` via the 24×24 first-companion pencil of the
 /// 12×12 quadratic `Σ = M0 + M1 x + M2 x²`.
-fn x3_roots(m0: &DMat, m1: &DMat, m2: &DMat, cfg: &RrConfig) -> Vec<f64> {
+fn x3_roots(m0: &SMat<12, 12>, m1: &SMat<12, 12>, m2: &SMat<12, 12>, cfg: &RrConfig) -> Vec<f64> {
     let n = 12;
     let big = 2 * n;
     let mut a = DMat::zeros(big, big);
@@ -875,16 +909,15 @@ fn solve_quadratic(a: f64, b: f64, c: f64) -> Vec<f64> {
 
 /// Recover `(x4, x5)` pairs from the 6×9 `E9` system using pairwise resultants
 /// in x5, then back-substitution. Verified against all six rows.
-fn solve_x4x5(e9: &DMat) -> Vec<(f64, f64)> {
+fn solve_x4x5(e9: &SMat<6, 9>) -> Vec<(f64, f64)> {
     // row poly in x5: A(x4) x5² + B(x4) x5 + C(x4), with A,B,C ascending in x4.
-    let mut rows: Vec<([f64; 3], [f64; 3], [f64; 3])> = Vec::with_capacity(6);
-    for i in 0..6 {
-        let r: Vec<f64> = (0..9).map(|j| e9.at(i, j)).collect();
+    let rows: [([f64; 3], [f64; 3], [f64; 3]); 6] = std::array::from_fn(|i| {
+        let r: [f64; 9] = std::array::from_fn(|j| e9.at(i, j));
         let a = [r[5], r[2], r[0]];
         let b = [r[7], r[3], r[1]];
         let c = [r[8], r[6], r[4]];
-        rows.push((a, b, c));
-    }
+        (a, b, c)
+    });
     let mut cands: Vec<(f64, f64)> = Vec::new();
     let push = |x4: f64, x5: f64, cands: &mut Vec<(f64, f64)>| {
         if !x4.is_finite() || !x5.is_finite() || x4.abs() > 1e8 || x5.abs() > 1e8 {
@@ -947,9 +980,9 @@ fn solve_x4x5(e9: &DMat) -> Vec<(f64, f64)> {
 }
 
 /// θ1,θ2 from the linear system `Q·m12 = P·m45(θ4,θ5)` (least squares).
-fn recover_theta12(p: &DMat, q: &DMat, t4: f64, t5: f64) -> (f64, f64) {
+fn recover_theta12(p: &SMat<14, 9>, q: &SMat<14, 8>, t4: f64, t5: f64) -> (f64, f64) {
     let m = m45(t4, t5);
-    let mut rhs = DMat::zeros(14, 1);
+    let mut rhs = SMat::<14, 1>::zeros();
     for k in 0..14 {
         let mut s = 0.0;
         for j in 0..9 {

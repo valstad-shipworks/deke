@@ -22,6 +22,8 @@ num-complex = "0.4"
 # eigenvalues of the companion linearisation of the 12×12 quadratic matrix
 # polynomial. API used: `Mat::eigen_from_real` / `eigenvalues_from_real`.
 faer = "0.24.0"
+smallvec = "1.15.1"
+arrayvec = "0.7.6"
 
 [dev-dependencies]
 criterion = "0.8.2"

@@ -17,7 +17,7 @@ mod sealed {
 /// For `f32`, the aligned types are `Vec3A`/`Mat3A`/`Affine3A` (16-byte SIMD).
 /// For `f64`, they are `DVec3`/`DMat3`/`DAffine3` (already efficient packing).
 /// Both share a uniform interface via the `T*` traits in `glam-traits-ext`.
-pub trait KinScalar: FloatScalar + Copy + std::fmt::Debug + Send + Sync + 'static + sealed::Sealed {
+pub trait KinScalar: FloatScalar + Copy + std::fmt::Debug + Send + Sync + 'static + sealed::Sealed + crate::BatchLimits {
     type AVec3: TVec3<Self, MaybeAligned = Self::AVec3>;
     type AMat3: TMat3<Self, MaybeAligned = Self::AMat3>
         + FloatMat<Self, Col = Self::AVec3>

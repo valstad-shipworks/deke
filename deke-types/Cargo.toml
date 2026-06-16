@@ -13,6 +13,8 @@ valuable = ["dep:valuable", "glam-traits-ext/Valuable"]
 
 [dependencies]
 approx = "0.5.1"
+bitvec = "1"
+wide = "1"
 smallvec = "1.15"
 const_soft_float = "0.1.4"
 glam = "0.32.1"

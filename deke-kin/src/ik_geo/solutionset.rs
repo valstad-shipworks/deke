@@ -1,5 +1,6 @@
 //! Small enums representing 0..N solutions of an IK subproblem.
 
+use arrayvec::ArrayVec;
 use std::fmt::{Debug, Display, Formatter, Result};
 
 #[derive(Debug, Clone)]
@@ -43,12 +44,17 @@ impl<T: Copy> SolutionSet2<T> {
         }
     }
 
-    pub fn get_all(&self) -> Vec<T> {
+    pub fn get_all(&self) -> ArrayVec<T, 2> {
+        let mut v = ArrayVec::new();
         match self {
-            Self::Zero => vec![],
-            Self::One(s) => vec![*s],
-            Self::Two(s1, s2) => vec![*s1, *s2],
+            Self::Zero => {}
+            Self::One(s) => v.push(*s),
+            Self::Two(s1, s2) => {
+                v.push(*s1);
+                v.push(*s2);
+            }
         }
+        v
     }
 
     pub fn duplicated(&self) -> Self {
@@ -80,14 +86,28 @@ impl<T: Copy + Debug> SolutionSet2<T> {
 }
 
 impl<T: Copy> SolutionSet4<T> {
-    pub fn get_all(&self) -> Vec<T> {
+    pub fn get_all(&self) -> ArrayVec<T, 4> {
+        let mut v = ArrayVec::new();
         match self {
-            Self::Zero => vec![],
-            Self::One(s) => vec![*s],
-            Self::Two(s1, s2) => vec![*s1, *s2],
-            Self::Three(s1, s2, s3) => vec![*s1, *s2, *s3],
-            Self::Four(s1, s2, s3, s4) => vec![*s1, *s2, *s3, *s4],
+            Self::Zero => {}
+            Self::One(s) => v.push(*s),
+            Self::Two(s1, s2) => {
+                v.push(*s1);
+                v.push(*s2);
+            }
+            Self::Three(s1, s2, s3) => {
+                v.push(*s1);
+                v.push(*s2);
+                v.push(*s3);
+            }
+            Self::Four(s1, s2, s3, s4) => {
+                v.push(*s1);
+                v.push(*s2);
+                v.push(*s3);
+                v.push(*s4);
+            }
         }
+        v
     }
 }
 

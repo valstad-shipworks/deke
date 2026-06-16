@@ -1,5 +1,8 @@
 use std::{fmt::Debug, sync::Arc};
 
+use bitvec::vec::BitVec;
+use wide::{f32x8, f64x4, CmpGt, CmpLt};
+
 use crate::{DekeError, DekeResult, KinScalar, SRobotQ, SRobotQLike};
 
 
@@ -133,6 +136,77 @@ impl ValidatorRet for f64 {
     }
 }
 
+/// SIMD joint-limit batch check, sealed to the scalar types [`KinScalar`]
+/// permits (`f32` → `f32x8`, `f64` → `f64x4`). Bit `i` of `out` is set when
+/// `qs[i]` lies outside `[lower, upper]` on any axis. It is a supertrait of
+/// [`KinScalar`] so the generic [`JointValidator`] batch path vectorises
+/// without narrowing the impl with an extra bound.
+#[doc(hidden)]
+pub trait BatchLimits: num_traits::Float {
+    fn fill_oob<const N: usize>(
+        qs: &[SRobotQ<N, Self>],
+        lower: &[Self; N],
+        upper: &[Self; N],
+        out: &mut BitVec,
+    );
+}
+
+macro_rules! impl_batch_limits {
+    ($scalar:ty, $simd:ty, $lanes:literal) => {
+        impl BatchLimits for $scalar {
+            fn fill_oob<const N: usize>(
+                qs: &[SRobotQ<N, $scalar>],
+                lower: &[$scalar; N],
+                upper: &[$scalar; N],
+                out: &mut BitVec,
+            ) {
+                let n = qs.len();
+                out.clear();
+                out.resize(n, false);
+                let mut i = 0usize;
+                while i + $lanes <= n {
+                    let mut fail = <$simd>::new([0.0; $lanes]);
+                    let mut j = 0usize;
+                    while j < N {
+                        let mut col = [0.0; $lanes];
+                        let mut l = 0usize;
+                        while l < $lanes {
+                            col[l] = qs[i + l].0[j];
+                            l += 1;
+                        }
+                        let cv = <$simd>::new(col);
+                        fail = fail | cv.simd_lt(lower[j]) | cv.simd_gt(upper[j]);
+                        j += 1;
+                    }
+                    let arr = fail.to_array();
+                    let mut l = 0usize;
+                    while l < $lanes {
+                        if arr[l].to_bits() != 0 {
+                            out.set(i + l, true);
+                        }
+                        l += 1;
+                    }
+                    i += $lanes;
+                }
+                while i < n {
+                    let q = &qs[i].0;
+                    let mut j = 0usize;
+                    while j < N {
+                        if q[j] < lower[j] || q[j] > upper[j] {
+                            out.set(i, true);
+                            break;
+                        }
+                        j += 1;
+                    }
+                    i += 1;
+                }
+            }
+        }
+    };
+}
+impl_batch_limits!(f32, f32x8, 8);
+impl_batch_limits!(f64, f64x4, 4);
+
 pub trait Validator<const N: usize, R: ValidatorRet = (), F: KinScalar = f32>: Sized + Clone + Debug + Send + Sync + 'static {
     type Context<'ctx>: ValidatorContext;
     const VALIDATE_MOTION_IS_CONTINUOUS: bool = false;
@@ -147,6 +221,18 @@ pub trait Validator<const N: usize, R: ValidatorRet = (), F: KinScalar = f32>: S
         qs: &[SRobotQ<N, F>],
         ctx: &Self::Context<'ctx>,
     ) -> DekeResult<R>;
+
+    /// Validate a batch of configurations at once, returning a bitvec whose
+    /// `i`-th bit is set iff `qs[i]` is **invalid** (rejected). The default
+    /// runs [`Validator::validate`] per config; implementors with a batched
+    /// fast path (SIMD, GPU) override it.
+    fn validate_batched<'ctx>(
+        &self,
+        qs: &[SRobotQ<N, F>],
+        ctx: &Self::Context<'ctx>,
+    ) -> BitVec {
+        qs.iter().map(|q| self.validate(*q, ctx).is_err()).collect()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -234,6 +320,17 @@ where
         self.0.validate_motion(qs, &ctx.0)?;
         self.1.validate_motion(qs, &ctx.1)
     }
+
+    #[inline]
+    fn validate_batched<'ctx>(
+        &self,
+        qs: &[SRobotQ<N, F>],
+        ctx: &Self::Context<'ctx>,
+    ) -> BitVec {
+        let a = self.0.validate_batched(qs, &ctx.0);
+        let b = self.1.validate_batched(qs, &ctx.1);
+        a.iter().zip(b.iter()).map(|(x, y)| *x | *y).collect()
+    }
 }
 
 impl<const N: usize, F: KinScalar, R: ValidatorRet, A, B> Validator<N, R, F> for ValidatorOr<A, B>
@@ -266,6 +363,17 @@ where
             Ok(r) => Ok(r),
             Err(_) => self.1.validate_motion(qs, &ctx.1),
         }
+    }
+
+    #[inline]
+    fn validate_batched<'ctx>(
+        &self,
+        qs: &[SRobotQ<N, F>],
+        ctx: &Self::Context<'ctx>,
+    ) -> BitVec {
+        let a = self.0.validate_batched(qs, &ctx.0);
+        let b = self.1.validate_batched(qs, &ctx.1);
+        a.iter().zip(b.iter()).map(|(x, y)| *x & *y).collect()
     }
 }
 
@@ -302,6 +410,15 @@ where
             Err(_) => Ok(()),
         }
     }
+
+    #[inline]
+    fn validate_batched<'ctx>(
+        &self,
+        qs: &[SRobotQ<N, F>],
+        ctx: &Self::Context<'ctx>,
+    ) -> BitVec {
+        self.0.validate_batched(qs, ctx).iter().map(|x| !*x).collect()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -337,6 +454,18 @@ where
         match self {
             MaybeValidator::Active(v) => v.validate_motion(qs, ctx),
             MaybeValidator::Disabled => Ok(R::passing()),
+        }
+    }
+
+    #[inline]
+    fn validate_batched<'ctx>(
+        &self,
+        qs: &[SRobotQ<N, F>],
+        ctx: &Self::Context<'ctx>,
+    ) -> BitVec {
+        match self {
+            MaybeValidator::Active(v) => v.validate_batched(qs, ctx),
+            MaybeValidator::Disabled => core::iter::repeat(false).take(qs.len()).collect(),
         }
     }
 }
@@ -420,6 +549,27 @@ impl<const N: usize, F: KinScalar> Validator<N, (), F> for JointValidator<N, F> 
         }
         Ok(())
     }
+
+    #[inline]
+    fn validate_batched<'ctx>(
+        &self,
+        qs: &[SRobotQ<N, F>],
+        _ctx: &Self::Context<'ctx>,
+    ) -> BitVec {
+        let mut out = BitVec::with_capacity(qs.len());
+        F::fill_oob::<N>(qs, &self.lower.0, &self.upper.0, &mut out);
+        if let Some(extras) = &self.extras {
+            for (i, q) in qs.iter().enumerate() {
+                if out[i] {
+                    continue;
+                }
+                if extras.iter().any(|check| !check(q)) {
+                    out.set(i, true);
+                }
+            }
+        }
+        out
+    }
 }
 
 /// Cross-precision entry point: f32-storage `JointValidator` accepting f64
@@ -451,6 +601,16 @@ impl<const N: usize> Validator<N, (), f64> for JointValidator<N, f32> {
         }
         Ok(())
     }
+
+    #[inline]
+    fn validate_batched<'ctx>(
+        &self,
+        qs: &[SRobotQ<N, f64>],
+        ctx: &Self::Context<'ctx>,
+    ) -> BitVec {
+        let q32: Vec<SRobotQ<N, f32>> = qs.iter().map(|q| (*q).into()).collect();
+        <Self as Validator<N, (), f32>>::validate_batched(self, &q32, ctx)
+    }
 }
 
 /// Cross-precision entry point: f64-storage `JointValidator` accepting f32
@@ -480,5 +640,15 @@ impl<const N: usize> Validator<N, (), f32> for JointValidator<N, f64> {
             <Self as Validator<N, (), f64>>::validate(self, q64, ctx)?;
         }
         Ok(())
+    }
+
+    #[inline]
+    fn validate_batched<'ctx>(
+        &self,
+        qs: &[SRobotQ<N, f32>],
+        ctx: &Self::Context<'ctx>,
+    ) -> BitVec {
+        let q64: Vec<SRobotQ<N, f64>> = qs.iter().map(|q| (*q).into()).collect();
+        <Self as Validator<N, (), f64>>::validate_batched(self, &q64, ctx)
     }
 }
