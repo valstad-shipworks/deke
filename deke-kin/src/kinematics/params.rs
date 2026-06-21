@@ -49,7 +49,11 @@ pub struct URDFJoint {
 
 impl URDFJoint {
     pub const fn fixed(xyz: (f64, f64, f64), rpy: (f64, f64, f64)) -> Self {
-        Self { r#type: URDFJointType::Fixed, xyz, rpy }
+        Self {
+            r#type: URDFJointType::Fixed,
+            xyz,
+            rpy,
+        }
     }
 
     pub const fn revolute(
@@ -57,7 +61,11 @@ impl URDFJoint {
         rpy: (f64, f64, f64),
         axis: (f64, f64, f64),
     ) -> Self {
-        Self { r#type: URDFJointType::Revolute { axis }, xyz, rpy }
+        Self {
+            r#type: URDFJointType::Revolute { axis },
+            xyz,
+            rpy,
+        }
     }
 
     pub const fn prismatic(
@@ -65,7 +73,11 @@ impl URDFJoint {
         rpy: (f64, f64, f64),
         axis: (f64, f64, f64),
     ) -> Self {
-        Self { r#type: URDFJointType::Prismatic { axis }, xyz, rpy }
+        Self {
+            r#type: URDFJointType::Prismatic { axis },
+            xyz,
+            rpy,
+        }
     }
 }
 
@@ -87,9 +99,15 @@ pub enum URDFBuildError {
 impl From<URDFBuildError> for DekeError {
     fn from(e: URDFBuildError) -> Self {
         match e {
-            URDFBuildError::JointTypeMismatch { index, expected, found } => {
-                DekeError::URDFJointTypeMismatch { index, expected, found }
-            }
+            URDFBuildError::JointTypeMismatch {
+                index,
+                expected,
+                found,
+            } => DekeError::URDFJointTypeMismatch {
+                index,
+                expected,
+                found,
+            },
             URDFBuildError::RevoluteCountMismatch { expected, found } => {
                 DekeError::URDFRevoluteCountMismatch { expected, found }
             }

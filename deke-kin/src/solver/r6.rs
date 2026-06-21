@@ -1,9 +1,9 @@
 //! 6R analytical IK with kinematic-class detection.
 
-use glam::{DMat3, DMat4, DVec3};
 use crate::ik_geo::subproblems::{
     subproblem1, subproblem2, subproblem3, subproblem4, subproblem5, subproblem6,
 };
+use glam::{DMat3, DMat4, DVec3};
 
 use crate::ik_geo::subproblems::auxiliary::{rot as axis_angle, rot_vec};
 use crate::kinematics::{create_normal_vector, inverse_homogeneous, reverse_chain};
@@ -122,7 +122,11 @@ impl R6 {
 
     fn pose_decompose(&self, pose: &DMat4) -> (DVec3, DMat3) {
         let p_t = pose.w_axis.truncate();
-        let r_06 = DMat3::from_cols(pose.x_axis.truncate(), pose.y_axis.truncate(), pose.z_axis.truncate());
+        let r_06 = DMat3::from_cols(
+            pose.x_axis.truncate(),
+            pose.y_axis.truncate(),
+            pose.z_axis.truncate(),
+        );
         let p_16 = p_t - self.chain.p[0] - r_06 * self.chain.p[6];
         (p_16, r_06)
     }
@@ -146,8 +150,12 @@ impl R6 {
         let mut out: crate::solver::Solutions = crate::solver::Solutions::new();
         for q4 in set4_q4.get_all() {
             let r_34 = axis_angle(&h3, q4);
-            let set4_q6 =
-                subproblem4(&h4, &(r_06.transpose() * h0), &h5, h4.dot(r_34.transpose() * h0));
+            let set4_q6 = subproblem4(
+                &h4,
+                &(r_06.transpose() * h0),
+                &h5,
+                h4.dot(r_34.transpose() * h0),
+            );
             for q6 in set4_q6.get_all() {
                 let r_56 = axis_angle(&h5, q6);
                 let set4_q03 =
@@ -166,8 +174,7 @@ impl R6 {
                     let set3_q2 = subproblem3(&p2, &(-p1), &h1, (p_16 - r_03 * delta).length());
                     for q2 in set3_q2.get_all() {
                         let r_12 = axis_angle(&h1, q2);
-                        let Some(q1) =
-                            subproblem1(&(p1 + r_12 * p2), &(p_16 - r_03 * delta), &h0)
+                        let Some(q1) = subproblem1(&(p1 + r_12 * p2), &(p_16 - r_03 * delta), &h0)
                         else {
                             continue;
                         };
@@ -236,9 +243,11 @@ impl R6 {
             let Some(q14) = subproblem1(&(r_45 * h5), &(r_01.transpose() * r_06 * h5), &h1) else {
                 continue;
             };
-            let Some(q6) =
-                subproblem1(&(r_45.transpose() * h1), &(r_06.transpose() * r_01 * h1), &(-h5))
-            else {
+            let Some(q6) = subproblem1(
+                &(r_45.transpose() * h1),
+                &(r_06.transpose() * r_01 * h1),
+                &(-h5),
+            ) else {
                 continue;
             };
 
@@ -408,12 +417,7 @@ impl R6 {
     }
 }
 
-fn classify(
-    h: &[DVec3],
-    p: &[DVec3],
-    zt: f64,
-    at: f64,
-) -> (Class6, Option<Box<R6>>) {
+fn classify(h: &[DVec3], p: &[DVec3], zt: f64, at: f64) -> (Class6, Option<Box<R6>>) {
     let h0 = h[0];
     let h1 = h[1];
     let h2 = h[2];

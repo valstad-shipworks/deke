@@ -384,102 +384,96 @@ impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
 
         SCRATCH_BODIES.with_borrow_mut(|scratch| {
             SCRATCH_EXTRAS.with_borrow_mut(|extras_scratch| {
-            if scratch.len() < N + 2 {
-                scratch.resize_with(N + 2, BodyScratch::default);
-            }
+                if scratch.len() < N + 2 {
+                    scratch.resize_with(N + 2, BodyScratch::default);
+                }
 
-            for i in 0..N {
-                scratch[i].refresh(&self.links[i], transforms[i]);
-            }
-            scratch[N].refresh(&self.ee, ee_tf);
-            if let Some(base) = &self.base {
-                scratch[N + 1].refresh(base, base_tf);
-            }
+                for i in 0..N {
+                    scratch[i].refresh(&self.links[i], transforms[i]);
+                }
+                scratch[N].refresh(&self.ee, ee_tf);
+                if let Some(base) = &self.base {
+                    scratch[N + 1].refresh(base, base_tf);
+                }
 
-            extras_scratch.resize_with(ctx.extra_attachments.len(), Collider::default);
-            for (dst, src) in extras_scratch.iter_mut().zip(ctx.extra_attachments.iter()) {
-                dst.clone_from(&src.collision);
-                if let Some(idx) = src.mounted_on
-                    && let Some(tf) = mounted_tf::<N>(idx, &transforms, ee_tf, base_tf) {
+                extras_scratch.resize_with(ctx.extra_attachments.len(), Collider::default);
+                for (dst, src) in extras_scratch.iter_mut().zip(ctx.extra_attachments.iter()) {
+                    dst.clone_from(&src.collision);
+                    if let Some(idx) = src.mounted_on
+                        && let Some(tf) = mounted_tf::<N>(idx, &transforms, ee_tf, base_tf)
+                    {
                         dst.transform(tf);
                     }
-            }
+                }
 
-            #[allow(clippy::needless_range_loop)]
-            for i in 0..N {
-                check_body_env(&self.links[i], Some(&scratch[i]), i, ctx, extras_scratch)?;
-            }
-            check_body_env(&self.ee, Some(&scratch[N]), N, ctx, extras_scratch)?;
-
-            if ctx.self_collisions {
+                #[allow(clippy::needless_range_loop)]
                 for i in 0..N {
-                    for j in 0..i {
+                    check_body_env(&self.links[i], Some(&scratch[i]), i, ctx, extras_scratch)?;
+                }
+                check_body_env(&self.ee, Some(&scratch[N]), N, ctx, extras_scratch)?;
+
+                if ctx.self_collisions {
+                    for i in 0..N {
+                        for j in 0..i {
+                            check_body_pair(
+                                &self.links[j],
+                                Some(&scratch[j]),
+                                &self.links[i],
+                                Some(&scratch[i]),
+                                j,
+                                i,
+                            )?;
+                        }
+                        if let Some(base) = &self.base {
+                            check_body_pair(
+                                &self.links[i],
+                                Some(&scratch[i]),
+                                base,
+                                Some(&scratch[N + 1]),
+                                i,
+                                N + 1,
+                            )?;
+                        }
+                        if let Some(world) = &self.world {
+                            check_body_pair(
+                                &self.links[i],
+                                Some(&scratch[i]),
+                                world,
+                                None,
+                                i,
+                                N + 2,
+                            )?;
+                        }
+                    }
+                    for j in 0..N {
                         check_body_pair(
                             &self.links[j],
                             Some(&scratch[j]),
-                            &self.links[i],
-                            Some(&scratch[i]),
+                            &self.ee,
+                            Some(&scratch[N]),
                             j,
-                            i,
+                            N,
                         )?;
                     }
                     if let Some(base) = &self.base {
                         check_body_pair(
-                            &self.links[i],
-                            Some(&scratch[i]),
+                            &self.ee,
+                            Some(&scratch[N]),
                             base,
                             Some(&scratch[N + 1]),
-                            i,
+                            N,
                             N + 1,
                         )?;
                     }
                     if let Some(world) = &self.world {
-                        check_body_pair(
-                            &self.links[i],
-                            Some(&scratch[i]),
-                            world,
-                            None,
-                            i,
-                            N + 2,
-                        )?;
+                        check_body_pair(&self.ee, Some(&scratch[N]), world, None, N, N + 2)?;
+                    }
+                    if let (Some(base), Some(world)) = (&self.base, &self.world) {
+                        check_body_pair(base, Some(&scratch[N + 1]), world, None, N + 1, N + 2)?;
                     }
                 }
-                for j in 0..N {
-                    check_body_pair(
-                        &self.links[j],
-                        Some(&scratch[j]),
-                        &self.ee,
-                        Some(&scratch[N]),
-                        j,
-                        N,
-                    )?;
-                }
-                if let Some(base) = &self.base {
-                    check_body_pair(
-                        &self.ee,
-                        Some(&scratch[N]),
-                        base,
-                        Some(&scratch[N + 1]),
-                        N,
-                        N + 1,
-                    )?;
-                }
-                if let Some(world) = &self.world {
-                    check_body_pair(&self.ee, Some(&scratch[N]), world, None, N, N + 2)?;
-                }
-                if let (Some(base), Some(world)) = (&self.base, &self.world) {
-                    check_body_pair(
-                        base,
-                        Some(&scratch[N + 1]),
-                        world,
-                        None,
-                        N + 1,
-                        N + 2,
-                    )?;
-                }
-            }
 
-            Ok(())
+                Ok(())
             })
         })
     }
@@ -576,10 +570,7 @@ impl std::fmt::Display for SelfCollisionDetail {
 }
 
 impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
-    pub fn debug_self_collisions(
-        &self,
-        q: &SRobotQ<N>,
-    ) -> DekeResult<Vec<SelfCollisionDetail>> {
+    pub fn debug_self_collisions(&self, q: &SRobotQ<N>) -> DekeResult<Vec<SelfCollisionDetail>> {
         let (base_tf, transforms, ee_tf) = self.fk.all_fk(q).map_err(Into::into)?;
 
         SCRATCH_BODIES.with_borrow_mut(|scratch| {
@@ -609,12 +600,12 @@ impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
             };
 
             let check_pair = |a: &CollisionBody<N>,
-                                  sa_scratch: Option<&BodyScratch>,
-                                  b: &CollisionBody<N>,
-                                  sb_scratch: Option<&BodyScratch>,
-                                  a_idx: usize,
-                                  b_idx: usize,
-                                  details: &mut Vec<SelfCollisionDetail>| {
+                              sa_scratch: Option<&BodyScratch>,
+                              b: &CollisionBody<N>,
+                              sb_scratch: Option<&BodyScratch>,
+                              a_idx: usize,
+                              b_idx: usize,
+                              details: &mut Vec<SelfCollisionDetail>| {
                 for (ca, _ta, fa) in sub_colliders(a, sa_scratch) {
                     if !fa.allows(b_idx) {
                         continue;

@@ -17,7 +17,9 @@ mod sealed {
 /// For `f32`, the aligned types are `Vec3A`/`Mat3A`/`Affine3A` (16-byte SIMD).
 /// For `f64`, they are `DVec3`/`DMat3`/`DAffine3` (already efficient packing).
 /// Both share a uniform interface via the `T*` traits in `glam-traits-ext`.
-pub trait KinScalar: FloatScalar + Copy + std::fmt::Debug + Send + Sync + 'static + sealed::Sealed + crate::BatchLimits {
+pub trait KinScalar:
+    FloatScalar + Copy + std::fmt::Debug + Send + Sync + 'static + sealed::Sealed + crate::BatchLimits
+{
     type AVec3: TVec3<Self, MaybeAligned = Self::AVec3>;
     type AMat3: TMat3<Self, MaybeAligned = Self::AMat3>
         + FloatMat<Self, Col = Self::AVec3>
@@ -58,13 +60,15 @@ pub fn check_finite<const N: usize, F: FloatScalar>(q: &SRobotQ<N, F>) -> Result
 
 #[inline(always)]
 #[cfg(not(debug_assertions))]
-pub fn check_finite<const N: usize, F: FloatScalar>(_: &SRobotQ<N, F>) -> Result<(), std::convert::Infallible> {
+pub fn check_finite<const N: usize, F: FloatScalar>(
+    _: &SRobotQ<N, F>,
+) -> Result<(), std::convert::Infallible> {
     Ok(())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum JointSpec<F: KinScalar> {
-    Revolute  { axis_local: AVec3<F> },
+    Revolute { axis_local: AVec3<F> },
     Prismatic { axis_local: AVec3<F> },
 }
 
@@ -120,10 +124,7 @@ pub trait FKChain<const N: usize, F: KinScalar = f32>: Clone + Send + Sync {
 
     /// Compute base transform, per-link frames, and the end-effector frame
     /// in one call.
-    fn all_fk(
-        &self,
-        q: &SRobotQ<N, F>,
-    ) -> Result<AllFk<N, F>, Self::Error> {
+    fn all_fk(&self, q: &SRobotQ<N, F>) -> Result<AllFk<N, F>, Self::Error> {
         let base = self.base_tf();
         let frames = self.fk(q)?;
         let end = self.fk_end(q)?;
@@ -137,7 +138,9 @@ pub trait FKChain<const N: usize, F: KinScalar = f32>: Clone + Send + Sync {
 /// (`jacobian`, `jacobian_dot`, `jacobian_ddot`) and the link-length-sum
 /// `max_reach` estimate, all provided as defaults that respect each joint's
 /// [`JointSpec`] (so prismatic and revolute columns are formed correctly).
-pub trait ContinuousFKChain<const N: usize, F: KinScalar = f32>: FKChain<N, F, Error = DekeError> {
+pub trait ContinuousFKChain<const N: usize, F: KinScalar = f32>:
+    FKChain<N, F, Error = DekeError>
+{
     fn structure(&self) -> KinSpec<F, N>;
 
     /// Theoretical maximum reach: sum of link lengths at `q = 0` (upper bound,
@@ -215,7 +218,9 @@ pub trait ContinuousFKChain<const N: usize, F: KinScalar = f32>: FKChain<N, F, E
             // Jᵀ J over the top-left N×N block: g[r][c] = column r · column c.
             for (r, grow) in g.iter_mut().enumerate().take(N) {
                 for (c, gval) in grow.iter_mut().enumerate().take(N) {
-                    *gval = j.iter().fold(F::zero(), |acc, jrow| acc + jrow[r] * jrow[c]);
+                    *gval = j
+                        .iter()
+                        .fold(F::zero(), |acc, jrow| acc + jrow[r] * jrow[c]);
                 }
             }
         }
@@ -437,7 +442,6 @@ fn forward_pass<F: KinScalar, const N: usize>(
     (z_out, p_out, p_ee)
 }
 
-
 /// Inverse-kinematics solution set. Stays inline on the stack for the common
 /// case of ≤8 solutions (analytic branches) and spills to the heap when a
 /// discrete/enumerated solve produces more.
@@ -445,7 +449,10 @@ pub type IkSolutions<const N: usize, F> = smallvec::SmallVec<[SRobotQ<N, F>; 8]>
 
 pub enum IkOutcome<const N: usize, F: KinScalar> {
     Solved(IkSolutions<N, F>),
-    Failed { partial: Option<IkSolutions<N, F>>, residual: F }
+    Failed {
+        partial: Option<IkSolutions<N, F>>,
+        residual: F,
+    },
 }
 
 impl<const N: usize, F: KinScalar> IkOutcome<N, F> {
@@ -460,7 +467,7 @@ impl<const N: usize, F: KinScalar> IkOutcome<N, F> {
         match self {
             IkOutcome::Solved(solutions) => Ok(solutions),
             IkOutcome::Failed { residual, .. } => Err(DekeError::IkSolverFailed(
-                residual.to_f64().unwrap_or(f64::MAX)
+                residual.to_f64().unwrap_or(f64::MAX),
             )),
         }
     }
@@ -484,7 +491,11 @@ impl<const N: usize, F: KinScalar> IkOutcome<N, F> {
 pub trait IkSolver<const N: usize, F: KinScalar = f32>: FKChain<N, F> {
     type IkConfig: Default + Clone + Send + Sync + 'static;
 
-    fn ik_with_config(&self, target: AAffine3<F>, config: &Self::IkConfig) -> Result<IkOutcome<N, F>, Self::Error>;
+    fn ik_with_config(
+        &self,
+        target: AAffine3<F>,
+        config: &Self::IkConfig,
+    ) -> Result<IkOutcome<N, F>, Self::Error>;
     fn ik(&self, target: AAffine3<F>) -> Result<IkOutcome<N, F>, Self::Error> {
         self.ik_with_config(target, &Self::IkConfig::default())
     }
@@ -494,10 +505,7 @@ trait ErasedFK<const N: usize, F: KinScalar>: Send + Sync {
     fn base_tf(&self) -> AAffine3<F>;
     fn fk(&self, q: &SRobotQ<N, F>) -> Result<[AAffine3<F>; N], DekeError>;
     fn fk_end(&self, q: &SRobotQ<N, F>) -> Result<AAffine3<F>, DekeError>;
-    fn all_fk(
-        &self,
-        q: &SRobotQ<N, F>,
-    ) -> Result<AllFk<N, F>, DekeError>;
+    fn all_fk(&self, q: &SRobotQ<N, F>) -> Result<AllFk<N, F>, DekeError>;
     fn clone_box(&self) -> Box<dyn ErasedFK<N, F>>;
 }
 

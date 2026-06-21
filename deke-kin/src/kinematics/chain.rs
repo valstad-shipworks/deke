@@ -26,11 +26,7 @@ pub fn dh_to_hp(alpha: &[f64], a: &[f64], d: &[f64]) -> (Vec<DVec3>, Vec<DVec3>,
         let ca = alpha[i].cos();
         let sa = alpha[i].sin();
         // Rotation about X by alpha_i, column-major.
-        let r_loc = DMat3::from_cols_array(&[
-            1.0, 0.0, 0.0,
-            0.0, ca, sa,
-            0.0, -sa, ca,
-        ]);
+        let r_loc = DMat3::from_cols_array(&[1.0, 0.0, 0.0, 0.0, ca, sa, 0.0, -sa, ca]);
 
         let z = DVec3::Z;
         h.push(r * z);
@@ -66,8 +62,11 @@ pub fn fwdkin(h: &[DVec3], p: &[DVec3], q: &[f64]) -> DMat4 {
 /// Right-multiply the rotation block by `r6t`.
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn apply_r6t(pose: DMat4, r6t: &DMat3) -> DMat4 {
-    let r = DMat3::from_cols(pose.x_axis.truncate(), pose.y_axis.truncate(), pose.z_axis.truncate())
-        * *r6t;
+    let r = DMat3::from_cols(
+        pose.x_axis.truncate(),
+        pose.y_axis.truncate(),
+        pose.z_axis.truncate(),
+    ) * *r6t;
     let mut out = DMat4::from_mat3(r);
     out.w_axis = pose.w_axis;
     out
@@ -75,7 +74,11 @@ pub fn apply_r6t(pose: DMat4, r6t: &DMat3) -> DMat4 {
 
 /// `T⁻¹` for a homogeneous transform (rotation transpose + back-translate).
 pub fn inverse_homogeneous(t: &DMat4) -> DMat4 {
-    let r = DMat3::from_cols(t.x_axis.truncate(), t.y_axis.truncate(), t.z_axis.truncate());
+    let r = DMat3::from_cols(
+        t.x_axis.truncate(),
+        t.y_axis.truncate(),
+        t.z_axis.truncate(),
+    );
     let p = DVec3::new(t.w_axis.x, t.w_axis.y, t.w_axis.z);
     let rt = r.transpose();
     let p_new = -(rt * p);

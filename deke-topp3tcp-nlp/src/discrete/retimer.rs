@@ -2,21 +2,19 @@ use std::time::{Duration, Instant};
 
 use deke_topp_speed::{MotionSpec, ToppSolver};
 use deke_types::{
-    ContinuousFKChain, DekeError, DekeResult, FKChain, JointValidator, Retimer, SRobotPath, SRobotQ,
-    SRobotTraj, Validator,
+    ContinuousFKChain, DekeError, DekeResult, FKChain, JointValidator, Retimer, SRobotPath,
+    SRobotQ, SRobotTraj, Validator,
 };
 
-use crate::common::boundary::project;
 use super::constraints::{DensificationOptions, Topp3Tcp6DiscreteConstraints};
-use super::diagnostic::{
-    BisectionStep, LimitingGroup, SolveStatus, Topp3Tcp6DiscreteDiagnostic,
-};
+use super::diagnostic::{BisectionStep, LimitingGroup, SolveStatus, Topp3Tcp6DiscreteDiagnostic};
 use super::nlp::{
     DiscreteSolution, bins_from_sigma, build_and_solve_discrete,
     build_and_solve_discrete_with_bins, build_and_solve_discrete_with_timeout,
 };
-use crate::common::path_derivatives::PathDerivatives;
 use super::verify::verify_output_fd;
+use crate::common::boundary::project;
+use crate::common::path_derivatives::PathDerivatives;
 
 /// Discrete-time TOPP3TCP6 retimer.
 ///
@@ -35,7 +33,9 @@ impl<'a, const N: usize, FK: ContinuousFKChain<N, f64>> Topp3Tcp6Discrete<'a, N,
     }
 }
 
-impl<'a, const N: usize, FK: ContinuousFKChain<N, f64>> Retimer<N, f64> for Topp3Tcp6Discrete<'a, N, FK> {
+impl<'a, const N: usize, FK: ContinuousFKChain<N, f64>> Retimer<N, f64>
+    for Topp3Tcp6Discrete<'a, N, FK>
+{
     type Diagnostic = Topp3Tcp6DiscreteDiagnostic;
     type Constraints = Topp3Tcp6DiscreteConstraints<N>;
 
@@ -50,8 +50,7 @@ impl<'a, const N: usize, FK: ContinuousFKChain<N, f64>> Retimer<N, f64> for Topp
         let mut diag = Topp3Tcp6DiscreteDiagnostic::default();
         diag.path_stats.input_waypoints = path.len();
 
-        if let Err(e) = PathDerivatives::<N>::check_locked_prefix(path, constraints.locked_prefix)
-        {
+        if let Err(e) = PathDerivatives::<N>::check_locked_prefix(path, constraints.locked_prefix) {
             diag.status = SolveStatus::NotAttempted;
             diag.limiting_constraint = Some(LimitingGroup::BoundaryCondition);
             diag.message = Some(format!("{}", e));
@@ -196,16 +195,33 @@ impl<'a, const N: usize, FK: ContinuousFKChain<N, f64>> Retimer<N, f64> for Topp
         for probe in 0..8 {
             let t = Instant::now();
             let sol = build_and_solve_discrete_with_timeout::<N>(
-                &deriv, constraints, start, end, k_hi, true, warm.as_deref(), probe_timeout,
+                &deriv,
+                constraints,
+                start,
+                end,
+                k_hi,
+                true,
+                warm.as_deref(),
+                probe_timeout,
             );
             if trace_b {
                 if let Ok(s) = &sol {
                     eprintln!(
                         "[discrete] probe#{} K={} status={:?} iter={} slack={:.3e} wall={:?}",
-                        probe, k_hi, s.status, s.iterations, s.slack, t.elapsed()
+                        probe,
+                        k_hi,
+                        s.status,
+                        s.iterations,
+                        s.slack,
+                        t.elapsed()
                     );
                 } else {
-                    eprintln!("[discrete] probe#{} K={} ERR wall={:?}", probe, k_hi, t.elapsed());
+                    eprintln!(
+                        "[discrete] probe#{} K={} ERR wall={:?}",
+                        probe,
+                        k_hi,
+                        t.elapsed()
+                    );
                 }
             }
             match sol {
@@ -233,10 +249,7 @@ impl<'a, const N: usize, FK: ContinuousFKChain<N, f64>> Retimer<N, f64> for Topp
         if last_feasible.is_none() {
             diag.status = SolveStatus::LocallyInfeasible;
             diag.limiting_constraint = Some(LimitingGroup::KSampleCountAtCeiling);
-            diag.message = Some(format!(
-                "no feasible K found up to ceiling {}",
-                k_hi
-            ));
+            diag.message = Some(format!("no feasible K found up to ceiling {}", k_hi));
             let err = DekeError::RetimerFailed(diag.message.clone().unwrap_or_default());
             return (Err(err), diag);
         }
@@ -287,7 +300,14 @@ impl<'a, const N: usize, FK: ContinuousFKChain<N, f64>> Retimer<N, f64> for Topp
             let k_mid = (k_lo + k_hi) / 2;
             let t = Instant::now();
             let sol = build_and_solve_discrete_with_timeout::<N>(
-                &deriv, constraints, start, end, k_mid, false, warm.as_deref(), probe_timeout,
+                &deriv,
+                constraints,
+                start,
+                end,
+                k_mid,
+                false,
+                warm.as_deref(),
+                probe_timeout,
             );
             let s = match sol {
                 Ok(s) => s,
@@ -299,7 +319,14 @@ impl<'a, const N: usize, FK: ContinuousFKChain<N, f64>> Retimer<N, f64> for Topp
             if trace_b {
                 eprintln!(
                     "[discrete] bisect#{} K={} (lo={} hi={}) status={:?} iter={} slack={:.3e} wall={:?}",
-                    biter, k_mid, k_lo, k_hi, s.status, s.iterations, s.slack, t.elapsed()
+                    biter,
+                    k_mid,
+                    k_lo,
+                    k_hi,
+                    s.status,
+                    s.iterations,
+                    s.slack,
+                    t.elapsed()
                 );
             }
             record_step(&mut diag.bisection_steps, &s);
@@ -332,7 +359,13 @@ impl<'a, const N: usize, FK: ContinuousFKChain<N, f64>> Retimer<N, f64> for Topp
             let strict_k = lf.k + (lf.k / 40).max(2);
             let t = Instant::now();
             let strict_attempt = build_and_solve_discrete::<N>(
-                &deriv, constraints, start, end, strict_k, false, Some(&lf.sigma),
+                &deriv,
+                constraints,
+                start,
+                end,
+                strict_k,
+                false,
+                Some(&lf.sigma),
             );
             if trace {
                 eprintln!("[discrete] strict@K={} took {:?}", strict_k, t.elapsed());
@@ -370,7 +403,11 @@ impl<'a, const N: usize, FK: ContinuousFKChain<N, f64>> Retimer<N, f64> for Topp
         for bump in 0..5 {
             let samples_try = sigma_to_samples(&final_sol.sigma, &deriv);
             let (r, vr) = verify_output_fd(
-                &samples_try, dt_out, constraints, fk, constraints.solver.tolerance,
+                &samples_try,
+                dt_out,
+                constraints,
+                fk,
+                constraints.solver.tolerance,
             );
             verify_residual = r;
             verify_result = vr;
@@ -383,7 +420,13 @@ impl<'a, const N: usize, FK: ContinuousFKChain<N, f64>> Retimer<N, f64> for Topp
             let next_k = final_sol.k + (final_sol.k / 20).max(2);
             let t = Instant::now();
             let bumped = build_and_solve_discrete::<N>(
-                &deriv, constraints, start, end, next_k, false, Some(&final_sol.sigma),
+                &deriv,
+                constraints,
+                start,
+                end,
+                next_k,
+                false,
+                Some(&final_sol.sigma),
             );
             if trace {
                 eprintln!("[discrete] bump@K={} took {:?}", next_k, t.elapsed());
@@ -393,7 +436,12 @@ impl<'a, const N: usize, FK: ContinuousFKChain<N, f64>> Retimer<N, f64> for Topp
                     final_sol = s;
                     let t = Instant::now();
                     let iters = rebin_to_convergence::<N>(
-                        &deriv, constraints, start, end, &mut final_sol, 16,
+                        &deriv,
+                        constraints,
+                        start,
+                        end,
+                        &mut final_sol,
+                        16,
                     );
                     if trace {
                         eprintln!(
@@ -432,16 +480,19 @@ impl<'a, const N: usize, FK: ContinuousFKChain<N, f64>> Retimer<N, f64> for Topp
         let t_verify = Instant::now();
         diag.output_fd_residual = verify_residual;
         diag.phase_timing.verify = t_verify.elapsed();
-        if constraints.check_output_dynamics && let Err(e) = verify_result {
+        if constraints.check_output_dynamics
+            && let Err(e) = verify_result
+        {
             diag.message = Some(format!("{}", e));
             return (Err(e), diag);
         }
 
         if constraints.post_validation
-            && let Err(e) = validator.validate_motion(traj_path.iter().as_slice(), ctx) {
-                diag.message = Some(format!("validator rejected output: {}", e));
-                return (Err(e), diag);
-            }
+            && let Err(e) = validator.validate_motion(traj_path.iter().as_slice(), ctx)
+        {
+            diag.message = Some(format!("validator rejected output: {}", e));
+            return (Err(e), diag);
+        }
 
         populate_peak_kinematics::<N, _>(
             &mut diag,
@@ -548,9 +599,9 @@ fn populate_peak_kinematics<const N: usize, FK: FKChain<N, f64>>(
     }
     let dt2 = dt * dt;
     let dt3 = dt2 * dt;
-    let tcp_active = constraints.tcp.is_some_and(|t| {
-        t.v_max.is_finite() || t.a_max.is_finite() || t.j_max.is_finite()
-    });
+    let tcp_active = constraints
+        .tcp
+        .is_some_and(|t| t.v_max.is_finite() || t.a_max.is_finite() || t.j_max.is_finite());
     let tcp_positions: Option<Vec<[f64; 3]>> = if tcp_active {
         let mut v = Vec::with_capacity(samples.len());
         for q in samples {
@@ -975,4 +1026,3 @@ fn densify_with_kink_boost<const N: usize>(
 
     SRobotPath::try_new(out).unwrap_or_else(|_| path.clone())
 }
-

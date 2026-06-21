@@ -6,11 +6,9 @@ use deke_types::{Retimer, SRobotPath, SRobotQ};
 #[test]
 fn single_joint_rest_to_rest_matches_trapezoidal() {
     let fk = common::dh_1dof();
-    let path = SRobotPath::<1, f64>::try_new(vec![
-        SRobotQ::from_array([0.0]),
-        SRobotQ::from_array([1.0]),
-    ])
-    .unwrap();
+    let path =
+        SRobotPath::<1, f64>::try_new(vec![SRobotQ::from_array([0.0]), SRobotQ::from_array([1.0])])
+            .unwrap();
 
     // v_max = 1 rad/s, a_max = 2 rad/s², loose jerk.
     let cfg = Topp3Tcp6Constraints::<1>::symmetric(1.0, 2.0, 200.0);

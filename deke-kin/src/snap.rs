@@ -30,12 +30,7 @@ impl SnapReport {
 /// Snap `p[i+1]` so the lines `h[i]` and `h[i+1]` intersect exactly. Returns
 /// the displacement applied (zero if axes are parallel). The perturbation is
 /// `-((h_i × h_{i+1}) · p_{i+1} / |h_i × h_{i+1}|²) · (h_i × h_{i+1})`.
-pub fn snap_pair_intersect(
-    h: &[DVec3],
-    p: &mut [DVec3],
-    i: usize,
-    zero_threshold: f64,
-) -> DVec3 {
+pub fn snap_pair_intersect(h: &[DVec3], p: &mut [DVec3], i: usize, zero_threshold: f64) -> DVec3 {
     let cross = h[i].cross(h[i + 1]);
     let n2 = cross.length_squared();
     if n2 <= zero_threshold * zero_threshold {

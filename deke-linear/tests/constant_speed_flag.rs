@@ -11,7 +11,12 @@ fn straight_line_passes_with_flag() {
     let follower = LinearFollower::new(&robot);
 
     let (traj, _) = follower
-        .follow(&poses, &common::config_flag(0.05, true), &common::noop(), &())
+        .follow(
+            &poses,
+            &common::config_flag(0.05, true),
+            &common::noop(),
+            &(),
+        )
         .expect("a straight line never dips in the interior");
     let speeds = common::tcp_speeds(&robot, &traj);
     let lo = speeds.len() / 4;
@@ -33,19 +38,37 @@ fn interior_dip_is_forbidden_when_flag_set() {
 
     // Flag off: succeeds by slowing through the infeasible region.
     let (traj, diag_off) = follower
-        .follow(&poses, &common::config_flag(speed, false), &common::noop(), &())
+        .follow(
+            &poses,
+            &common::config_flag(speed, false),
+            &common::noop(),
+            &(),
+        )
         .expect("flag-off should slow through");
     assert_eq!(diag_off.runs, 1, "25° corner is one run");
     let speeds = common::tcp_speeds(&robot, &traj);
     let peak = speeds.iter().cloned().fold(0.0, f64::max);
-    assert!(peak < speed, "the path cannot actually reach the command anywhere");
+    assert!(
+        peak < speed,
+        "the path cannot actually reach the command anywhere"
+    );
 
     // Flag on: refuses, naming where and how fast it could actually go.
     let err = follower
-        .follow(&poses, &common::config_flag(speed, true), &common::noop(), &())
+        .follow(
+            &poses,
+            &common::config_flag(speed, true),
+            &common::noop(),
+            &(),
+        )
         .unwrap_err();
     match err {
-        LinearError::SpeedDipRequired { s, feasible_speed, commanded, .. } => {
+        LinearError::SpeedDipRequired {
+            s,
+            feasible_speed,
+            commanded,
+            ..
+        } => {
             assert!(feasible_speed < commanded);
             assert_eq!(commanded, speed);
             assert!(s > 0.0, "dip is in the interior, not the start");

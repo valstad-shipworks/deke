@@ -21,7 +21,9 @@ fn unreachable_pose_reports_clearly() {
         .collect();
 
     let follower = LinearFollower::new(&robot);
-    let err = follower.follow(&poses, &common::config(0.05), &common::noop(), &()).unwrap_err();
+    let err = follower
+        .follow(&poses, &common::config(0.05), &common::noop(), &())
+        .unwrap_err();
     assert!(
         matches!(err, LinearError::Unreachable { .. }),
         "expected Unreachable, got {err:?}"
@@ -36,6 +38,8 @@ fn too_few_poses_is_rejected() {
         robot.fk_end(&common::anchor()).unwrap()
     };
     let follower = LinearFollower::new(&robot);
-    let err = follower.follow(&[base], &common::config(0.05), &common::noop(), &()).unwrap_err();
+    let err = follower
+        .follow(&[base], &common::config(0.05), &common::noop(), &())
+        .unwrap_err();
     assert!(matches!(err, LinearError::TooFewPoses(1)));
 }

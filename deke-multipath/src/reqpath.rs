@@ -38,18 +38,36 @@ pub(crate) fn expand<const N: usize>(
     for (cluster, req) in req_paths.iter().enumerate() {
         let before = options.len();
         match req {
-            ReqPath::OneWay(p) => options.push(DirectedOption { path: p.clone(), cluster }),
+            ReqPath::OneWay(p) => options.push(DirectedOption {
+                path: p.clone(),
+                cluster,
+            }),
             ReqPath::Reversible(p) => {
-                options.push(DirectedOption { path: p.clone(), cluster });
-                options.push(DirectedOption { path: p.reversed(), cluster });
+                options.push(DirectedOption {
+                    path: p.clone(),
+                    cluster,
+                });
+                options.push(DirectedOption {
+                    path: p.reversed(),
+                    cluster,
+                });
             }
             ReqPath::BothWays(a, b) => {
-                options.push(DirectedOption { path: a.clone(), cluster });
-                options.push(DirectedOption { path: b.clone(), cluster });
+                options.push(DirectedOption {
+                    path: a.clone(),
+                    cluster,
+                });
+                options.push(DirectedOption {
+                    path: b.clone(),
+                    cluster,
+                });
             }
             ReqPath::ManyWays(ps) => {
                 for p in ps {
-                    options.push(DirectedOption { path: p.clone(), cluster });
+                    options.push(DirectedOption {
+                        path: p.clone(),
+                        cluster,
+                    });
                 }
             }
         }

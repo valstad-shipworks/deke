@@ -16,12 +16,7 @@ pub fn do_axes_intersect(
 }
 
 /// `true` if point `p` lies on the axis defined by direction `h` and origin `p0h`.
-pub fn is_point_on_axis(
-    h: &DVec3,
-    p0h: &DVec3,
-    p: &DVec3,
-    axis_intersect_threshold: f64,
-) -> bool {
+pub fn is_point_on_axis(h: &DVec3, p0h: &DVec3, p: &DVec3, axis_intersect_threshold: f64) -> bool {
     let p_h = *p - *p0h;
     let proj = *h * p_h.dot(*h);
     (proj - p_h).length() < axis_intersect_threshold
@@ -63,9 +58,16 @@ pub fn remodel_kinematics(
         let mut i = 0usize;
         while i < n_h.saturating_sub(4) {
             p0 += p_new[i];
-            if do_axes_intersect(&h[i], &h[i + 1], &p[i + 1], zero_threshold, axis_intersect_threshold) {
+            if do_axes_intersect(
+                &h[i],
+                &h[i + 1],
+                &p[i + 1],
+                zero_threshold,
+                axis_intersect_threshold,
+            ) {
                 let p0_i1 = p0;
-                let intersection = calc_intersection(&h[i], &h[i + 1], &p0_i1, &p[i + 1], zero_threshold);
+                let intersection =
+                    calc_intersection(&h[i], &h[i + 1], &p0_i1, &p[i + 1], zero_threshold);
                 p_new[i + 1] = DVec3::ZERO;
 
                 let mut j = i + 2;
@@ -91,7 +93,13 @@ pub fn remodel_kinematics(
         let mut i = n_h - 3;
         while i < n_h - 1 {
             p0 += p_new[i];
-            if do_axes_intersect(&h[i], &h[i + 1], &p[i + 1], zero_threshold, axis_intersect_threshold) {
+            if do_axes_intersect(
+                &h[i],
+                &h[i + 1],
+                &p[i + 1],
+                zero_threshold,
+                axis_intersect_threshold,
+            ) {
                 let p0_i1 = p0;
                 let intersection = calc_intersection(
                     &h[i],
@@ -105,7 +113,12 @@ pub fn remodel_kinematics(
                 let mut p0_j_plus_1 = p0_i1 + p_new[i + 1] + p_new[j];
                 p_new[i + 1] = DVec3::ZERO;
                 while j < n_h
-                    && is_point_on_axis(&h[j], &p0_j_plus_1, &intersection, axis_intersect_threshold)
+                    && is_point_on_axis(
+                        &h[j],
+                        &p0_j_plus_1,
+                        &intersection,
+                        axis_intersect_threshold,
+                    )
                 {
                     p_new[j] = DVec3::ZERO;
                     j += 1;
@@ -125,7 +138,13 @@ pub fn remodel_kinematics(
         let mut i = 0usize;
         while i + 1 < n_h {
             p0 += p_new[i];
-            if do_axes_intersect(&h[i], &h[i + 1], &p[i + 1], zero_threshold, axis_intersect_threshold) {
+            if do_axes_intersect(
+                &h[i],
+                &h[i + 1],
+                &p[i + 1],
+                zero_threshold,
+                axis_intersect_threshold,
+            ) {
                 let p0_i1 = p0;
                 let intersection = calc_intersection(
                     &h[i],
@@ -137,12 +156,21 @@ pub fn remodel_kinematics(
 
                 let mut j = i + 2;
                 let pi_plus_1 = p_new[i + 1];
-                let pj_now = if j < p_new.len() { p_new[j] } else { DVec3::ZERO };
+                let pj_now = if j < p_new.len() {
+                    p_new[j]
+                } else {
+                    DVec3::ZERO
+                };
                 let mut p0_j_plus_1 = p0_i1 + pi_plus_1 + pj_now;
 
                 p_new[i + 1] = DVec3::ZERO;
                 while j < n_h
-                    && is_point_on_axis(&h[j], &p0_j_plus_1, &intersection, axis_intersect_threshold)
+                    && is_point_on_axis(
+                        &h[j],
+                        &p0_j_plus_1,
+                        &intersection,
+                        axis_intersect_threshold,
+                    )
                 {
                     p_new[j] = DVec3::ZERO;
                     j += 1;

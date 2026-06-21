@@ -2,9 +2,7 @@
 //! `valuable::Valuable` impls for the wreck-validator context and the small
 //! POD types it surfaces.
 
-use ::valuable::{
-    Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit,
-};
+use ::valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
 
 use crate::{CollisionFilter, WreckValidatorContext};
 

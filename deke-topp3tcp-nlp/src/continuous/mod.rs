@@ -21,6 +21,7 @@ pub mod retimer;
 #[cfg(feature = "valuable")]
 mod valuable_impls;
 
+pub use crate::common::path_derivatives::PathDerivatives;
 pub use constraints::{
     BoundaryConditions, DensificationOptions, JointLimits, SolverOptions, TcpLimits,
     Topp3Tcp6Constraints,
@@ -29,5 +30,4 @@ pub use diagnostic::{
     BoundarySlackUsage, ConstraintCounts, DerivativeStats, InitialGuessStats, LimitingGroup,
     PathStats, PeakLocation, PhaseTiming, SolveStatus, TcpStats, Topp3Tcp6Diagnostic,
 };
-pub use crate::common::path_derivatives::PathDerivatives;
 pub use retimer::Topp3Tcp6;

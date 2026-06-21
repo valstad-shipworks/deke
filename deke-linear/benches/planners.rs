@@ -2,11 +2,11 @@ use std::time::Duration;
 
 use std::hint::black_box;
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use deke_kin::{DHJoint, JointLimits as KinJointLimits, Kinematics};
 use deke_linear::{
-    condition, CartesianLinearPlanner, CartesianRun, FollowConfig, JointLimits, PathConditioning,
-    PlannerOptions, RedundantLinearPlanner, RedundantOptions,
+    CartesianLinearPlanner, CartesianRun, FollowConfig, JointLimits, PathConditioning,
+    PlannerOptions, RedundantLinearPlanner, RedundantOptions, condition,
 };
 use deke_types::glam::{DAffine3, DVec3};
 use deke_types::{FKChain, IkSolver, SRobotQ};
@@ -17,7 +17,12 @@ fn ur() -> Kinematics<6, f64> {
     let a = [0.0, -0.612, -0.573, 0.0, 0.0, 0.0];
     let d = [0.1273, 0.0, 0.0, 0.163941, 0.1157, 0.0922];
     Kinematics::from_dh(
-        std::array::from_fn(|i| DHJoint { a: a[i], alpha: alpha[i], d: d[i], theta_offset: 0.0 }),
+        std::array::from_fn(|i| DHJoint {
+            a: a[i],
+            alpha: alpha[i],
+            d: d[i],
+            theta_offset: 0.0,
+        }),
         KinJointLimits::symmetric(2.0 * PI),
         &[],
     )
@@ -43,7 +48,12 @@ fn straight_run(robot: &Kinematics<6, f64>, len: f64) -> CartesianRun {
 }
 
 fn planner_opts() -> PlannerOptions<6> {
-    FollowConfig::weld(35.0, JointLimits::symmetric(2.0, 8.0, 80.0), Duration::from_millis(8)).planner
+    FollowConfig::weld(
+        35.0,
+        JointLimits::symmetric(2.0, 8.0, 80.0),
+        Duration::from_millis(8),
+    )
+    .planner
 }
 
 fn bench(c: &mut Criterion) {
@@ -60,7 +70,9 @@ fn bench(c: &mut Criterion) {
         use deke_types::ContinuousFKChain;
         let q = anchor();
         let pose = robot.fk_end(&q).unwrap();
-        c.bench_function("ik_call", |b| b.iter(|| black_box(robot.ik(black_box(pose)))));
+        c.bench_function("ik_call", |b| {
+            b.iter(|| black_box(robot.ik(black_box(pose))))
+        });
         c.bench_function("jacobian_call", |b| {
             b.iter(|| black_box(robot.jacobian(black_box(&q))))
         });
@@ -70,7 +82,9 @@ fn bench(c: &mut Criterion) {
         let run = straight_run(&robot, len);
         let cm = (len * 100.0) as usize;
         c.bench_function(&format!("fixed_plan_{cm}cm"), |b| {
-            b.iter(|| black_box(fixed.plan_run(black_box(&run), &opts, &noop, &(), None, 0)).is_ok())
+            b.iter(|| {
+                black_box(fixed.plan_run(black_box(&run), &opts, &noop, &(), None, 0)).is_ok()
+            })
         });
         c.bench_function(&format!("redundant_plan_{cm}cm"), |b| {
             b.iter(|| {

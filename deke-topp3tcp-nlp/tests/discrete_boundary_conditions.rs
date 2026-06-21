@@ -1,16 +1,16 @@
 mod common;
 
-use deke_topp3tcp_nlp::discrete::{BoundaryConditions, SolveStatus, Topp3Tcp6Discrete, Topp3Tcp6DiscreteConstraints};
+use deke_topp3tcp_nlp::discrete::{
+    BoundaryConditions, SolveStatus, Topp3Tcp6Discrete, Topp3Tcp6DiscreteConstraints,
+};
 use deke_types::{DekeError, Retimer, SRobotPath, SRobotQ};
 
 #[test]
 fn aligned_non_zero_velocity_is_feasible() {
     let fk = common::dh_1dof();
-    let path = SRobotPath::<1, f64>::try_new(vec![
-        SRobotQ::from_array([0.0]),
-        SRobotQ::from_array([1.0]),
-    ])
-    .unwrap();
+    let path =
+        SRobotPath::<1, f64>::try_new(vec![SRobotQ::from_array([0.0]), SRobotQ::from_array([1.0])])
+            .unwrap();
 
     let mut cfg = Topp3Tcp6DiscreteConstraints::<1>::symmetric(1.0, 2.0, 200.0);
     cfg.boundary = BoundaryConditions {
@@ -31,7 +31,11 @@ fn aligned_non_zero_velocity_is_feasible() {
     // boundary. Use the trajectory's own finite-difference velocity.
     let v0 = traj.velocity_at(0).unwrap().0[0];
     let vn = traj.velocity_at(traj.len() - 1).unwrap().0[0];
-    assert!((v0 - 0.4).abs() < 0.15, "start velocity mismatch: got {}", v0);
+    assert!(
+        (v0 - 0.4).abs() < 0.15,
+        "start velocity mismatch: got {}",
+        v0
+    );
     assert!((vn - 0.4).abs() < 0.15, "end velocity mismatch: got {}", vn);
 }
 

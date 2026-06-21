@@ -51,9 +51,9 @@ use deke_types::{DekeError, Planner, SRobotPath, SRobotQ, Validator};
 
 use agtsp::Problem;
 use cost::build_matrices;
-use reqpath::{expand, DirectedOption};
+use reqpath::{DirectedOption, expand};
 
-pub use cost::{weighted_distance, TransitionCost};
+pub use cost::{TransitionCost, weighted_distance};
 pub use error::{MultipathError, MultipathResult};
 pub use reqpath::ReqPath;
 
@@ -184,8 +184,8 @@ where
         start: &matrices.start,
         end: &matrices.end,
     };
-    let solution = agtsp::solve(&problem, settings.exact_cell_budget)
-        .ok_or(MultipathError::NoFeasibleTour)?;
+    let solution =
+        agtsp::solve(&problem, settings.exact_cell_budget).ok_or(MultipathError::NoFeasibleTour)?;
     tracing::debug!(
         n_required = req_paths.len(),
         n_options = options.len(),
@@ -221,7 +221,10 @@ where
     let mut segments: Vec<Segment<N>> = Vec::new();
     let mut cursor = settings.start;
     for &oi in order {
-        let path = options[oi].take().expect("each option appears once in the tour").path;
+        let path = options[oi]
+            .take()
+            .expect("each option appears once in the tour")
+            .path;
         let first = *path.first();
         if cursor.distance(&first) > settings.dedup_tol {
             segments.push(Segment::Connector(cursor, first));

@@ -31,12 +31,7 @@ pub fn subproblem1(p1: &DVec3, p2: &DVec3, k: &DVec3) -> Option<f64> {
 
 /// Solve for `(theta1, theta2)` such that `rot(k1, theta1) * p1 = rot(k2, theta2) * p2`.
 /// May return 0, 1, or 2 solutions; returns `Zero` when no exact solution exists.
-pub fn subproblem2(
-    p1: &DVec3,
-    p2: &DVec3,
-    k1: &DVec3,
-    k2: &DVec3,
-) -> SolutionSet2<(f64, f64)> {
+pub fn subproblem2(p1: &DVec3, p2: &DVec3, k1: &DVec3, k2: &DVec3) -> SolutionSet2<(f64, f64)> {
     if (p1.length() - p2.length()).abs() > 1e-8 {
         return SolutionSet2::Zero;
     }
@@ -113,8 +108,7 @@ pub fn subproblem2extended(
     let num = (xls_b.length_squared() - 1.0) * apt_a.length_squared()
         - (xls_a.length_squared() - 1.0) * apt_b.length_squared();
     let den = 2.0
-        * (xls_a.dot(apt_a) * apt_b.length_squared()
-            - xls_b.dot(apt_b) * apt_a.length_squared());
+        * (xls_a.dot(apt_a) * apt_b.length_squared() - xls_b.dot(apt_b) * apt_a.length_squared());
     let xi = num / den;
 
     let sc = x_ls + a_perp_tilde * xi;
@@ -264,9 +258,10 @@ pub fn subproblem5(
             let v3 = a_3.mul_vec2(sc3) + p3_s;
 
             if ((v1 - *k2 * h).length() - (v3 - *k2 * h).length()).abs() < 1e-6
-                && let Some(theta2_value) = subproblem1(&v3, &v1, k2) {
-                    theta.push((sc1.x.atan2(sc1.y), theta2_value, sc3.x.atan2(sc3.y)));
-                }
+                && let Some(theta2_value) = subproblem1(&v3, &v1, k2)
+            {
+                theta.push((sc1.x.atan2(sc1.y), theta2_value, sc3.x.atan2(sc3.y)));
+            }
         }
     }
 
@@ -407,8 +402,14 @@ pub fn subproblem6(
 #[inline]
 fn outer(a: DVec3, b: DVec3) -> DMat3 {
     DMat3::from_cols_array(&[
-        a.x * b.x, a.y * b.x, a.z * b.x,
-        a.x * b.y, a.y * b.y, a.z * b.y,
-        a.x * b.z, a.y * b.z, a.z * b.z,
+        a.x * b.x,
+        a.y * b.x,
+        a.z * b.x,
+        a.x * b.y,
+        a.y * b.y,
+        a.z * b.y,
+        a.x * b.z,
+        a.y * b.z,
+        a.z * b.z,
     ])
 }

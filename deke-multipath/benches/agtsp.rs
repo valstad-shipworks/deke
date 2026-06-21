@@ -1,9 +1,7 @@
 use std::time::Duration;
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use deke_multipath::{
-    plan_multipath_straight, MultiPathSettings, ReqPath, TransitionCost,
-};
+use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use deke_multipath::{MultiPathSettings, ReqPath, TransitionCost, plan_multipath_straight};
 use deke_types::{DekeError, DekeResult, SRobotPath, SRobotQ, SRobotQLike, Validator};
 
 #[derive(Clone, Debug)]
@@ -100,7 +98,7 @@ fn bench(c: &mut Criterion) {
 /// them across the rayon pool. Iteration budgets are capped so each plan is
 /// bounded and the benchmark stays quick.
 fn bench_rrt_connectors(c: &mut Criterion) {
-    use deke_multipath::{plan_multipath, TransitionPlanner};
+    use deke_multipath::{TransitionPlanner, plan_multipath};
     use deke_rrt::{AorrtcPlanner, AorrtcSettings, StartEnd};
 
     let planner = AorrtcPlanner::<6>::new();
@@ -133,9 +131,8 @@ fn bench_rrt_connectors(c: &mut Criterion) {
             &(),
             |b, _| {
                 b.iter(|| {
-                    let out =
-                        plan_multipath(&req, &cost, &settings, &transition, &validator, &ctx)
-                            .unwrap();
+                    let out = plan_multipath(&req, &cost, &settings, &transition, &validator, &ctx)
+                        .unwrap();
                     black_box(out);
                 });
             },

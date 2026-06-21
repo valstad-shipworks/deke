@@ -116,14 +116,24 @@ where
         let length = run.length();
         let n_dp = ((length / red.dp_ds).ceil() as usize).max(1) + 1;
 
-        let stations =
-            self.build_stations(run, red, planner, axis, length, n_dp, validator, ctx, run_idx)?;
+        let stations = self.build_stations(
+            run, red, planner, axis, length, n_dp, validator, ctx, run_idx,
+        )?;
 
         let (coarse_s, coarse_psi) = solve_global(&stations, red, planner, length, n_dp)
             .ok_or(LinearError::NoContinuousTrack { run: run_idx })?;
 
         self.refine(
-            run, planner, axis, length, &coarse_s, &coarse_psi, validator, ctx, seed, run_idx,
+            run,
+            planner,
+            axis,
+            length,
+            &coarse_s,
+            &coarse_psi,
+            validator,
+            ctx,
+            seed,
+            run_idx,
         )
     }
 
@@ -167,8 +177,7 @@ where
                         if validator.validate(q, ctx).is_err() {
                             continue;
                         }
-                        let w =
-                            self.fk.manipulability(&q).map_err(LinearError::Deke)?;
+                        let w = self.fk.manipulability(&q).map_err(LinearError::Deke)?;
                         nodes.push(YawNode {
                             yaw: psi,
                             q,
@@ -246,10 +255,7 @@ where
                         let mut best = sols[0];
                         let mut best_w = -1.0;
                         for q in sols {
-                            let w = self
-                                .fk
-                                .manipulability(&q)
-                                .map_err(LinearError::Deke)?;
+                            let w = self.fk.manipulability(&q).map_err(LinearError::Deke)?;
                             if w > best_w {
                                 best_w = w;
                                 best = q;
@@ -267,8 +273,7 @@ where
                 }
             }
 
-            min_manip =
-                min_manip.min(self.fk.manipulability(&q).map_err(LinearError::Deke)?);
+            min_manip = min_manip.min(self.fk.manipulability(&q).map_err(LinearError::Deke)?);
             fine.push(q);
             prev = Some((q, s));
         }
@@ -314,7 +319,13 @@ fn solve_global<const N: usize>(
         },
     )?;
 
-    let s = (0..n_dp).map(|k| (k as f64 * red.dp_ds).min(length)).collect();
-    let psi = chosen.iter().enumerate().map(|(k, &i)| stations[k][i].yaw).collect();
+    let s = (0..n_dp)
+        .map(|k| (k as f64 * red.dp_ds).min(length))
+        .collect();
+    let psi = chosen
+        .iter()
+        .enumerate()
+        .map(|(k, &i)| stations[k][i].yaw)
+        .collect();
     Some((s, psi))
 }

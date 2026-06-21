@@ -120,13 +120,7 @@ impl<const N: usize> SplineInterpolatedRobotPath<N> {
                     } else {
                         (None, None)
                     };
-                    BSpline::interpolate(
-                        &support_s,
-                        &vals,
-                        degree,
-                        bcl.as_deref(),
-                        bcr.as_deref(),
-                    )
+                    BSpline::interpolate(&support_s, &vals, degree, bcl.as_deref(), bcr.as_deref())
                 })
                 .collect();
 
@@ -180,7 +174,11 @@ impl<const N: usize> SplineInterpolatedRobotPath<N> {
             (q_poly[0], q_poly[1], s_poly[1] - s_poly[0])
         } else {
             let last = q_poly.len() - 1;
-            (q_poly[last - 1], q_poly[last], s_poly[last] - s_poly[last - 1])
+            (
+                q_poly[last - 1],
+                q_poly[last],
+                s_poly[last] - s_poly[last - 1],
+            )
         };
         let tangent: [f64; N] = if ds > 1e-12 {
             std::array::from_fn(|j| (b[j] - a[j]) / ds)
@@ -199,9 +197,7 @@ impl<const N: usize> SplineInterpolatedRobotPath<N> {
         let left = bc_start
             .as_ref()
             .map(|v| vec![(1usize, v[j]), (2usize, 0.0)]);
-        let right = bc_end
-            .as_ref()
-            .map(|v| vec![(1usize, v[j]), (2usize, 0.0)]);
+        let right = bc_end.as_ref().map(|v| vec![(1usize, v[j]), (2usize, 0.0)]);
         (left, right)
     }
 

@@ -429,7 +429,12 @@ fn calculate_feasible<F: Float>(
     }
     let mut idx_fastest = 0usize;
     let mut t_fastest = valid_profiles[0].duration;
-    for (i, profile) in valid_profiles.iter().enumerate().take(valid_profile_cnt).skip(1) {
+    for (i, profile) in valid_profiles
+        .iter()
+        .enumerate()
+        .take(valid_profile_cnt)
+        .skip(1)
+    {
         let t_current = profile.duration;
         if t_current < t_fastest {
             t_fastest = t_current;

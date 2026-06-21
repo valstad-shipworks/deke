@@ -143,8 +143,8 @@ pub fn solve_quartic_roots(p: &[Complex64; 5]) -> Vec<Complex64> {
         return solve_cubic_roots(&[p[1], p[2], p[3], p[4]]);
     }
 
-    let p1 = 2.0 * c * c * c - 9.0 * b * c * d + 27.0 * a * d * d + 27.0 * b * b * e
-        - 72.0 * a * c * e;
+    let p1 =
+        2.0 * c * c * c - 9.0 * b * c * d + 27.0 * a * d * d + 27.0 * b * b * e - 72.0 * a * c * e;
     let q1 = c * c - 3.0 * b * d + 12.0 * a * e;
     let p2 = p1 + (-4.0 * q1 * q1 * q1 + p1 * p1).sqrt();
     let q2 = ccbrt(p2 / 2.0);

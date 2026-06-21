@@ -485,7 +485,9 @@ impl<const N: usize> TryFrom<RobotPath<f32>> for SRobotPath<N, f64> {
 #[cfg(feature = "valuable")]
 mod valuable_impl {
     use super::SRobotPath;
-    use ::valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
+    use ::valuable::{
+        Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit,
+    };
 
     const FIELDS: &[NamedField<'static>] = &[
         NamedField::new("first"),

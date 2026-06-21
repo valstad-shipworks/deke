@@ -106,12 +106,10 @@ impl std::fmt::Display for Error {
                 f,
                 "{n} effective joints — only 1..=6 are supported (lock redundant axes)"
             ),
-            Self::UnknownDecomposition => f.write_str(
-                "no analytical subproblem decomposition is known for this manipulator",
-            ),
-            Self::NonRevoluteJoint => {
-                f.write_str("analytical IK supports revolute joints only")
+            Self::UnknownDecomposition => {
+                f.write_str("no analytical subproblem decomposition is known for this manipulator")
             }
+            Self::NonRevoluteJoint => f.write_str("analytical IK supports revolute joints only"),
         }
     }
 }
@@ -250,12 +248,7 @@ impl<const N: usize> Robot<N> {
         )
     }
 
-    fn build(
-        h: Vec<DVec3>,
-        p: Vec<DVec3>,
-        r6t: DMat3,
-        fixed_axes: &[FixedAxis],
-    ) -> Result<Self> {
+    fn build(h: Vec<DVec3>, p: Vec<DVec3>, r6t: DMat3, fixed_axes: &[FixedAxis]) -> Result<Self> {
         Self::build_with(h, p, r6t, fixed_axes, 1e-13, 1e-9)
     }
 
@@ -282,24 +275,15 @@ impl<const N: usize> Robot<N> {
             (h.clone(), p.clone(), r6t)
         };
 
-        let p_remodeled = remodel::remodel_kinematics(
-            &h_reduced,
-            &p_reduced,
-            zero_thresh,
-            axis_thresh,
-        );
+        let p_remodeled =
+            remodel::remodel_kinematics(&h_reduced, &p_reduced, zero_thresh, axis_thresh);
 
         let n_eff = h_reduced.len();
         if !(1..=6).contains(&n_eff) {
             return Err(Error::UnsupportedDof(n_eff));
         }
 
-        let solver = solver::Solver::build(
-            &h_reduced,
-            &p_remodeled,
-            zero_thresh,
-            axis_thresh,
-        );
+        let solver = solver::Solver::build(&h_reduced, &p_remodeled, zero_thresh, axis_thresh);
 
         let mut sorted_fixed = fixed_axes.to_vec();
         sorted_fixed.sort_by_key(|f| f.joint);
@@ -444,7 +428,11 @@ impl RuntimeRobot {
         remodel::normalise_axes(&mut h);
         let p_remodeled = remodel::remodel_kinematics(&h, &p, 1e-13, 1e-9);
         let solver = solver::Solver::build(&h, &p_remodeled, 1e-13, 1e-9);
-        Self { remodeled_h: h, r6t_partial: r6t, solver }
+        Self {
+            remodeled_h: h,
+            r6t_partial: r6t,
+            solver,
+        }
     }
 
     pub(crate) fn has_known_decomposition(&self) -> bool {
@@ -564,7 +552,11 @@ mod tests {
                 .fold(0.0f64, f64::max)
                 < 1e-6
         });
-        assert!(matched, "no IK solution reconstructed pose for q={:?}", q_in.0);
+        assert!(
+            matched,
+            "no IK solution reconstructed pose for q={:?}",
+            q_in.0
+        );
     }
 
     #[test]
@@ -625,14 +617,9 @@ mod tests {
         ];
         let a = [0.0, 0.0, 0.0, 0.0825, -0.0825, 0.0, 0.088];
         let d = [0.333, 0.0, 0.316, 0.0, 0.384, 0.0, 0.107];
-        let robot = Robot::<7>::from_dh_with(
-            &alpha,
-            &a,
-            &d,
-            DMat3::IDENTITY,
-            &[FixedAxis::new(6, 0.0)],
-        )
-        .unwrap();
+        let robot =
+            Robot::<7>::from_dh_with(&alpha, &a, &d, DMat3::IDENTITY, &[FixedAxis::new(6, 0.0)])
+                .unwrap();
         assert_eq!(robot.n_joints(), 7);
         assert_eq!(robot.n_effective_joints(), 6);
 

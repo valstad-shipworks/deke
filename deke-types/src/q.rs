@@ -760,9 +760,7 @@ impl<const N: usize, F: Float + AbsDiffEq<Epsilon = F>> AbsDiffEq for SRobotQ<N,
     }
 }
 
-impl<const N: usize, F: Float + RelativeEq + AbsDiffEq<Epsilon = F>> RelativeEq
-    for SRobotQ<N, F>
-{
+impl<const N: usize, F: Float + RelativeEq + AbsDiffEq<Epsilon = F>> RelativeEq for SRobotQ<N, F> {
     fn default_max_relative() -> F {
         F::default_max_relative()
     }
@@ -923,11 +921,14 @@ impl<const N: usize> From<SRobotQ<N, f64>> for SRobotQ<N, f32> {
 
 pub fn robotq<F: Float, U: Float>(vals: impl IntoIterator<Item = F>) -> RobotQ<U> {
     use num_traits::NumCast;
-    vals.into_iter().map(|v| NumCast::from(v).unwrap_or(U::zero())).collect()
+    vals.into_iter()
+        .map(|v| NumCast::from(v).unwrap_or(U::zero()))
+        .collect()
 }
 
-
-pub trait SRobotQLike<const N: usize, E: Into<DekeError>, F: Float = f32>: TryInto<SRobotQ<N, F>, Error = E> {
+pub trait SRobotQLike<const N: usize, E: Into<DekeError>, F: Float = f32>:
+    TryInto<SRobotQ<N, F>, Error = E>
+{
     fn to_srobotq(self) -> Result<SRobotQ<N, F>, E>;
 }
 
@@ -943,7 +944,13 @@ where
 
 #[allow(dead_code)]
 const _: () = {
-    fn assert_srobotq_like<const N: usize, E: Into<DekeError>, F: Float, T: SRobotQLike<N, E, F>>() {}
+    fn assert_srobotq_like<
+        const N: usize,
+        E: Into<DekeError>,
+        F: Float,
+        T: SRobotQLike<N, E, F>,
+    >() {
+    }
 
     fn assert_all<const N: usize>() {
         assert_srobotq_like::<N, Infallible, f32, SRobotQ<N, f32>>();

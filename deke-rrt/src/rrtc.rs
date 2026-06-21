@@ -547,8 +547,15 @@ fn extend_and_connect<const N: usize, V: Validator<N, (), f64>>(
 
         let q_step = steer(&q_connect, &q_new, settings.range, coeffs);
 
-        if validate_edge_stats(&q_connect, &q_step, settings.resolution, validator, ctx, stats)
-            .is_err()
+        if validate_edge_stats(
+            &q_connect,
+            &q_step,
+            settings.resolution,
+            validator,
+            ctx,
+            stats,
+        )
+        .is_err()
         {
             return None;
         }

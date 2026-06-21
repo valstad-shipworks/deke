@@ -20,7 +20,7 @@ pub use params::{DHJoint, HPJoint, URDFBuildError, URDFJoint, URDFJointType};
 
 pub(crate) use crate::{AAffine3, AMat3, AVec3};
 pub(crate) use deke_types::{
-    FKChain, KinScalar, JointSpec, KinSpec, ContinuousFKChain, check_finite,
+    ContinuousFKChain, FKChain, JointSpec, KinScalar, KinSpec, check_finite,
 };
 
 /// Convert an `f64` value into the chain's scalar type `F` (`f32` or `f64`).

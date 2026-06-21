@@ -2,8 +2,8 @@ use deke_types::{DekeResult, SRobotPath, SRobotQ, Validator};
 
 use crate::randomizer::{DekeRng, RandomizerType};
 use crate::rrtc::{
-    RrtcSettings, path_cost, reduce, sample_uniform, shortcut, smooth_bspline,
-    solve as rrtc_solve, validate_edge_stats, weighted_distance,
+    RrtcSettings, path_cost, reduce, sample_uniform, shortcut, smooth_bspline, solve as rrtc_solve,
+    validate_edge_stats, weighted_distance,
 };
 use crate::tree::RrtTree;
 use crate::{AnytimeInfo, RrtDiagnostic, RrtTermination};
@@ -548,7 +548,12 @@ pub(crate) fn solve<const N: usize, V: Validator<N, (), f64>, S: DekeRng<N>, A: 
     }
 
     if settings.simplify_shortcut {
-        shortcut(&mut best_waypoints, validator, ctx, settings.rrtc.resolution);
+        shortcut(
+            &mut best_waypoints,
+            validator,
+            ctx,
+            settings.rrtc.resolution,
+        );
     }
 
     if settings.simplify_bspline_steps > 0 {
@@ -563,7 +568,12 @@ pub(crate) fn solve<const N: usize, V: Validator<N, (), f64>, S: DekeRng<N>, A: 
         );
 
         if settings.simplify_shortcut {
-            shortcut(&mut best_waypoints, validator, ctx, settings.rrtc.resolution);
+            shortcut(
+                &mut best_waypoints,
+                validator,
+                ctx,
+                settings.rrtc.resolution,
+            );
         }
     }
 

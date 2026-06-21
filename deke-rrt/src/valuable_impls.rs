@@ -2,8 +2,8 @@
 //! `valuable::Valuable` impls for diagnostics, settings, and limit types.
 
 use ::valuable::{
-    EnumDef, Enumerable, Fields, NamedField, NamedValues, StructDef, Structable, Valuable,
-    Value, Variant, VariantDef, Visit,
+    EnumDef, Enumerable, Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value,
+    Variant, VariantDef, Visit,
 };
 
 use crate::{
@@ -210,7 +210,11 @@ impl Valuable for JointKinLimits {
         Value::Structable(self)
     }
     fn visit(&self, visit: &mut dyn Visit) {
-        let values = [self.v_max.as_value(), self.a_max.as_value(), self.j_max.as_value()];
+        let values = [
+            self.v_max.as_value(),
+            self.a_max.as_value(),
+            self.j_max.as_value(),
+        ];
         visit.visit_named_fields(&NamedValues::new(JOINT_KIN_FIELDS, &values));
     }
 }

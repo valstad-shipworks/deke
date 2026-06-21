@@ -44,13 +44,15 @@ pub mod redundant;
 pub mod retimer;
 mod util;
 
-pub use constraints::{FollowConfig, JointLimits, LinearConstraints, PathConditioning, PlannerOptions};
+pub use constraints::{
+    FollowConfig, JointLimits, LinearConstraints, PathConditioning, PlannerOptions,
+};
 pub use diagnostic::{
     LinearFollowDiagnostic, LinearPlannerDiagnostic, LinearRetimerDiagnostic, RedundantDiagnostic,
 };
 pub use error::LinearError;
 pub use follower::{LinearFollower, NoopValidator};
-pub use path::{condition, CartesianRun};
+pub use path::{CartesianRun, condition};
 pub use planner::CartesianLinearPlanner;
 pub use redundant::{RedundantAxis, RedundantLinearPlanner, RedundantOptions};
 pub use retimer::ConstantSpeedRetimer;

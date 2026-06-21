@@ -10,52 +10,52 @@
 
 use std::f64::consts::FRAC_PI_2;
 
+use deke_kin::{DHJoint, JointLimits as KinLimits, Kinematics};
 use deke_topp3tcp_spline::{
     JointLimits, SearchOptions, SplinePathOptions, TcpLimits, Topp3TcpSpline,
     Topp3TcpSplineConstraints,
 };
-use deke_kin::{DHJoint, JointLimits as KinLimits, Kinematics};
 use deke_types::{JointValidator, Retimer, SRobotPath, SRobotQ};
 
 fn dh_6dof() -> Kinematics<6, f64> {
     Kinematics::from_dh(
         [
-        DHJoint {
-            a: 0.0,
-            alpha: FRAC_PI_2,
-            d: 0.089,
-            theta_offset: 0.0,
-        },
-        DHJoint {
-            a: -0.425,
-            alpha: 0.0,
-            d: 0.0,
-            theta_offset: 0.0,
-        },
-        DHJoint {
-            a: -0.392,
-            alpha: 0.0,
-            d: 0.0,
-            theta_offset: 0.0,
-        },
-        DHJoint {
-            a: 0.0,
-            alpha: FRAC_PI_2,
-            d: 0.109,
-            theta_offset: 0.0,
-        },
-        DHJoint {
-            a: 0.0,
-            alpha: -FRAC_PI_2,
-            d: 0.094,
-            theta_offset: 0.0,
-        },
-        DHJoint {
-            a: 0.0,
-            alpha: 0.0,
-            d: 0.082,
-            theta_offset: 0.0,
-        },
+            DHJoint {
+                a: 0.0,
+                alpha: FRAC_PI_2,
+                d: 0.089,
+                theta_offset: 0.0,
+            },
+            DHJoint {
+                a: -0.425,
+                alpha: 0.0,
+                d: 0.0,
+                theta_offset: 0.0,
+            },
+            DHJoint {
+                a: -0.392,
+                alpha: 0.0,
+                d: 0.0,
+                theta_offset: 0.0,
+            },
+            DHJoint {
+                a: 0.0,
+                alpha: FRAC_PI_2,
+                d: 0.109,
+                theta_offset: 0.0,
+            },
+            DHJoint {
+                a: 0.0,
+                alpha: -FRAC_PI_2,
+                d: 0.094,
+                theta_offset: 0.0,
+            },
+            DHJoint {
+                a: 0.0,
+                alpha: 0.0,
+                d: 0.082,
+                theta_offset: 0.0,
+            },
         ],
         KinLimits::symmetric(10.0),
         &[],
@@ -104,5 +104,9 @@ fn straight_short_path_with_large_jerk_limits_solves() {
         diag
     );
     let traj = result.unwrap();
-    assert!(traj.len() >= 4, "trajectory too short: {} samples", traj.len());
+    assert!(
+        traj.len() >= 4,
+        "trajectory too short: {} samples",
+        traj.len()
+    );
 }

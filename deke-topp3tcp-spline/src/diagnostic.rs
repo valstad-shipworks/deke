@@ -3,8 +3,7 @@
 use std::fmt;
 use std::time::Duration;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SolveStatus {
     #[default]
     NotAttempted,
@@ -21,7 +20,6 @@ impl fmt::Display for SolveStatus {
         }
     }
 }
-
 
 /// Diagnostic data produced by every retimer call.
 #[derive(Debug, Clone, Default)]

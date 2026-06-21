@@ -21,13 +21,19 @@ mod traj;
 mod validator;
 mod validator_dynamic;
 
-pub use fk::{BoxFK, ContinuousFKChain, FKChain, KinScalar, JointSpec, KinSpec, IkOutcome, IkSolver, IkSolutions, check_finite};
+pub use fk::{
+    BoxFK, ContinuousFKChain, FKChain, IkOutcome, IkSolutions, IkSolver, JointSpec, KinScalar,
+    KinSpec, check_finite,
+};
 pub use path::{RobotPath, SRobotPath};
-pub use q::{RobotQ, SRobotQ, robotq, SRobotQLike};
+pub use q::{RobotQ, SRobotQ, SRobotQLike, robotq};
 pub use traj::{RobotTraj, SRobotTraj};
-pub use validator::{JointValidator, Validator, ValidatorAnd, ValidatorNot, ValidatorOr, MaybeValidator, ValidatorContext, Leaf, FromFlattened};
 #[doc(hidden)]
 pub use validator::BatchLimits;
+pub use validator::{
+    FromFlattened, JointValidator, Leaf, MaybeValidator, Validator, ValidatorAnd, ValidatorContext,
+    ValidatorNot, ValidatorOr,
+};
 pub use validator_dynamic::DynamicJointValidator;
 
 use crate::validator::ValidatorRet;
@@ -97,10 +103,7 @@ pub trait Planner<const N: usize, F: KinScalar = f32, R: ValidatorRet = ()>: Siz
     type Config;
     type Waypoints;
 
-    fn plan<
-        E: Into<DekeError>,
-        V: Validator<N, R, F>,
-    >(
+    fn plan<E: Into<DekeError>, V: Validator<N, R, F>>(
         &self,
         config: &Self::Config,
         waypoints: &Self::Waypoints,

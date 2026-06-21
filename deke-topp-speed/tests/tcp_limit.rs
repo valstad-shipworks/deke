@@ -6,8 +6,8 @@
 
 use std::time::Duration;
 
-use deke_topp_speed::{MotionSpec, Retimer, SRobotPath, SRobotQ, ToppSolver};
 use deke_kin::{DHJoint, JointLimits, Kinematics};
+use deke_topp_speed::{MotionSpec, Retimer, SRobotPath, SRobotQ, ToppSolver};
 use deke_types::{ContinuousFKChain, JointValidator};
 
 /// Three revolute joints all rotating about z, link lengths 1 + 1 + 0.5.
@@ -20,7 +20,11 @@ fn planar_arm() -> Kinematics<3, f64> {
         d: 0.0,
         theta_offset: 0.0,
     };
-    Kinematics::from_dh([make(1.0), make(1.0), make(0.5)], JointLimits::symmetric(1e6), &[])
+    Kinematics::from_dh(
+        [make(1.0), make(1.0), make(0.5)],
+        JointLimits::symmetric(1e6),
+        &[],
+    )
 }
 
 fn fast_spec() -> MotionSpec<3, f64> {
@@ -264,7 +268,10 @@ fn tcp_limit_bounds_cartesian_speed() {
         peak > 1.0,
         "without scaling the trajectory should exceed 1 m/s, got peak={peak}"
     );
-    assert!(scale > 1.0, "scaling factor should slow trajectory, got {scale}");
+    assert!(
+        scale > 1.0,
+        "scaling factor should slow trajectory, got {scale}"
+    );
     // The geometric expectation is 12.5 m/s peak; allow generous slack for
     // S-curve rounding.
     assert!(

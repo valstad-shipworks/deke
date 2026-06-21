@@ -79,9 +79,8 @@ where
             .flat_map(|l| l.iter().map(|&(_, _, w)| w))
             .fold(f64::INFINITY, f64::min);
 
-        let ds_at = |k: usize| {
-            (k as f64 * opts.sample_ds).min(length) - ((k - 1) as f64 * opts.sample_ds)
-        };
+        let ds_at =
+            |k: usize| (k as f64 * opts.sample_ds).min(length) - ((k - 1) as f64 * opts.sample_ds);
         let layer_sizes: Vec<usize> = layers.iter().map(Vec::len).collect();
         let (chosen, total) = ladder_dp(
             &layer_sizes,
@@ -110,8 +109,11 @@ where
         )
         .ok_or(LinearError::NoContinuousTrack { run: run_idx })?;
 
-        let track: Vec<SRobotQ<N, f64>> =
-            chosen.iter().enumerate().map(|(k, &i)| layers[k][i].0).collect();
+        let track: Vec<SRobotQ<N, f64>> = chosen
+            .iter()
+            .enumerate()
+            .map(|(k, &i)| layers[k][i].0)
+            .collect();
         let path = SRobotPath::try_new(track).map_err(LinearError::from)?;
         Ok((
             path,
@@ -122,7 +124,6 @@ where
             },
         ))
     }
-
 }
 
 /// Is the joint move `a → b` over Cartesian distance `ds` a reconfiguration?

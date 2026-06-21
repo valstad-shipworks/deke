@@ -1,10 +1,9 @@
 use std::{fmt::Debug, sync::Arc};
 
 use bitvec::vec::BitVec;
-use wide::{f32x8, f64x4, CmpGt, CmpLt};
+use wide::{CmpGt, CmpLt, f32x8, f64x4};
 
 use crate::{DekeError, DekeResult, KinScalar, SRobotQ, SRobotQLike};
-
 
 pub trait ValidatorContext: Sized {}
 
@@ -209,7 +208,9 @@ macro_rules! impl_batch_limits {
 impl_batch_limits!(f32, f32x8, 8);
 impl_batch_limits!(f64, f64x4, 4);
 
-pub trait Validator<const N: usize, R: ValidatorRet = (), F: KinScalar = f32>: Sized + Clone + Debug + Send + Sync + 'static {
+pub trait Validator<const N: usize, R: ValidatorRet = (), F: KinScalar = f32>:
+    Sized + Clone + Debug + Send + Sync + 'static
+{
     type Context<'ctx>: ValidatorContext;
     const VALIDATE_MOTION_IS_CONTINUOUS: bool = false;
 
@@ -228,11 +229,7 @@ pub trait Validator<const N: usize, R: ValidatorRet = (), F: KinScalar = f32>: S
     /// `i`-th bit is set iff `qs[i]` is **invalid** (rejected). The default
     /// runs [`Validator::validate`] per config; implementors with a batched
     /// fast path (SIMD, GPU) override it.
-    fn validate_batched<'ctx>(
-        &self,
-        qs: &[SRobotQ<N, F>],
-        ctx: &Self::Context<'ctx>,
-    ) -> BitVec {
+    fn validate_batched<'ctx>(&self, qs: &[SRobotQ<N, F>], ctx: &Self::Context<'ctx>) -> BitVec {
         qs.iter().map(|q| self.validate(*q, ctx).is_err()).collect()
     }
 }
@@ -294,8 +291,7 @@ impl<A> ValidatorNot<A> {
 /// validators implement: a single generic `impl` over `R` and `F` (and `N`
 /// since validators are const-generic over DOF) means monomorphization
 /// fires the impl for every shared signature without manual enumeration.
-impl<const N: usize, F: KinScalar, R: ValidatorRet, A, B> Validator<N, R, F>
-    for ValidatorAnd<A, B>
+impl<const N: usize, F: KinScalar, R: ValidatorRet, A, B> Validator<N, R, F> for ValidatorAnd<A, B>
 where
     A: Validator<N, R, F>,
     B: Validator<N, R, F>,
@@ -324,11 +320,7 @@ where
     }
 
     #[inline]
-    fn validate_batched<'ctx>(
-        &self,
-        qs: &[SRobotQ<N, F>],
-        ctx: &Self::Context<'ctx>,
-    ) -> BitVec {
+    fn validate_batched<'ctx>(&self, qs: &[SRobotQ<N, F>], ctx: &Self::Context<'ctx>) -> BitVec {
         let a = self.0.validate_batched(qs, &ctx.0);
         let b = self.1.validate_batched(qs, &ctx.1);
         a.iter().zip(b.iter()).map(|(x, y)| *x | *y).collect()
@@ -368,11 +360,7 @@ where
     }
 
     #[inline]
-    fn validate_batched<'ctx>(
-        &self,
-        qs: &[SRobotQ<N, F>],
-        ctx: &Self::Context<'ctx>,
-    ) -> BitVec {
+    fn validate_batched<'ctx>(&self, qs: &[SRobotQ<N, F>], ctx: &Self::Context<'ctx>) -> BitVec {
         let a = self.0.validate_batched(qs, &ctx.0);
         let b = self.1.validate_batched(qs, &ctx.1);
         a.iter().zip(b.iter()).map(|(x, y)| *x & *y).collect()
@@ -414,12 +402,12 @@ where
     }
 
     #[inline]
-    fn validate_batched<'ctx>(
-        &self,
-        qs: &[SRobotQ<N, F>],
-        ctx: &Self::Context<'ctx>,
-    ) -> BitVec {
-        self.0.validate_batched(qs, ctx).iter().map(|x| !*x).collect()
+    fn validate_batched<'ctx>(&self, qs: &[SRobotQ<N, F>], ctx: &Self::Context<'ctx>) -> BitVec {
+        self.0
+            .validate_batched(qs, ctx)
+            .iter()
+            .map(|x| !*x)
+            .collect()
     }
 }
 
@@ -460,11 +448,7 @@ where
     }
 
     #[inline]
-    fn validate_batched<'ctx>(
-        &self,
-        qs: &[SRobotQ<N, F>],
-        ctx: &Self::Context<'ctx>,
-    ) -> BitVec {
+    fn validate_batched<'ctx>(&self, qs: &[SRobotQ<N, F>], ctx: &Self::Context<'ctx>) -> BitVec {
         match self {
             MaybeValidator::Active(v) => v.validate_batched(qs, ctx),
             MaybeValidator::Disabled => std::iter::repeat_n(false, qs.len()).collect(),
@@ -553,11 +537,7 @@ impl<const N: usize, F: KinScalar> Validator<N, (), F> for JointValidator<N, F> 
     }
 
     #[inline]
-    fn validate_batched<'ctx>(
-        &self,
-        qs: &[SRobotQ<N, F>],
-        _ctx: &Self::Context<'ctx>,
-    ) -> BitVec {
+    fn validate_batched<'ctx>(&self, qs: &[SRobotQ<N, F>], _ctx: &Self::Context<'ctx>) -> BitVec {
         let mut out = BitVec::with_capacity(qs.len());
         F::fill_oob::<N>(qs, &self.lower.0, &self.upper.0, &mut out);
         if let Some(extras) = &self.extras {
@@ -605,11 +585,7 @@ impl<const N: usize> Validator<N, (), f64> for JointValidator<N, f32> {
     }
 
     #[inline]
-    fn validate_batched<'ctx>(
-        &self,
-        qs: &[SRobotQ<N, f64>],
-        ctx: &Self::Context<'ctx>,
-    ) -> BitVec {
+    fn validate_batched<'ctx>(&self, qs: &[SRobotQ<N, f64>], ctx: &Self::Context<'ctx>) -> BitVec {
         let q32: Vec<SRobotQ<N, f32>> = qs.iter().map(|q| (*q).into()).collect();
         <Self as Validator<N, (), f32>>::validate_batched(self, &q32, ctx)
     }
@@ -645,11 +621,7 @@ impl<const N: usize> Validator<N, (), f32> for JointValidator<N, f64> {
     }
 
     #[inline]
-    fn validate_batched<'ctx>(
-        &self,
-        qs: &[SRobotQ<N, f32>],
-        ctx: &Self::Context<'ctx>,
-    ) -> BitVec {
+    fn validate_batched<'ctx>(&self, qs: &[SRobotQ<N, f32>], ctx: &Self::Context<'ctx>) -> BitVec {
         let q64: Vec<SRobotQ<N, f64>> = qs.iter().map(|q| (*q).into()).collect();
         <Self as Validator<N, (), f64>>::validate_batched(self, &q64, ctx)
     }

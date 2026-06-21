@@ -71,7 +71,11 @@ impl CartesianRun {
             k += 1;
         }
         let (s0, s1) = (self.vtx_s[k], self.vtx_s[k + 1]);
-        let f = if s1 > s0 { ((s - s0) / (s1 - s0)).clamp(0.0, 1.0) } else { 0.0 };
+        let f = if s1 > s0 {
+            ((s - s0) / (s1 - s0)).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         self.vtx_q[k].slerp(self.vtx_q[k + 1], f)
     }
 }

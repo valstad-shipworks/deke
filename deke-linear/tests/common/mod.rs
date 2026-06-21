@@ -70,7 +70,12 @@ pub fn straight(robot: &Kinematics<6, f64>, dir: DVec3, len: f64, n: usize) -> V
 
 /// Two straight legs meeting at a corner, fixed orientation. `turn` is applied
 /// in the XY plane of the world between the legs.
-pub fn corner(robot: &Kinematics<6, f64>, leg: f64, turn_rad: f64, per_leg: usize) -> Vec<DAffine3> {
+pub fn corner(
+    robot: &Kinematics<6, f64>,
+    leg: f64,
+    turn_rad: f64,
+    per_leg: usize,
+) -> Vec<DAffine3> {
     let base = robot.fk_end(&anchor()).unwrap();
     let rot = base.matrix3;
     let d0 = DVec3::X;
@@ -84,7 +89,10 @@ pub fn corner(robot: &Kinematics<6, f64>, leg: f64, turn_rad: f64, per_leg: usiz
     let corner = p0 + d0 * leg;
     for i in 1..per_leg {
         let f = i as f64 / (per_leg - 1) as f64;
-        out.push(DAffine3::from_mat3_translation(rot, corner + d1 * (f * leg)));
+        out.push(DAffine3::from_mat3_translation(
+            rot,
+            corner + d1 * (f * leg),
+        ));
     }
     out
 }

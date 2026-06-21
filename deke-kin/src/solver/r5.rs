@@ -1,7 +1,9 @@
 //! 5R analytical IK with kinematic-class detection.
 
+use crate::ik_geo::subproblems::{
+    subproblem1, subproblem2, subproblem3, subproblem4, subproblem5, subproblem6,
+};
 use glam::{DMat3, DMat4, DVec3};
-use crate::ik_geo::subproblems::{subproblem1, subproblem2, subproblem3, subproblem4, subproblem5, subproblem6};
 
 use crate::ik_geo::subproblems::auxiliary::rot as axis_angle;
 use crate::kinematics::{create_normal_vector, inverse_homogeneous, reverse_chain};
@@ -96,12 +98,8 @@ impl R5 {
     pub fn solve(&self, pose: &DMat4) -> crate::solver::Solutions {
         match self.class {
             Class5::FourthFifthIntersecting => self.solve_45_intersecting(pose),
-            Class5::FourthFifthIntersectingSecondThirdIntersecting => {
-                self.solve_45int_23int(pose)
-            }
-            Class5::FourthFifthIntersectingFirstSecondIntersecting => {
-                self.solve_45int_12int(pose)
-            }
+            Class5::FourthFifthIntersectingSecondThirdIntersecting => self.solve_45int_23int(pose),
+            Class5::FourthFifthIntersectingFirstSecondIntersecting => self.solve_45int_12int(pose),
             Class5::FourthFifthIntersectingFirstSecondParallel => self.solve_45int_12par(pose),
             Class5::FourthFifthIntersectingSecondThirdParallel => self.solve_45int_23par(pose),
             Class5::SphericalWrist => self.solve_spherical_wrist(pose),
@@ -131,7 +129,11 @@ impl R5 {
 
     fn pose_decompose(&self, pose: &DMat4) -> (DVec3, DMat3) {
         let p_t = pose.w_axis.truncate();
-        let r_05 = DMat3::from_cols(pose.x_axis.truncate(), pose.y_axis.truncate(), pose.z_axis.truncate());
+        let r_05 = DMat3::from_cols(
+            pose.x_axis.truncate(),
+            pose.y_axis.truncate(),
+            pose.z_axis.truncate(),
+        );
         let p_15 = p_t - self.chain.p[0] - r_05 * self.chain.p[5];
         (p_15, r_05)
     }
@@ -251,8 +253,7 @@ impl R5 {
             let set3 = subproblem3(&p_15, &p1, &(-h0), (p2 + r_23 * p3).length());
             for q1 in set3.get_all() {
                 let r_01 = axis_angle(&h0, q1);
-                let Some(q2) =
-                    subproblem1(&(p2 + r_23 * p3), &(r_01.transpose() * p_15 - p1), &h1)
+                let Some(q2) = subproblem1(&(p2 + r_23 * p3), &(r_01.transpose() * p_15 - p1), &h1)
                 else {
                     continue;
                 };
@@ -334,9 +335,11 @@ impl R5 {
                 let r_43 = axis_angle(&(-h3), q4);
                 let r_40 = r_43 * r_32 * r_21 * r_10;
                 let hn = create_normal_vector(&(r_40.transpose() * h4));
-                if let Some(q5) =
-                    subproblem1(&(r_43 * r_32 * r_21 * r_10 * hn), &(r_05.transpose() * hn), &(-h4))
-                {
+                if let Some(q5) = subproblem1(
+                    &(r_43 * r_32 * r_21 * r_10 * hn),
+                    &(r_05.transpose() * hn),
+                    &(-h4),
+                ) {
                     out.push(crate::solver::pack(&[q1, q2, q3, q4, q5]));
                 }
             }
@@ -393,8 +396,12 @@ impl R5 {
         for (q1, q4) in set6.get_all() {
             let r_01 = axis_angle(&h0, q1);
             let r_34 = axis_angle(&h3, q4);
-            let set3 =
-                subproblem3(&(r_34 * p4), &(-p2), &h2, (r_01.transpose() * p_15 - p1).length());
+            let set3 = subproblem3(
+                &(r_34 * p4),
+                &(-p2),
+                &h2,
+                (r_01.transpose() * p_15 - p1).length(),
+            );
             for q3 in set3.get_all() {
                 let r_23 = axis_angle(&h2, q3);
                 let Some(q2) = subproblem1(
@@ -408,7 +415,12 @@ impl R5 {
                 let hn = create_normal_vector(&h4);
                 if let Some(q5) = subproblem1(
                     &hn,
-                    &(r_34.transpose() * r_23.transpose() * r_12.transpose() * r_01.transpose() * r_05 * hn),
+                    &(r_34.transpose()
+                        * r_23.transpose()
+                        * r_12.transpose()
+                        * r_01.transpose()
+                        * r_05
+                        * hn),
                     &h4,
                 ) {
                     out.push(crate::solver::pack(&[q1, q2, q3, q4, q5]));
@@ -436,8 +448,12 @@ impl R5 {
             let set4b = subproblem4(&h1, &p4, &h3, h1.dot(r_01.transpose() * p_15 - p1 - p2));
             for q4 in set4b.get_all() {
                 let r_34 = axis_angle(&h3, q4);
-                let set3 =
-                    subproblem3(&(r_34 * p4), &(-p2), &h2, (r_01.transpose() * p_15 - p1).length());
+                let set3 = subproblem3(
+                    &(r_34 * p4),
+                    &(-p2),
+                    &h2,
+                    (r_01.transpose() * p_15 - p1).length(),
+                );
                 for q3 in set3.get_all() {
                     let r_23 = axis_angle(&h2, q3);
                     let Some(q2) = subproblem1(
@@ -451,7 +467,11 @@ impl R5 {
                     let hn = create_normal_vector(&(r_05 * h4));
                     if let Some(q5) = subproblem1(
                         &(r_05.transpose() * hn),
-                        &(r_34.transpose() * r_23.transpose() * r_12.transpose() * r_01.transpose() * hn),
+                        &(r_34.transpose()
+                            * r_23.transpose()
+                            * r_12.transpose()
+                            * r_01.transpose()
+                            * hn),
                         &h4,
                     ) {
                         out.push(crate::solver::pack(&[q1, q2, q3, q4, q5]));
@@ -601,12 +621,7 @@ impl R5 {
     }
 }
 
-fn classify(
-    h: &[DVec3],
-    p: &[DVec3],
-    zt: f64,
-    at: f64,
-) -> (Class5, Option<Box<R5>>) {
+fn classify(h: &[DVec3], p: &[DVec3], zt: f64, at: f64) -> (Class5, Option<Box<R5>>) {
     let h0 = h[0];
     let h1 = h[1];
     let h2 = h[2];
@@ -659,16 +674,10 @@ fn classify(
             if is_point_on_axis(&h2, &(p0 + p1 + p2), &intersection, zt) {
                 return (Class5::Reversed, Some(make_reversed()));
             }
-            return (
-                Class5::FourthFifthIntersectingFirstSecondIntersecting,
-                None,
-            );
+            return (Class5::FourthFifthIntersectingFirstSecondIntersecting, None);
         }
         if do_axes_intersect(&h1, &h2, &p2, zt, zt) {
-            return (
-                Class5::FourthFifthIntersectingSecondThirdIntersecting,
-                None,
-            );
+            return (Class5::FourthFifthIntersectingSecondThirdIntersecting, None);
         }
         if h0.cross(h1).length() < zt {
             return (Class5::FourthFifthIntersectingFirstSecondParallel, None);

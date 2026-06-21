@@ -21,9 +21,9 @@
 
 use std::sync::Arc;
 
-use deke_types::{DekeError, SRobotQ};
-use deke_types::{KinScalar, IkOutcome, IkSolutions, IkSolver, JointSpec, KinSpec};
 use crate::AAffine3;
+use deke_types::{DekeError, SRobotQ};
+use deke_types::{IkOutcome, IkSolutions, IkSolver, JointSpec, KinScalar, KinSpec};
 use glam::{DAffine3, DMat3, DMat4, DVec3};
 use glam_traits_ext::{FloatMat, TAffine3, TVec3};
 
@@ -173,7 +173,9 @@ pub(crate) fn resolve_ik<const N: usize, F: KinScalar>(
     for r in rules {
         let idx = r.idx();
         if idx >= N {
-            rule_error = Some(format!("rule references joint {idx} but chain has {N} joints"));
+            rule_error = Some(format!(
+                "rule references joint {idx} but chain has {N} joints"
+            ));
             break;
         }
         match *r {
@@ -252,7 +254,9 @@ pub(crate) fn resolve_ik<const N: usize, F: KinScalar>(
         None => "reduced revolute sub-problem".to_string(),
     };
 
-    let has_rules = rules.iter().any(|r| !matches!(r, IkRules::IncludeWrapped { .. }));
+    let has_rules = rules
+        .iter()
+        .any(|r| !matches!(r, IkRules::IncludeWrapped { .. }));
     let strategy = if !has_rules {
         // No reducing rules: behave like the plain chain.
         match reduce_and_classify(&spec, &roles, &probe) {
@@ -344,10 +348,11 @@ fn solve_ruled<const N: usize>(r: &IkResolved<N>, target: &DMat4) -> Vec<[f64; N
         // Cheap reach prune for a prismatic discrete first axis.
         if let Some(reach) = reach
             && discrete_axes.first() == Some(&0)
-                && matches!(r.spec.joints[0].1, JointSpec::Prismatic { .. })
-                && !within_reach(r, &frozen, target, reach) {
-                    return;
-                }
+            && matches!(r.spec.joints[0].1, JointSpec::Prismatic { .. })
+            && !within_reach(r, &frozen, target, reach)
+        {
+            return;
+        }
 
         for full in solve_reduced(r, &frozen, target) {
             push_filtered(r, full, &mut out);
@@ -373,7 +378,9 @@ fn outcome_from_f64<const N: usize, F: KinScalar>(sols: Vec<[f64; N]>) -> IkOutc
 }
 
 /// Convert a chain's [`KinSpec<F, N>`] into an `f64` [`KinSpec`] of the same DOF.
-pub(crate) fn kinspec_to_f64<const N: usize, F: KinScalar>(spec: &KinSpec<F, N>) -> KinSpec<f64, N> {
+pub(crate) fn kinspec_to_f64<const N: usize, F: KinScalar>(
+    spec: &KinSpec<F, N>,
+) -> KinSpec<f64, N> {
     f64_kinspec(spec)
 }
 
@@ -382,8 +389,12 @@ fn f64_kinspec<const N: usize, F: KinScalar>(spec: &KinSpec<F, N>) -> KinSpec<f6
     let joints = std::array::from_fn(|i| {
         let (aff, js) = spec.joints[i];
         let js64 = match js {
-            JointSpec::Revolute { axis_local } => JointSpec::Revolute { axis_local: dvec3::<F>(axis_local) },
-            JointSpec::Prismatic { axis_local } => JointSpec::Prismatic { axis_local: dvec3::<F>(axis_local) },
+            JointSpec::Revolute { axis_local } => JointSpec::Revolute {
+                axis_local: dvec3::<F>(axis_local),
+            },
+            JointSpec::Prismatic { axis_local } => JointSpec::Prismatic {
+                axis_local: dvec3::<F>(axis_local),
+            },
         };
         (f64_affine::<F>(&aff), js64)
     });
@@ -458,7 +469,12 @@ fn reduced_screws(
 /// A frozen revolute folds in as a fixed rotation and a frozen prismatic as a
 /// fixed translation — the "fold a fixed axis into the next link as a static
 /// offset" optimization, generalized to linear axes.
-type FoldedChain = (Vec<(DAffine3, JointSpec<f64>)>, Vec<usize>, DAffine3, DAffine3);
+type FoldedChain = (
+    Vec<(DAffine3, JointSpec<f64>)>,
+    Vec<usize>,
+    DAffine3,
+    DAffine3,
+);
 
 fn fold<const N: usize>(spec: &KinSpec<f64, N>, frozen: &[Option<f64>; N]) -> FoldedChain {
     let mut joints: Vec<(DAffine3, JointSpec<f64>)> = Vec::new();
@@ -574,7 +590,10 @@ fn push_filtered<const N: usize>(r: &IkResolved<N>, full: [f64; N], out: &mut Ve
             return;
         }
     }
-    if out.iter().any(|e| (0..N).all(|i| (e[i] - full[i]).abs() < 1e-6)) {
+    if out
+        .iter()
+        .any(|e| (0..N).all(|i| (e[i] - full[i]).abs() < 1e-6))
+    {
         return;
     }
     out.push(full);
@@ -616,7 +635,10 @@ fn enumerate_samples(
 /// Maximum reach of the reduced arm (all free joints), used to prune rail
 /// samples. `None` when there is no prismatic discrete first axis to optimize.
 fn reduced_max_reach<const N: usize>(r: &IkResolved<N>) -> Option<f64> {
-    if !matches!(r.spec.joints.first().map(|j| j.1), Some(JointSpec::Prismatic { .. })) {
+    if !matches!(
+        r.spec.joints.first().map(|j| j.1),
+        Some(JointSpec::Prismatic { .. })
+    ) {
         return None;
     }
     if !matches!(r.roles[0], Role::Discrete { .. }) {
@@ -680,7 +702,11 @@ fn to_dmat4<F: KinScalar>(a: &AAffine3<F>) -> DMat4 {
 fn f64_affine<F: KinScalar>(a: &AAffine3<F>) -> DAffine3 {
     let m = a.matrix3();
     DAffine3::from_mat3_translation(
-        DMat3::from_cols(dvec3::<F>(m.col(0)), dvec3::<F>(m.col(1)), dvec3::<F>(m.col(2))),
+        DMat3::from_cols(
+            dvec3::<F>(m.col(0)),
+            dvec3::<F>(m.col(1)),
+            dvec3::<F>(m.col(2)),
+        ),
         dvec3::<F>(a.translation()),
     )
 }

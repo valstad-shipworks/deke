@@ -111,8 +111,12 @@ where
         }
 
         let v_ceiling = |i: usize| project_min(&qp[i], &c.joint.v_max).min(c.tcp_speed);
-        let a_path: Vec<f64> = (0..m).map(|i| project_min(&qp[i], &c.joint.a_max)).collect();
-        let j_path: Vec<f64> = (0..m).map(|i| project_min(&qp[i], &c.joint.j_max)).collect();
+        let a_path: Vec<f64> = (0..m)
+            .map(|i| project_min(&qp[i], &c.joint.a_max))
+            .collect();
+        let j_path: Vec<f64> = (0..m)
+            .map(|i| project_min(&qp[i], &c.joint.j_max))
+            .collect();
 
         // Acceleration-bounded velocity ceiling. Only the end is pinned to rest;
         // start-from-rest is the integrator's initial condition (v = 0), not a
@@ -140,7 +144,10 @@ where
         while sx < total - 1e-9 {
             iters += 1;
             if iters > max_iters {
-                return Err(LinearError::Stalled { run: run_idx, s: sx });
+                return Err(LinearError::Stalled {
+                    run: run_idx,
+                    s: sx,
+                });
             }
             let vlim = interp(&s, &vc, sx).max(0.0);
             let alim = interp(&s, &a_path, sx);
@@ -155,7 +162,10 @@ where
 
             // Guard against a stall at a vanishing ceiling (true singularity).
             if v < 1e-9 && vlim < 1e-9 && sx < total - 1e-6 {
-                return Err(LinearError::Stalled { run: run_idx, s: sx });
+                return Err(LinearError::Stalled {
+                    run: run_idx,
+                    s: sx,
+                });
             }
         }
         if samples.last().map(|l| l.distance(&q[m - 1])).unwrap_or(1.0) > 1e-9 {

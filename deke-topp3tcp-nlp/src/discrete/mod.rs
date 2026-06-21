@@ -13,6 +13,7 @@ pub mod nlp;
 pub mod retimer;
 pub mod verify;
 
+pub use crate::common::path_derivatives::PathDerivatives;
 pub use constraints::{
     BoundaryConditions, DensificationOptions, DiscreteSolverOptions, JointLimits, TcpLimits,
     Topp3Tcp6DiscreteConstraints,
@@ -21,5 +22,4 @@ pub use diagnostic::{
     BisectionStep, ConstraintCounts, DerivativeStats, LimitingGroup, PathStats, PeakLocation,
     PerLimitResidual, PhaseTiming, SolveStatus, TcpStats, Topp3Tcp6DiscreteDiagnostic,
 };
-pub use crate::common::path_derivatives::PathDerivatives;
 pub use retimer::Topp3Tcp6Discrete;

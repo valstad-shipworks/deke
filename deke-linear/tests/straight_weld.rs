@@ -19,10 +19,15 @@ fn straight_weld_holds_constant_speed_within_limits() {
     let cfg = common::config(0.05);
 
     let follower = LinearFollower::new(&robot);
-    let (traj, diag) = follower.follow(&poses, &cfg, &common::noop(), &()).expect("follow failed");
+    let (traj, diag) = follower
+        .follow(&poses, &cfg, &common::noop(), &())
+        .expect("follow failed");
 
     assert_eq!(diag.runs, 1, "a straight line is one run");
-    assert!(traj.path().len() > 10, "expected a densely sampled trajectory");
+    assert!(
+        traj.path().len() > 10,
+        "expected a densely sampled trajectory"
+    );
 
     let speeds = common::tcp_speeds(&robot, &traj);
     assert!(!speeds.is_empty());
@@ -57,6 +62,12 @@ fn starts_and_ends_at_rest() {
     let (traj, _) = follower.follow(&poses, &cfg, &common::noop(), &()).unwrap();
 
     let speeds = common::tcp_speeds(&robot, &traj);
-    assert!(speeds.first().copied().unwrap() < 0.04 * 0.5, "should ramp up from rest");
-    assert!(speeds.last().copied().unwrap() < 0.04 * 0.5, "should ramp down to rest");
+    assert!(
+        speeds.first().copied().unwrap() < 0.04 * 0.5,
+        "should ramp up from rest"
+    );
+    assert!(
+        speeds.last().copied().unwrap() < 0.04 * 0.5,
+        "should ramp down to rest"
+    );
 }

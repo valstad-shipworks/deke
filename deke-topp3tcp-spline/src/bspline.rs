@@ -206,8 +206,7 @@ impl BSpline {
         for j in 0..n_interior {
             let start = j + 1;
             let end = (j + degree).min(n_data - 1);
-            let avg: f64 =
-                (start..=end).map(|i| sites[i]).sum::<f64>() / (end - start + 1) as f64;
+            let avg: f64 = (start..=end).map(|i| sites[i]).sum::<f64>() / (end - start + 1) as f64;
             knots.push(avg);
         }
         for _ in 0..(degree + 1 + nr) {

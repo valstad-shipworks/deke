@@ -62,7 +62,9 @@ impl fmt::Display for SolveDiagnostic {
     }
 }
 
-impl<'a, const N: usize, F: KinScalar, FK: ContinuousFKChain<N, F>> Retimer<N, F, ()> for ToppSolver<'a, N, F, FK> {
+impl<'a, const N: usize, F: KinScalar, FK: ContinuousFKChain<N, F>> Retimer<N, F, ()>
+    for ToppSolver<'a, N, F, FK>
+{
     type Diagnostic = SolveDiagnostic;
     type Constraints = MotionSpec<N, F>;
 
@@ -206,7 +208,11 @@ struct TcpOutcome<F> {
 /// The per-joint `max_vel`/`max_accel`/`max_jerk` ceilings on `spec` are
 /// upheld at every stage: the per-section caps are strictly tighter than
 /// (or equal to) the global ceilings.
-fn enforce_tcp_speed_limit_per_section<const N: usize, F: KinScalar, FK: ContinuousFKChain<N, F>>(
+fn enforce_tcp_speed_limit_per_section<
+    const N: usize,
+    F: KinScalar,
+    FK: ContinuousFKChain<N, F>,
+>(
     solver: &mut Solver<N, F>,
     plan: &mut crate::plan::Plan<N, F>,
     spec: &mut MotionSpec<N, F>,
@@ -234,7 +240,10 @@ fn enforce_tcp_speed_limit_per_section<const N: usize, F: KinScalar, FK: Continu
     let n_sections = plan.profiles.len();
     let mut peaks: Vec<F> = Vec::with_capacity(n_sections);
     sample_section_tcp_peaks(plan, fk, &mut peaks)?;
-    let baseline_peak = peaks.iter().copied().fold(zero, |a, b| if b > a { b } else { a });
+    let baseline_peak = peaks
+        .iter()
+        .copied()
+        .fold(zero, |a, b| if b > a { b } else { a });
 
     let mut needs_resolve = false;
     let mut k_factors: Vec<F> = Vec::with_capacity(n_sections);
@@ -350,7 +359,7 @@ fn enforce_tcp_speed_limit_per_section<const N: usize, F: KinScalar, FK: Continu
     // observed.
     let final_peak = sample_overall_tcp_peak(plan, fk, 512)?;
     let post_resolve_duration = plan.duration();
-    let (final_duration, ) = if final_peak > max_tcp_speed {
+    let (final_duration,) = if final_peak > max_tcp_speed {
         let safety_k = final_peak / max_tcp_speed;
         plan.scale(one, safety_k);
         (post_resolve_duration * safety_k,)
@@ -407,8 +416,7 @@ fn sample_section_tcp_peaks<const N: usize, F: KinScalar, FK: ContinuousFKChain<
         let mut t = start_t;
         for _ in 0..=SAMPLES_PER_SECTION {
             let (pose, vel, _, _, _) = plan.sample_at(t);
-            let jac = fk
-                .jacobian(&pose)?;
+            let jac = fk.jacobian(&pose)?;
             let mut vx = zero;
             let mut vy = zero;
             let mut vz = zero;
@@ -448,8 +456,7 @@ fn sample_overall_tcp_peak<const N: usize, F: KinScalar, FK: ContinuousFKChain<N
     let mut t = zero;
     for _ in 0..=n {
         let (pose, vel, _, _, _) = plan.sample_at(t);
-        let jac = fk
-            .jacobian(&pose)?;
+        let jac = fk.jacobian(&pose)?;
         let mut vx = zero;
         let mut vy = zero;
         let mut vz = zero;

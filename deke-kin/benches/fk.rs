@@ -17,7 +17,12 @@ fn puma_dh_f64() -> Kinematics<6, f64> {
     let a = [0.0, 0.43180, -0.02032, 0.0, 0.0, 0.0];
     let d = [0.67183, 0.13970, 0.0, 0.43180, 0.0, 0.0565];
     Kinematics::from_dh(
-        std::array::from_fn(|i| DHJoint { a: a[i], alpha: alpha[i], d: d[i], theta_offset: 0.0 }),
+        std::array::from_fn(|i| DHJoint {
+            a: a[i],
+            alpha: alpha[i],
+            d: d[i],
+            theta_offset: 0.0,
+        }),
         JointLimits::symmetric(100.0),
         &[],
     )
@@ -29,7 +34,12 @@ fn puma_dh_f32() -> Kinematics<6, f32> {
     let a = [0.0, 0.43180, -0.02032, 0.0, 0.0, 0.0];
     let d = [0.67183, 0.13970, 0.0, 0.43180, 0.0, 0.0565];
     Kinematics::from_dh(
-        std::array::from_fn(|i| DHJoint { a: a[i], alpha: alpha[i], d: d[i], theta_offset: 0.0 }),
+        std::array::from_fn(|i| DHJoint {
+            a: a[i],
+            alpha: alpha[i],
+            d: d[i],
+            theta_offset: 0.0,
+        }),
         JointLimits::symmetric(100.0f32),
         &[],
     )
@@ -52,7 +62,8 @@ fn arbitrary_axis_chain() -> Kinematics<6, f64> {
         let z = 0.2 + 0.05 * i as f64;
         URDFJoint::revolute((0.1, 0.0, z), (0.0, 0.0, 0.0), (s, s, s))
     });
-    Kinematics::from_urdf(&joints, JointLimits::symmetric(100.0), &[]).expect("6R arbitrary-axis chain")
+    Kinematics::from_urdf(&joints, JointLimits::symmetric(100.0), &[])
+        .expect("6R arbitrary-axis chain")
 }
 
 /// 64 deterministic joint configurations spread across `[-pi, pi]`.

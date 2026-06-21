@@ -7,10 +7,8 @@ use hafgufa::{Options, Problem, VariableArena, subject_to};
 use deke_types::{DekeError, DekeResult};
 
 use super::constraints::Topp3Tcp6Constraints;
+use super::diagnostic::{BoundarySlackUsage, ConstraintCounts, InitialGuessStats, SolveStatus};
 use crate::common::boundary::ProjectedBoundary;
-use super::diagnostic::{
-    BoundarySlackUsage, ConstraintCounts, InitialGuessStats, SolveStatus,
-};
 use crate::common::path_derivatives::PathDerivatives;
 
 /// Numeric output of the NLP solve — everything downstream uses this POD struct so that the
@@ -191,9 +189,8 @@ fn build_and_solve_inner<const N: usize>(
         let rhs_sdd = sdd_k + sddd_k * dt_k;
         subject_to!(problem, sdd_k1 == rhs_sdd);
 
-        let rhs_ds = sd_k * dt_k
-            + 0.5 * sdd_k * dt_k * dt_k
-            + (1.0 / 6.0) * sddd_k * dt_k * dt_k * dt_k;
+        let rhs_ds =
+            sd_k * dt_k + 0.5 * sdd_k * dt_k * dt_k + (1.0 / 6.0) * sddd_k * dt_k * dt_k * dt_k;
         subject_to!(problem, rhs_ds == ds_k);
     }
 
@@ -265,9 +262,7 @@ fn build_and_solve_inner<const N: usize>(
         let seg_idx = if k < seg { k } else { seg - 1 };
         let sddd_k = sddd[seg_idx];
 
-        let qp_norm_sq: f64 = (lock..N)
-            .map(|j| deriv.qp[k][j] * deriv.qp[k][j])
-            .sum();
+        let qp_norm_sq: f64 = (lock..N).map(|j| deriv.qp[k][j] * deriv.qp[k][j]).sum();
         let qp_degenerate = qp_norm_sq <= degenerate_qp_threshold_sq;
 
         let rel = if max_qp_norm_sq > 0.0 {
@@ -314,13 +309,9 @@ fn build_and_solve_inner<const N: usize>(
             }
 
             if j_max.is_finite() && j_max > 0.0 {
-                let expr = qppp_j * sd_k * sd_k * sd_k
-                    + 3.0 * qpp_j * sd_k * sdd_k
-                    + qp_j * sddd_k;
+                let expr = qppp_j * sd_k * sd_k * sd_k + 3.0 * qpp_j * sd_k * sdd_k + qp_j * sddd_k;
                 subject_to!(problem, expr <= j_max);
-                let neg = -qppp_j * sd_k * sd_k * sd_k
-                    - 3.0 * qpp_j * sd_k * sdd_k
-                    - qp_j * sddd_k;
+                let neg = -qppp_j * sd_k * sd_k * sd_k - 3.0 * qpp_j * sd_k * sdd_k - qp_j * sddd_k;
                 subject_to!(problem, neg <= j_max);
                 counts.joint_j += 2;
             }
@@ -471,8 +462,7 @@ fn build_and_solve_inner<const N: usize>(
                 && tcp.v_max > 0.0
             {
                 let pp_k = &deriv.pp[k];
-                let pp_norm_sq =
-                    pp_k[0] * pp_k[0] + pp_k[1] * pp_k[1] + pp_k[2] * pp_k[2];
+                let pp_norm_sq = pp_k[0] * pp_k[0] + pp_k[1] * pp_k[1] + pp_k[2] * pp_k[2];
                 if pp_norm_sq > pp_cutoff_sq {
                     upper = upper.min(tcp.v_max / pp_norm_sq.sqrt());
                 }
@@ -497,11 +487,9 @@ fn build_and_solve_inner<const N: usize>(
             let sdd_k = sdd[k];
             let sdd_k1 = sdd[k + 1];
             let sddd_k = sddd[k];
-            let sd_upper_seg =
-                sd_upper_at_knot[k].max(sd_upper_at_knot[k + 1]).max(1e-12);
+            let sd_upper_seg = sd_upper_at_knot[k].max(sd_upper_at_knot[k + 1]).max(1e-12);
             let dt_lower_k = ds_k / sd_upper_seg;
-            let max_interior_i =
-                ((dt_lower_k / h).floor() as usize).min(MAX_INTERIOR_I);
+            let max_interior_i = ((dt_lower_k / h).floor() as usize).min(MAX_INTERIOR_I);
 
             for j in lock..N {
                 let secant_j = (b[j] - a[j]) / ds_k;
@@ -642,7 +630,8 @@ fn build_and_solve_inner<const N: usize>(
                     // parabola peak in the same way as the joint V rows above.
                     if tcp.v_max.is_finite() && tcp.v_max > 0.0 {
                         let upper = (tcp.v_max * FD_RELAX) / norm;
-                        let sd_avg_start = sd_k + two_and_a_half_h * sdd_k + nineteen_sixth_h_sq * sddd_k;
+                        let sd_avg_start =
+                            sd_k + two_and_a_half_h * sdd_k + nineteen_sixth_h_sq * sddd_k;
                         subject_to!(problem, sd_avg_start <= upper);
                         let sd_avg_end = sd_k1 + (-h_half) * sdd_k1 + h_sq_6 * sddd_k;
                         subject_to!(problem, sd_avg_end <= upper);
@@ -814,7 +803,15 @@ fn build_and_solve_inner<const N: usize>(
         }
     } else {
         apply_initial_guess(
-            &sd, &sdd, &sddd, &dt, deriv, constraints, start, end, pp_cutoff_sq,
+            &sd,
+            &sdd,
+            &sddd,
+            &dt,
+            deriv,
+            constraints,
+            start,
+            end,
+            pp_cutoff_sq,
         )
     };
 
@@ -946,11 +943,7 @@ fn apply_initial_guess<'a, const N: usize>(
         cap[k] = c.max(1e-3);
     }
 
-    let min_cap = cap
-        .iter()
-        .copied()
-        .fold(f64::INFINITY, f64::min)
-        .max(1e-3);
+    let min_cap = cap.iter().copied().fold(f64::INFINITY, f64::min).max(1e-3);
 
     let start_sd = start.sd.max(0.0);
     let end_sd = end.sd.max(0.0);
@@ -1343,8 +1336,7 @@ fn worst_initial_guess_violation<const N: usize>(
             }
             let j_max = constraints.joint.j_max.0[j];
             if j_max.is_finite() && j_max > 0.0 {
-                let r = (qppp * sd * sd * sd + 3.0 * qpp * sd * sdd + qp * sddd).abs()
-                    / j_max;
+                let r = (qppp * sd * sd * sd + 3.0 * qpp * sd * sdd + qp * sddd).abs() / j_max;
                 if r > worst {
                     worst = r;
                 }

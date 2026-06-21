@@ -12,7 +12,7 @@ use deke_types::{
 use crate::constraints::{FollowConfig, LinearConstraints, PlannerOptions};
 use crate::diagnostic::{LinearFollowDiagnostic, LinearPlannerDiagnostic, LinearRetimerDiagnostic};
 use crate::error::LinearError;
-use crate::path::{condition, CartesianRun};
+use crate::path::{CartesianRun, condition};
 use crate::planner::CartesianLinearPlanner;
 use crate::retimer::ConstantSpeedRetimer;
 
@@ -90,7 +90,9 @@ where
 
         // Backstop: the retimer interpolates between planned (validated) waypoints,
         // so re-check the stitched trajectory as continuous motion.
-        validator.validate_motion(&all, ctx).map_err(LinearError::from)?;
+        validator
+            .validate_motion(&all, ctx)
+            .map_err(LinearError::from)?;
 
         let dt = cfg.constraints.output_dt;
         diag.total_samples = all.len();

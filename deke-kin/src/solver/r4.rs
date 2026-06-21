@@ -177,18 +177,15 @@ impl R4 {
             let sp3_q1 = subproblem3(&p_14, &p1, &(-h0), (p2 + r_23 * p3).length());
             for q1 in sp3_q1.get_all() {
                 let r_01 = axis_angle(&h0, q1);
-                let Some(q2) =
-                    subproblem1(&(p2 + r_23 * p3), &(r_01.transpose() * p_14 - p1), &h1)
+                let Some(q2) = subproblem1(&(p2 + r_23 * p3), &(r_01.transpose() * p_14 - p1), &h1)
                 else {
                     continue;
                 };
                 let r_12 = axis_angle(&h1, q2);
                 let hn = create_normal_vector(&h3);
-                if let Some(q4) = subproblem1(
-                    &hn,
-                    &(r_04.transpose() * r_01 * r_12 * r_23 * hn),
-                    &(-h3),
-                ) {
+                if let Some(q4) =
+                    subproblem1(&hn, &(r_04.transpose() * r_01 * r_12 * r_23 * hn), &(-h3))
+                {
                     out.push(crate::solver::pack(&[q1, q2, q3, q4]));
                 }
             }
@@ -272,8 +269,12 @@ impl R4 {
             let r_01 = axis_angle(&h0, q1);
             let r_12 = axis_angle(&h1, q2);
             let hn = h3.cross(r_04.transpose() * r_01 * r_12 * h2);
-            let set34 =
-                subproblem2(&(r_12.transpose() * r_01.transpose() * r_04 * hn), &hn, &(-h2), &h3);
+            let set34 = subproblem2(
+                &(r_12.transpose() * r_01.transpose() * r_04 * hn),
+                &hn,
+                &(-h2),
+                &h3,
+            );
             for (q3, q4) in set34.get_all() {
                 out.push(crate::solver::pack(&[q1, q2, q3, q4]));
             }

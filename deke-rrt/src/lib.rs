@@ -47,7 +47,6 @@ pub enum RrtTermination {
     NoInitialPath,
 }
 
-
 impl fmt::Display for RrtTermination {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
@@ -280,7 +279,14 @@ impl<const N: usize> Planner<N, f64> for RrtcPlanner<N> {
         ctx: &V::Context<'_>,
     ) -> (DekeResult<SRobotPath<N, f64>>, Self::Diagnostic) {
         let mut rng = DekeRand::<N>::new(config.randomizer, config.seed);
-        rrtc::solve(&waypoints.start, &waypoints.end, validator, ctx, config, &mut rng)
+        rrtc::solve(
+            &waypoints.start,
+            &waypoints.end,
+            validator,
+            ctx,
+            config,
+            &mut rng,
+        )
     }
 }
 
@@ -341,6 +347,13 @@ impl<const N: usize> Planner<N, f64> for KrrtcPlanner<N> {
         ctx: &V::Context<'_>,
     ) -> (DekeResult<SRobotPath<N, f64>>, Self::Diagnostic) {
         let mut rng = DekeRand::<N>::new(config.randomizer, config.seed);
-        krrtc::solve(&waypoints.start, &waypoints.end, validator, ctx, config, &mut rng)
+        krrtc::solve(
+            &waypoints.start,
+            &waypoints.end,
+            validator,
+            ctx,
+            config,
+            &mut rng,
+        )
     }
 }

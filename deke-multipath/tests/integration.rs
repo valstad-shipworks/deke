@@ -1,5 +1,5 @@
 use deke_multipath::{
-    plan_multipath, MultiPathSettings, ReqPath, TransitionCost, TransitionPlanner,
+    MultiPathSettings, ReqPath, TransitionCost, TransitionPlanner, plan_multipath,
 };
 use deke_rrt::{AorrtcPlanner, AorrtcSettings, StartEnd};
 use deke_types::{DekeError, DekeResult, SRobotPath, SRobotQ, SRobotQLike, Validator};

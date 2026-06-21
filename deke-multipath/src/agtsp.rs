@@ -66,7 +66,10 @@ const MAX_EXACT_CLUSTERS: usize = 32;
 
 pub(crate) fn solve(problem: &Problem, cell_budget: usize) -> Option<Solution> {
     if problem.n_clusters == 0 {
-        return Some(Solution { order: Vec::new(), cost: 0.0 });
+        return Some(Solution {
+            order: Vec::new(),
+            cost: 0.0,
+        });
     }
     debug_assert_eq!(
         problem.options,
@@ -98,7 +101,10 @@ struct Back {
     prev_opt: i32,
 }
 
-const NO_BACK: Back = Back { prev_mask: 0, prev_opt: -1 };
+const NO_BACK: Back = Back {
+    prev_mask: 0,
+    prev_opt: -1,
+};
 
 /// Group option indices by their cluster: `out[c]` lists every option in cluster
 /// `c`.
@@ -127,7 +133,10 @@ fn solve_exact(problem: &Problem) -> Option<Solution> {
         let id = idx(1usize << c, i);
         if s < cost[id] {
             cost[id] = s;
-            back[id] = Back { prev_mask: u32::MAX, prev_opt: -1 };
+            back[id] = Back {
+                prev_mask: u32::MAX,
+                prev_opt: -1,
+            };
         }
     }
 
@@ -159,7 +168,10 @@ fn solve_exact(problem: &Problem) -> Option<Solution> {
                         let id = idx(new_mask, next);
                         if new_cost < cost[id] {
                             cost[id] = new_cost;
-                            back[id] = Back { prev_mask: mask as u32, prev_opt: opt as i32 };
+                            back[id] = Back {
+                                prev_mask: mask as u32,
+                                prev_opt: opt as i32,
+                            };
                         }
                     }
                 }
@@ -187,7 +199,10 @@ fn solve_exact(problem: &Problem) -> Option<Solution> {
     }
     order.reverse();
 
-    Some(Solution { order, cost: best_cost })
+    Some(Solution {
+        order,
+        cost: best_cost,
+    })
 }
 
 /// At most this many nearest-neighbour seeds (the clusters cheapest to start
@@ -270,8 +285,10 @@ fn cluster_optimize(
     if cluster_order.is_empty() {
         return Some((Vec::new(), 0.0));
     }
-    let layers: Vec<&[usize]> =
-        cluster_order.iter().map(|&c| by_cluster[c].as_slice()).collect();
+    let layers: Vec<&[usize]> = cluster_order
+        .iter()
+        .map(|&c| by_cluster[c].as_slice())
+        .collect();
 
     let mut cost: Vec<f64> = layers[0].iter().map(|&o| problem.start[o]).collect();
     let mut back: Vec<Vec<i32>> = vec![vec![-1; layers[0].len()]];
@@ -312,7 +329,11 @@ fn cluster_optimize(
         }
         layer_idx[l - 1] = prev as usize;
     }
-    let order = layers.iter().zip(&layer_idx).map(|(layer, &idx)| layer[idx]).collect();
+    let order = layers
+        .iter()
+        .zip(&layer_idx)
+        .map(|(layer, &idx)| layer[idx])
+        .collect();
     Some((order, best_cost))
 }
 
@@ -346,7 +367,10 @@ impl Surrogate {
         let reduce = |opts: &[usize], src: &[f64]| {
             opts.iter().map(|&i| src[i]).fold(f64::INFINITY, f64::min)
         };
-        let start = by_cluster.iter().map(|o| reduce(o, problem.start)).collect();
+        let start = by_cluster
+            .iter()
+            .map(|o| reduce(o, problem.start))
+            .collect();
         let end = by_cluster.iter().map(|o| reduce(o, problem.end)).collect();
         Surrogate { dist, start, end }
     }
@@ -385,12 +409,26 @@ impl Surrogate {
     /// untouched prefix/suffix.
     fn reverse_delta(&self, order: &[usize], i: usize, j: usize) -> f64 {
         let n = order.len();
-        let old_in = if i == 0 { self.start[order[i]] } else { self.dist[order[i - 1]][order[i]] };
-        let new_in = if i == 0 { self.start[order[j]] } else { self.dist[order[i - 1]][order[j]] };
-        let old_out =
-            if j == n - 1 { self.end[order[j]] } else { self.dist[order[j]][order[j + 1]] };
-        let new_out =
-            if j == n - 1 { self.end[order[i]] } else { self.dist[order[i]][order[j + 1]] };
+        let old_in = if i == 0 {
+            self.start[order[i]]
+        } else {
+            self.dist[order[i - 1]][order[i]]
+        };
+        let new_in = if i == 0 {
+            self.start[order[j]]
+        } else {
+            self.dist[order[i - 1]][order[j]]
+        };
+        let old_out = if j == n - 1 {
+            self.end[order[j]]
+        } else {
+            self.dist[order[j]][order[j + 1]]
+        };
+        let new_out = if j == n - 1 {
+            self.end[order[i]]
+        } else {
+            self.dist[order[i]][order[j + 1]]
+        };
         let mut old_int = 0.0;
         let mut new_int = 0.0;
         for k in i..j {
@@ -435,9 +473,16 @@ impl Surrogate {
             improved = false;
             for i in 0..n {
                 let node = order[i];
-                let old_in = if i == 0 { self.start[node] } else { self.dist[order[i - 1]][node] };
-                let old_out =
-                    if i == n - 1 { self.end[node] } else { self.dist[node][order[i + 1]] };
+                let old_in = if i == 0 {
+                    self.start[node]
+                } else {
+                    self.dist[order[i - 1]][node]
+                };
+                let old_out = if i == n - 1 {
+                    self.end[node]
+                } else {
+                    self.dist[node][order[i + 1]]
+                };
                 let bridge = if i == 0 {
                     self.start[order[1]]
                 } else if i == n - 1 {
@@ -461,9 +506,16 @@ impl Surrogate {
                     } else {
                         self.dist[without[p - 1]][without[p]]
                     };
-                    let add_l =
-                        if p == 0 { self.start[node] } else { self.dist[without[p - 1]][node] };
-                    let add_r = if p == w { self.end[node] } else { self.dist[node][without[p]] };
+                    let add_l = if p == 0 {
+                        self.start[node]
+                    } else {
+                        self.dist[without[p - 1]][node]
+                    };
+                    let add_r = if p == w {
+                        self.end[node]
+                    } else {
+                        self.dist[node][without[p]]
+                    };
                     let delta = removal + (add_l + add_r - removed);
                     if delta < best {
                         best = delta;
@@ -492,7 +544,14 @@ mod tests {
         start: &'a [f64],
         end: &'a [f64],
     ) -> Problem<'a> {
-        Problem { cluster_ids, n_clusters, transition, options: cluster_ids.len(), start, end }
+        Problem {
+            cluster_ids,
+            n_clusters,
+            transition,
+            options: cluster_ids.len(),
+            start,
+            end,
+        }
     }
 
     /// Flatten a row-major matrix written as rows into the contiguous layout
@@ -514,9 +573,11 @@ mod tests {
         let transition = flat(&[&[0.0, 5.0], &[5.0, 0.0]]);
         let start = [1.0, 10.0];
         let end = [0.0, 0.0];
-        let sol =
-            solve(&problem(&cluster_ids, 2, &transition, &start, &end), DEFAULT_CELL_BUDGET)
-                .unwrap();
+        let sol = solve(
+            &problem(&cluster_ids, 2, &transition, &start, &end),
+            DEFAULT_CELL_BUDGET,
+        )
+        .unwrap();
         assert_eq!(sol.order, vec![0, 1]);
         assert!((sol.cost - 6.0).abs() < 1e-9);
     }
@@ -530,9 +591,11 @@ mod tests {
         let transition = flat(&[&[0.0, inf, 9.0], &[inf, 0.0, 1.0], &[9.0, 1.0, 0.0]]);
         let start = [5.0, 1.0, 5.0];
         let end = [0.0, 0.0, 0.0];
-        let sol =
-            solve(&problem(&cluster_ids, 2, &transition, &start, &end), DEFAULT_CELL_BUDGET)
-                .unwrap();
+        let sol = solve(
+            &problem(&cluster_ids, 2, &transition, &start, &end),
+            DEFAULT_CELL_BUDGET,
+        )
+        .unwrap();
         assert_eq!(sol.order, vec![1, 2]);
         assert!((sol.cost - 2.0).abs() < 1e-9);
     }
@@ -543,9 +606,11 @@ mod tests {
         let transition = flat(&[&[0.0, 0.0], &[0.0, 0.0]]);
         let start = [1.0, 1.0];
         let end = [5.0, 0.0];
-        let sol =
-            solve(&problem(&cluster_ids, 1, &transition, &start, &end), DEFAULT_CELL_BUDGET)
-                .unwrap();
+        let sol = solve(
+            &problem(&cluster_ids, 1, &transition, &start, &end),
+            DEFAULT_CELL_BUDGET,
+        )
+        .unwrap();
         assert_eq!(sol.order, vec![1]);
         assert!((sol.cost - 1.0).abs() < 1e-9);
     }
@@ -591,13 +656,17 @@ mod tests {
         let transition = flat(&[&[0.0, 2.0, 9.0], &[3.0, 0.0, 2.0], &[4.0, 6.0, 0.0]]);
         let start = [0.0, 7.0, 7.0];
         let end = [0.0, 0.0, 0.0];
-        let exact =
-            solve(&problem(&cluster_ids, 3, &transition, &start, &end), DEFAULT_CELL_BUDGET)
-                .unwrap();
+        let exact = solve(
+            &problem(&cluster_ids, 3, &transition, &start, &end),
+            DEFAULT_CELL_BUDGET,
+        )
+        .unwrap();
         // A zero cell budget forces the NN + 2-opt path.
-        let heuristic =
-            solve(&problem(&cluster_ids, 3, &transition, &start, &end), 0).unwrap();
-        assert!(heuristic.cost + 1e-9 >= exact.cost, "heuristic beat optimal");
+        let heuristic = solve(&problem(&cluster_ids, 3, &transition, &start, &end), 0).unwrap();
+        assert!(
+            heuristic.cost + 1e-9 >= exact.cost,
+            "heuristic beat optimal"
+        );
         assert!(
             (heuristic.cost - exact.cost).abs() < 1e-9,
             "heuristic {} != exact {}",

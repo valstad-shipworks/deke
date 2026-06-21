@@ -76,9 +76,17 @@ fn reject_all_obstructs_both_planners() {
     let cfg_red = cfg.clone().with_redundancy(RedundantOptions::default());
 
     let e_fixed = follower.follow(&poses, &cfg, &RejectAll, &()).unwrap_err();
-    assert!(matches!(e_fixed, LinearError::Obstructed { .. }), "fixed: {e_fixed:?}");
-    let e_red = follower.follow(&poses, &cfg_red, &RejectAll, &()).unwrap_err();
-    assert!(matches!(e_red, LinearError::Obstructed { .. }), "redundant: {e_red:?}");
+    assert!(
+        matches!(e_fixed, LinearError::Obstructed { .. }),
+        "fixed: {e_fixed:?}"
+    );
+    let e_red = follower
+        .follow(&poses, &cfg_red, &RejectAll, &())
+        .unwrap_err();
+    assert!(
+        matches!(e_red, LinearError::Obstructed { .. }),
+        "redundant: {e_red:?}"
+    );
 }
 
 #[test]
@@ -86,20 +94,30 @@ fn redundant_planner_rotates_yaw_around_an_obstacle() {
     let robot = common::ur();
     let poses = common::straight(&robot, DVec3::X, 0.05, 3);
     let follower = LinearFollower::new(&robot);
-    let cfg = FollowConfig::weld(30.0, JointLimits::symmetric(2.0, 8.0, 80.0), Duration::from_millis(8))
-        .with_redundancy(RedundantOptions {
-            axis: RedundantAxis::PosZ,
-            yaw_samples: 36,
-            ..RedundantOptions::default()
-        });
+    let cfg = FollowConfig::weld(
+        30.0,
+        JointLimits::symmetric(2.0, 8.0, 80.0),
+        Duration::from_millis(8),
+    )
+    .with_redundancy(RedundantOptions {
+        axis: RedundantAxis::PosZ,
+        yaw_samples: 36,
+        ..RedundantOptions::default()
+    });
 
     // Baseline (no obstacle): record the wrist-roll value the planner settles on.
-    let (traj0, _) = follower.follow(&poses, &cfg, &common::noop(), &()).expect("noop follow");
+    let (traj0, _) = follower
+        .follow(&poses, &cfg, &common::noop(), &())
+        .expect("noop follow");
     let mid = traj0.path().len() / 2;
     let center = traj0.path()[mid].0[5];
 
     let radius = 0.4;
-    let obstacle = RejectBand { joint: 5, center, radius };
+    let obstacle = RejectBand {
+        joint: 5,
+        center,
+        radius,
+    };
     // The unobstructed track really does pass through the forbidden band.
     let baseline: Vec<_> = traj0.path().iter().copied().collect();
     assert!(obstacle.validate_motion(&baseline, &()).is_err());

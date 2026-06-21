@@ -1,7 +1,6 @@
 use tinyrand::{Rand, Seeded, SplitMix, Wyrand, Xorshift};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RandomizerType {
     #[default]
     Wyrand,
@@ -9,7 +8,6 @@ pub enum RandomizerType {
     Xorshift,
     Halton,
 }
-
 
 const F64_FROM_U64: f64 = 1.0 / (1u64 << 53) as f64;
 

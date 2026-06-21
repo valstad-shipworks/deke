@@ -40,7 +40,11 @@ pub(crate) fn ladder_dp(
     }
 
     let mut dp: Vec<Vec<(f64, usize)>> = Vec::with_capacity(n);
-    dp.push((0..layer_sizes[0]).map(|i| (node_cost(0, i), usize::MAX)).collect());
+    dp.push(
+        (0..layer_sizes[0])
+            .map(|i| (node_cost(0, i), usize::MAX))
+            .collect(),
+    );
     for k in 1..n {
         let mut row = Vec::with_capacity(layer_sizes[k]);
         for ci in 0..layer_sizes[k] {

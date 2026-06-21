@@ -16,7 +16,12 @@ fn ur_tight() -> Kinematics<6, f64> {
     let a = [0.0, -0.612, -0.573, 0.0, 0.0, 0.0];
     let d = [0.1273, 0.0, 0.0, 0.163941, 0.1157, 0.0922];
     Kinematics::from_dh(
-        std::array::from_fn(|i| DHJoint { a: a[i], alpha: alpha[i], d: d[i], theta_offset: 0.0 }),
+        std::array::from_fn(|i| DHJoint {
+            a: a[i],
+            alpha: alpha[i],
+            d: d[i],
+            theta_offset: 0.0,
+        }),
         KinJointLimits::symmetric(150.0_f64.to_radians()),
         &[],
     )
@@ -25,7 +30,11 @@ fn ur_tight() -> Kinematics<6, f64> {
 /// Orthonormal frame whose local +Z points along `z`.
 fn frame_from_z(z: DVec3) -> DMat3 {
     let z = z.normalize();
-    let up = if z.dot(DVec3::Z).abs() > 0.95 { DVec3::X } else { DVec3::Z };
+    let up = if z.dot(DVec3::Z).abs() > 0.95 {
+        DVec3::X
+    } else {
+        DVec3::Z
+    };
     let x = up.cross(z).normalize();
     let y = z.cross(x);
     DMat3::from_cols(x, y, z)
@@ -52,20 +61,21 @@ fn free_yaw_succeeds_where_fixed_orientation_fails() {
                 let p = DVec3::new(r * theta.cos(), r * theta.sin(), z);
                 // Tool pointing roughly back toward the base axis (a plausible weld attitude).
                 for tilt in [0.0_f64, 0.5, 1.0] {
-                    let zdir = (DVec3::new(-p.x, -p.y, 0.0).normalize()
-                        + DVec3::Z * tilt)
-                        .normalize();
+                    let zdir =
+                        (DVec3::new(-p.x, -p.y, 0.0).normalize() + DVec3::Z * tilt).normalize();
                     let r0 = frame_from_z(zdir);
                     let nominal = DAffine3::from_mat3_translation(r0, p);
                     if ik_reachable(&robot, nominal) {
                         continue; // yaw=0 already works → not a discriminator
                     }
                     // Sweep yaw about the tool Z.
-                    let good_yaw = (1..36).map(|m| m as f64 * std::f64::consts::TAU / 36.0).find(|&psi| {
-                        let rot = DMat3::from_cols(r0.x_axis, r0.y_axis, r0.z_axis)
-                            * DMat3::from_rotation_z(psi);
-                        ik_reachable(&robot, DAffine3::from_mat3_translation(rot, p))
-                    });
+                    let good_yaw = (1..36)
+                        .map(|m| m as f64 * std::f64::consts::TAU / 36.0)
+                        .find(|&psi| {
+                            let rot = DMat3::from_cols(r0.x_axis, r0.y_axis, r0.z_axis)
+                                * DMat3::from_rotation_z(psi);
+                            ik_reachable(&robot, DAffine3::from_mat3_translation(rot, p))
+                        });
                     if let Some(psi) = good_yaw {
                         found = Some((p, r0, psi));
                         break 'search;

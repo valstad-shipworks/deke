@@ -9,9 +9,14 @@ fn shallow_corner_stays_one_run_and_keeps_moving() {
     let cfg = common::config(0.04);
 
     let follower = LinearFollower::new(&robot);
-    let (traj, diag) = follower.follow(&poses, &cfg, &common::noop(), &()).expect("follow failed");
+    let (traj, diag) = follower
+        .follow(&poses, &cfg, &common::noop(), &())
+        .expect("follow failed");
 
-    assert_eq!(diag.runs, 1, "a 20° corner is below the sharp threshold → one run");
+    assert_eq!(
+        diag.runs, 1,
+        "a 20° corner is below the sharp threshold → one run"
+    );
 
     let speeds = common::tcp_speeds(&robot, &traj);
     let lo = speeds.len() / 5;
@@ -38,7 +43,9 @@ fn sharp_corner_splits_and_stops_at_the_vertex() {
     let cfg = common::config(0.04);
 
     let follower = LinearFollower::new(&robot);
-    let (traj, diag) = follower.follow(&poses, &cfg, &common::noop(), &()).expect("follow failed");
+    let (traj, diag) = follower
+        .follow(&poses, &cfg, &common::noop(), &())
+        .expect("follow failed");
 
     assert_eq!(diag.runs, 2, "a 90° corner is sharp → two runs");
 

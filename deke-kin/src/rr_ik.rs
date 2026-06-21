@@ -189,7 +189,11 @@ struct DMat {
 
 impl DMat {
     fn zeros(r: usize, c: usize) -> Self {
-        Self { r, c, d: vec![0.0; r * c] }
+        Self {
+            r,
+            c,
+            d: vec![0.0; r * c],
+        }
     }
     #[inline]
     fn at(&self, i: usize, j: usize) -> f64 {
@@ -378,23 +382,108 @@ fn normalize_sc(s: f64, c: f64) -> (f64, f64) {
 /// `[m45 ; −m12]` is well-conditioned and invertible. Reused verbatim from the
 /// haijunsu reference (read-only); their only requirement is invertibility.
 const SAMPLE_ANGLES: [[f64; 4]; 17] = [
-    [1.69673823897, 2.962965871865, 0.551751195511, -0.550635933697],
-    [2.124305683239, -1.35151778162, 0.042006538206, -1.271978220727],
-    [-0.916963962161, -2.508838046012, 1.748576867781, 0.377559104927],
-    [1.471879906641, 0.971647887754, -0.272341445026, -2.027355199883],
-    [-2.988196582985, 0.046459526076, 0.150075617542, -1.263697979985],
-    [-2.536061119563, -1.494462923611, 0.086662269634, -1.376098791112],
-    [0.831512316986, 1.996640091182, -1.617969141208, 0.029856666264],
-    [-2.841354970612, -2.14209536172, -2.71675184462, 2.846383108325],
-    [-1.999165286534, -2.771692700411, -2.056266835523, 2.318982885491],
-    [2.089577723707, -0.615474169356, -1.261127673917, 1.307166318385],
-    [-3.12408776899, 2.563595214957, -1.111534266641, -2.521343721348],
-    [1.050822228457, 1.782149206715, -3.039576922521, -0.956065652517],
-    [0.484527303898, 0.394768084706, 2.531365903151, -1.732241512316],
-    [-3.101385200507, 1.775773952919, -2.942430204732, 1.864900116697],
-    [-1.735912964048, -0.09455970154, 0.960385327619, -2.353825670389],
-    [3.085871917488, 0.496623639214, 1.394218297829, 2.669197573194],
-    [1.345522300159, -1.400760620293, -2.497027865158, -1.501501913954],
+    [
+        1.69673823897,
+        2.962965871865,
+        0.551751195511,
+        -0.550635933697,
+    ],
+    [
+        2.124305683239,
+        -1.35151778162,
+        0.042006538206,
+        -1.271978220727,
+    ],
+    [
+        -0.916963962161,
+        -2.508838046012,
+        1.748576867781,
+        0.377559104927,
+    ],
+    [
+        1.471879906641,
+        0.971647887754,
+        -0.272341445026,
+        -2.027355199883,
+    ],
+    [
+        -2.988196582985,
+        0.046459526076,
+        0.150075617542,
+        -1.263697979985,
+    ],
+    [
+        -2.536061119563,
+        -1.494462923611,
+        0.086662269634,
+        -1.376098791112,
+    ],
+    [
+        0.831512316986,
+        1.996640091182,
+        -1.617969141208,
+        0.029856666264,
+    ],
+    [
+        -2.841354970612,
+        -2.14209536172,
+        -2.71675184462,
+        2.846383108325,
+    ],
+    [
+        -1.999165286534,
+        -2.771692700411,
+        -2.056266835523,
+        2.318982885491,
+    ],
+    [
+        2.089577723707,
+        -0.615474169356,
+        -1.261127673917,
+        1.307166318385,
+    ],
+    [
+        -3.12408776899,
+        2.563595214957,
+        -1.111534266641,
+        -2.521343721348,
+    ],
+    [
+        1.050822228457,
+        1.782149206715,
+        -3.039576922521,
+        -0.956065652517,
+    ],
+    [
+        0.484527303898,
+        0.394768084706,
+        2.531365903151,
+        -1.732241512316,
+    ],
+    [
+        -3.101385200507,
+        1.775773952919,
+        -2.942430204732,
+        1.864900116697,
+    ],
+    [
+        -1.735912964048,
+        -0.09455970154,
+        0.960385327619,
+        -2.353825670389,
+    ],
+    [
+        3.085871917488,
+        0.496623639214,
+        1.394218297829,
+        2.669197573194,
+    ],
+    [
+        1.345522300159,
+        -1.400760620293,
+        -2.497027865158,
+        -1.501501913954,
+    ],
 ];
 
 fn m45(t4: f64, t5: f64) -> [f64; 9] {
@@ -457,12 +546,20 @@ fn eqs14(c: &[M4; 6], target: &M4, q: &[f64; 6]) -> [f64; 14] {
     let cl = {
         let pp = dot3(&pl, &pl);
         let pq = dot3(&pl, &ll);
-        [pp * ll[0] - 2.0 * pq * pl[0], pp * ll[1] - 2.0 * pq * pl[1], pp * ll[2] - 2.0 * pq * pl[2]]
+        [
+            pp * ll[0] - 2.0 * pq * pl[0],
+            pp * ll[1] - 2.0 * pq * pl[1],
+            pp * ll[2] - 2.0 * pq * pl[2],
+        ]
     };
     let cr = {
         let pp = dot3(&pr, &pr);
         let pq = dot3(&pr, &lr);
-        [pp * lr[0] - 2.0 * pq * pr[0], pp * lr[1] - 2.0 * pq * pr[1], pp * lr[2] - 2.0 * pq * pr[2]]
+        [
+            pp * lr[0] - 2.0 * pq * pr[0],
+            pp * lr[1] - 2.0 * pq * pr[1],
+            pp * lr[2] - 2.0 * pq * pr[2],
+        ]
     };
     for i in 0..3 {
         e[11 + i] = cl[i] - cr[i]; // (bᵀb)a − 2(aᵀb)b
@@ -588,7 +685,12 @@ fn build_pq_model(c: &[M4; 6], target: &M4, finv: &FInv) -> PqModel {
             p1.set(k, j, coeff.at(2, k * 9 + j));
         }
     }
-    PqModel { ps, pc, p1, q: q_acc }
+    PqModel {
+        ps,
+        pc,
+        p1,
+        q: q_acc,
+    }
 }
 
 /// Greedily choose 8 well-conditioned independent rows of `Q` (14×8).
@@ -924,7 +1026,10 @@ fn solve_x4x5(e9: &SMat<6, 9>) -> Vec<(f64, f64)> {
         if !x4.is_finite() || !x5.is_finite() || x4.abs() > 1e8 || x5.abs() > 1e8 {
             return;
         }
-        if cands.iter().any(|&(u, v)| (u - x4).abs() <= 1e-7 && (v - x5).abs() <= 1e-7) {
+        if cands
+            .iter()
+            .any(|&(u, v)| (u - x4).abs() <= 1e-7 && (v - x5).abs() <= 1e-7)
+        {
             return;
         }
         cands.push((x4, x5));
@@ -1106,7 +1211,10 @@ impl std::fmt::Display for RrSpecError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::PrismaticJoint(i) => {
-                write!(f, "joint {i} is prismatic; general-6R RR solver requires all-revolute")
+                write!(
+                    f,
+                    "joint {i} is prismatic; general-6R RR solver requires all-revolute"
+                )
             }
         }
     }
@@ -1200,7 +1308,10 @@ pub fn solve_kinspec(
         &m4_inv_se3(&e),
     );
     let sols = solve_screw(&c, &target, cfg);
-    Ok(sols.into_iter().map(SRobotQ::<6, f64>::from_array).collect())
+    Ok(sols
+        .into_iter()
+        .map(SRobotQ::<6, f64>::from_array)
+        .collect())
 }
 
 #[cfg(test)]
@@ -1233,15 +1344,34 @@ mod tests {
         let a = [0.8, 1.2, 0.33, 1.8, 0.6, 2.2];
         let alpha = [0.349066, 0.541052, 0.785398, 1.41372, 0.20944, 1.74533];
         let d = [0.9, 3.7, 1.0, 0.5, 2.1, 0.63];
-        let dh = std::array::from_fn(|i| DhJoint { a: a[i], alpha: alpha[i], d: d[i] });
+        let dh = std::array::from_fn(|i| DhJoint {
+            a: a[i],
+            alpha: alpha[i],
+            d: d[i],
+        });
         // EE pose from eemat_Raghavan_Roth.csv. The CSV stores the rotation
         // column-major, so the 3×3 block is transposed into row-major here;
         // the translation column is unchanged. (Verified: this matches the FK
         // of the published real generating angles to 1e-4.)
         let target = [
-            [0.354937475307970, 0.461639573991743, -0.812962663562556, 6.82151837150213],
-            [0.876709605247149, 0.137616185817977, 0.460914366741046, 1.46146704002829],
-            [0.324653132880913, -0.876327957516839, -0.355878707125018, 5.36950521368663],
+            [
+                0.354937475307970,
+                0.461639573991743,
+                -0.812962663562556,
+                6.82151837150213,
+            ],
+            [
+                0.876709605247149,
+                0.137616185817977,
+                0.460914366741046,
+                1.46146704002829,
+            ],
+            [
+                0.324653132880913,
+                -0.876327957516839,
+                -0.355878707125018,
+                5.36950521368663,
+            ],
             [0.0, 0.0, 0.0, 1.0],
         ];
         (dh, target)
@@ -1267,7 +1397,10 @@ mod tests {
                 worst = worst.max((fk[i][j] - target[i][j]).abs());
             }
         }
-        assert!(worst < 1e-4, "published real solution must reproduce the target pose, worst={worst}");
+        assert!(
+            worst < 1e-4,
+            "published real solution must reproduce the target pose, worst={worst}"
+        );
     }
 
     #[test]
@@ -1283,14 +1416,35 @@ mod tests {
 
         // The two published real solutions must both be recovered.
         let real_targets = [
-            [deg(13.109881), deg(50.992641), deg(-72.044721), deg(72.065198), deg(-7.195753), deg(-37.852729)],
-            [deg(14.000158), deg(29.699750), deg(-45.000135), deg(71.000293), deg(-63.000511), deg(10.000427)],
+            [
+                deg(13.109881),
+                deg(50.992641),
+                deg(-72.044721),
+                deg(72.065198),
+                deg(-7.195753),
+                deg(-37.852729),
+            ],
+            [
+                deg(14.000158),
+                deg(29.699750),
+                deg(-45.000135),
+                deg(71.000293),
+                deg(-63.000511),
+                deg(10.000427),
+            ],
         ];
         for rt in &real_targets {
             let found = sols.iter().any(|s| {
-                (0..6).map(|k| normalize_angle(s[k] - rt[k]).abs()).fold(0.0f64, f64::max) < 1e-3
+                (0..6)
+                    .map(|k| normalize_angle(s[k] - rt[k]).abs())
+                    .fold(0.0f64, f64::max)
+                    < 1e-3
             });
-            assert!(found, "did not recover published real solution {rt:?}; got {} solutions", sols.len());
+            assert!(
+                found,
+                "did not recover published real solution {rt:?}; got {} solutions",
+                sols.len()
+            );
         }
     }
 
@@ -1298,12 +1452,36 @@ mod tests {
     fn roundtrip_random_generic_chain() {
         // A generic chain (no parallel/intersecting axes) and a planted q.
         let dh = [
-            DhJoint { a: 0.32, alpha: 0.70, d: 0.18 },
-            DhJoint { a: 0.25, alpha: -0.90, d: 0.21 },
-            DhJoint { a: 0.29, alpha: 0.80, d: 0.14 },
-            DhJoint { a: 0.22, alpha: -1.10, d: 0.19 },
-            DhJoint { a: 0.18, alpha: 0.60, d: 0.11 },
-            DhJoint { a: 0.15, alpha: -0.70, d: 0.17 },
+            DhJoint {
+                a: 0.32,
+                alpha: 0.70,
+                d: 0.18,
+            },
+            DhJoint {
+                a: 0.25,
+                alpha: -0.90,
+                d: 0.21,
+            },
+            DhJoint {
+                a: 0.29,
+                alpha: 0.80,
+                d: 0.14,
+            },
+            DhJoint {
+                a: 0.22,
+                alpha: -1.10,
+                d: 0.19,
+            },
+            DhJoint {
+                a: 0.18,
+                alpha: 0.60,
+                d: 0.11,
+            },
+            DhJoint {
+                a: 0.15,
+                alpha: -0.70,
+                d: 0.17,
+            },
         ];
         let q_true = [0.60, -1.00, 0.90, -0.80, 1.20, -0.40];
         let target = fk_dh(&dh, &q_true);
@@ -1313,9 +1491,16 @@ mod tests {
             assert!(dh_residual(&dh, &target, s) < 1e-6, "stale solution {s:?}");
         }
         let found = sols.iter().any(|s| {
-            (0..6).map(|k| normalize_angle(s[k] - q_true[k]).abs()).fold(0.0f64, f64::max) < 1e-3
+            (0..6)
+                .map(|k| normalize_angle(s[k] - q_true[k]).abs())
+                .fold(0.0f64, f64::max)
+                < 1e-3
         });
-        assert!(found, "planted solution not recovered; got {} solutions", sols.len());
+        assert!(
+            found,
+            "planted solution not recovered; got {} solutions",
+            sols.len()
+        );
     }
 
     /// A 6R `KinSpec` with arbitrary (non-DH, non-Z) joint axes. The solver must
@@ -1346,7 +1531,9 @@ mod tests {
         let joints = std::array::from_fn(|i| {
             (
                 DAffine3::from_translation(offs[i]),
-                JointSpec::Revolute { axis_local: axes[i] },
+                JointSpec::Revolute {
+                    axis_local: axes[i],
+                },
             )
         });
         let spec = KinSpec::<f64, 6>::new(
@@ -1384,13 +1571,23 @@ mod tests {
             for k in 0..16 {
                 worst = worst.max((a[k] - b[k]).abs());
             }
-            assert!(worst < 1e-6, "KinSpec solution does not reproduce pose: {worst}");
+            assert!(
+                worst < 1e-6,
+                "KinSpec solution does not reproduce pose: {worst}"
+            );
         }
 
         let found = sols.iter().any(|s| {
-            (0..6).map(|k| normalize_angle(s.0[k] - q_true[k]).abs()).fold(0.0f64, f64::max) < 1e-3
+            (0..6)
+                .map(|k| normalize_angle(s.0[k] - q_true[k]).abs())
+                .fold(0.0f64, f64::max)
+                < 1e-3
         });
-        assert!(found, "planted KinSpec solution not recovered; got {} solutions", sols.len());
+        assert!(
+            found,
+            "planted KinSpec solution not recovered; got {} solutions",
+            sols.len()
+        );
     }
 
     #[test]
@@ -1399,9 +1596,13 @@ mod tests {
         use glam::{DAffine3, DMat4, DVec3};
         let joints = std::array::from_fn(|i| {
             let js = if i == 2 {
-                JointSpec::Prismatic { axis_local: DVec3::Z }
+                JointSpec::Prismatic {
+                    axis_local: DVec3::Z,
+                }
             } else {
-                JointSpec::Revolute { axis_local: DVec3::Z }
+                JointSpec::Revolute {
+                    axis_local: DVec3::Z,
+                }
             };
             (DAffine3::from_translation(DVec3::new(0.0, 0.0, 0.2)), js)
         });
@@ -1504,7 +1705,8 @@ mod tests {
                 // Away from singularities the generic solver must capture every
                 // analytical solution AND return the same count.
                 assert_eq!(
-                    missing, 0,
+                    missing,
+                    0,
                     "pose {i}: generic solver missed {missing} of {} analytical solutions",
                     analytic_sols.len()
                 );

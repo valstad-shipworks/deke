@@ -72,7 +72,10 @@ pub(crate) fn build_matrices<const N: usize>(
     end_q: Option<&SRobotQ<N, f64>>,
 ) -> CostMatrices {
     let m = options.len();
-    let traversal: Vec<f64> = options.iter().map(|o| traversal_cost(&o.path, cost)).collect();
+    let traversal: Vec<f64> = options
+        .iter()
+        .map(|o| traversal_cost(&o.path, cost))
+        .collect();
 
     let mut transition = vec![0.0_f64; m * m];
     for (i, oi) in options.iter().enumerate() {
@@ -94,7 +97,11 @@ pub(crate) fn build_matrices<const N: usize>(
         .map(|o| end_q.map_or(0.0, |e| cost.eval(o.path.last(), e)))
         .collect();
 
-    CostMatrices { transition, start, end }
+    CostMatrices {
+        transition,
+        start,
+        end,
+    }
 }
 
 #[cfg(test)]
@@ -116,9 +123,8 @@ mod tests {
 
     #[test]
     fn traversal_sums_weighted_segments() {
-        let path =
-            SRobotPath::<2, f64>::try_new(vec![q([0.0, 0.0]), q([1.0, 0.0]), q([1.0, 1.0])])
-                .unwrap();
+        let path = SRobotPath::<2, f64>::try_new(vec![q([0.0, 0.0]), q([1.0, 0.0]), q([1.0, 1.0])])
+            .unwrap();
         let cost = TransitionCost::JointWeighted(q([2.0, 1.0]));
         // 2·1 (joint 0) + 1·1 (joint 1) = 3.
         assert!((traversal_cost(&path, &cost) - 3.0).abs() < 1e-12);

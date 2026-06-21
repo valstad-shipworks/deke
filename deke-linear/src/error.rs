@@ -9,13 +9,19 @@ pub enum LinearError {
     DegenerateRun { run: usize },
     #[error("run {run}: Cartesian pose at arc length {s:.4} m has no reachable IK solution")]
     Unreachable { run: usize, s: f64 },
-    #[error("run {run}: every reachable configuration at arc length {s:.4} m is rejected by the validator (obstructed)")]
+    #[error(
+        "run {run}: every reachable configuration at arc length {s:.4} m is rejected by the validator (obstructed)"
+    )]
     Obstructed { run: usize, s: f64 },
     #[error("run {run}: could not route a continuous joint track through the IK candidates")]
     NoContinuousTrack { run: usize },
-    #[error("retimer stalled on run {run} near arc length {s:.4} m (path likely passes through a singularity)")]
+    #[error(
+        "retimer stalled on run {run} near arc length {s:.4} m (path likely passes through a singularity)"
+    )]
     Stalled { run: usize, s: f64 },
-    #[error("run {run}: holding constant TCP speed forbids the interior dip at arc length {s:.4} m (max feasible {feasible_speed:.4} m/s < commanded {commanded:.4} m/s)")]
+    #[error(
+        "run {run}: holding constant TCP speed forbids the interior dip at arc length {s:.4} m (max feasible {feasible_speed:.4} m/s < commanded {commanded:.4} m/s)"
+    )]
     SpeedDipRequired {
         run: usize,
         s: f64,

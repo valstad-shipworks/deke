@@ -1,6 +1,8 @@
 mod common;
 
-use deke_topp3tcp_nlp::discrete::{SolveStatus, TcpLimits, Topp3Tcp6Discrete, Topp3Tcp6DiscreteConstraints};
+use deke_topp3tcp_nlp::discrete::{
+    SolveStatus, TcpLimits, Topp3Tcp6Discrete, Topp3Tcp6DiscreteConstraints,
+};
 use deke_types::{Retimer, SRobotPath, SRobotQ};
 
 #[test]

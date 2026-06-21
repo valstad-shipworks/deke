@@ -256,11 +256,9 @@ fn high_velocity_boundary() {
 #[test]
 fn accelerated_start_boundary() {
     let fk = common::dh_1dof();
-    let path = SRobotPath::<1, f64>::try_new(vec![
-        SRobotQ::from_array([0.0]),
-        SRobotQ::from_array([1.0]),
-    ])
-    .unwrap();
+    let path =
+        SRobotPath::<1, f64>::try_new(vec![SRobotQ::from_array([0.0]), SRobotQ::from_array([1.0])])
+            .unwrap();
     let mut cfg = Topp3Tcp6Constraints::<1>::symmetric(1.0, 5.0, 200.0);
     cfg.boundary = BoundaryConditions {
         v_start: SRobotQ::from_array([0.3]),
@@ -463,7 +461,11 @@ fn very_high_output_sample_rate() {
     let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("10 kHz output:\n{}", diag);
     let traj = result.expect("10 kHz retime failed");
-    assert!(traj.len() > 5_000, "expected >5k output samples, got {}", traj.len());
+    assert!(
+        traj.len() > 5_000,
+        "expected >5k output samples, got {}",
+        traj.len()
+    );
 }
 
 /// Very low output sample rate (5 Hz). On a fast trajectory this can produce only a
@@ -482,7 +484,11 @@ fn very_low_output_sample_rate() {
     let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("5 Hz output:\n{}", diag);
     let traj = result.expect("5 Hz retime failed");
-    assert!(traj.len() >= 2, "need at least 2 output samples, got {}", traj.len());
+    assert!(
+        traj.len() >= 2,
+        "need at least 2 output samples, got {}",
+        traj.len()
+    );
 }
 
 /// Closed-loop path: the joint pose returns to its start. The chord-length total is
@@ -536,7 +542,10 @@ fn zero_length_path_rejected_by_retimer() {
     match result {
         Err(deke_types::DekeError::DuplicateWaypoints) => {}
         Err(deke_types::DekeError::PathTooShort(_)) => {}
-        other => panic!("expected DuplicateWaypoints or PathTooShort; got {:?}", other),
+        other => panic!(
+            "expected DuplicateWaypoints or PathTooShort; got {:?}",
+            other
+        ),
     }
 }
 
@@ -702,7 +711,11 @@ fn one_joint_v_max_zero_static_joint() {
     let validator = common::wide_validator::<6>();
     let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("v_max=0 on static joint:\n{}", diag);
-    assert!(result.is_ok(), "v_max=0 on static joint retime failed: {}", diag);
+    assert!(
+        result.is_ok(),
+        "v_max=0 on static joint retime failed: {}",
+        diag
+    );
 }
 
 /// 7-DOF: rail moves in lockstep with joint 1 (perfectly correlated dimensions). The
@@ -814,11 +827,9 @@ fn constant_joint_pose_rejected() {
 #[test]
 fn boundary_residual_at_tolerance() {
     let fk = common::dh_1dof();
-    let path = SRobotPath::<1, f64>::try_new(vec![
-        SRobotQ::from_array([0.0]),
-        SRobotQ::from_array([1.0]),
-    ])
-    .unwrap();
+    let path =
+        SRobotPath::<1, f64>::try_new(vec![SRobotQ::from_array([0.0]), SRobotQ::from_array([1.0])])
+            .unwrap();
     let mut cfg = Topp3Tcp6Constraints::<1>::symmetric(1.0, 5.0, 200.0);
     cfg.boundary = BoundaryConditions {
         v_start: SRobotQ::from_array([0.5]),
@@ -903,7 +914,11 @@ fn pchip_spike_uneven_segments_4wp() {
     ];
     let path = SRobotPath::<6, f64>::try_new(wps).unwrap();
     let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(2.0, 8.0, 300.0);
-    cfg.tcp = Some(TcpLimits { v_max: 1.5, a_max: 12.0, j_max: 150.0 });
+    cfg.tcp = Some(TcpLimits {
+        v_max: 1.5,
+        a_max: 12.0,
+        j_max: 150.0,
+    });
     let validator = common::wide_validator::<6>();
     let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("PCHIP spike uneven 4wp:\n{}", diag);
@@ -927,7 +942,11 @@ fn pchip_multi_knot_geometric_segment_ratios() {
     ];
     let path = SRobotPath::<6, f64>::try_new(wps).unwrap();
     let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(2.0, 8.0, 300.0);
-    cfg.tcp = Some(TcpLimits { v_max: 1.5, a_max: 15.0, j_max: 200.0 });
+    cfg.tcp = Some(TcpLimits {
+        v_max: 1.5,
+        a_max: 15.0,
+        j_max: 200.0,
+    });
     let validator = common::wide_validator::<6>();
     let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("multi-knot geometric ratios:\n{}", diag);
@@ -950,7 +969,11 @@ fn mixed_per_joint_flip_versus_monotone() {
     ];
     let path = SRobotPath::<6, f64>::try_new(wps).unwrap();
     let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 6.0, 250.0);
-    cfg.tcp = Some(TcpLimits { v_max: 1.0, a_max: 8.0, j_max: 100.0 });
+    cfg.tcp = Some(TcpLimits {
+        v_max: 1.0,
+        a_max: 8.0,
+        j_max: 100.0,
+    });
     let validator = common::wide_validator::<6>();
     let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("mixed flip vs monotone:\n{}", diag);
@@ -965,8 +988,8 @@ fn extreme_secant_magnitude_ratio_at_knot() {
     let fk = common::dh_1dof();
     let path = SRobotPath::<1, f64>::try_new(vec![
         SRobotQ::from_array([0.0]),
-        SRobotQ::from_array([0.01]), // ~tiny first segment
-        SRobotQ::from_array([1.0]),  // long second segment
+        SRobotQ::from_array([0.01]),  // ~tiny first segment
+        SRobotQ::from_array([1.0]),   // long second segment
         SRobotQ::from_array([1.005]), // tiny third segment
     ])
     .unwrap();
@@ -984,15 +1007,19 @@ fn extreme_secant_magnitude_ratio_at_knot() {
 fn wrist_alignment_singularity_traverse() {
     let fk = common::dh_6dof();
     let wps = vec![
-        SRobotQ::from_array([0.0, -1.0, 1.2,  0.4,  0.4, 0.0]),
-        SRobotQ::from_array([0.1, -1.0, 1.2,  0.2,  0.2, 0.0]),
-        SRobotQ::from_array([0.2, -1.0, 1.2,  0.0,  0.0, 0.0]), // wrist aligned
+        SRobotQ::from_array([0.0, -1.0, 1.2, 0.4, 0.4, 0.0]),
+        SRobotQ::from_array([0.1, -1.0, 1.2, 0.2, 0.2, 0.0]),
+        SRobotQ::from_array([0.2, -1.0, 1.2, 0.0, 0.0, 0.0]), // wrist aligned
         SRobotQ::from_array([0.3, -1.0, 1.2, -0.2, -0.2, 0.0]),
         SRobotQ::from_array([0.4, -1.0, 1.2, -0.4, -0.4, 0.0]),
     ];
     let path = SRobotPath::<6, f64>::try_new(wps).unwrap();
     let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 6.0, 200.0);
-    cfg.tcp = Some(TcpLimits { v_max: 0.3, a_max: 3.0, j_max: 60.0 });
+    cfg.tcp = Some(TcpLimits {
+        v_max: 0.3,
+        a_max: 3.0,
+        j_max: 60.0,
+    });
     let validator = common::wide_validator::<6>();
     let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("wrist alignment traverse:\n{}", diag);
@@ -1041,7 +1068,11 @@ fn long_path_mixed_smooth_zigzag_smooth() {
     }
     let path = SRobotPath::<6, f64>::try_new(wps).unwrap();
     let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 6.0, 250.0);
-    cfg.tcp = Some(TcpLimits { v_max: 0.5, a_max: 4.0, j_max: 80.0 });
+    cfg.tcp = Some(TcpLimits {
+        v_max: 0.5,
+        a_max: 4.0,
+        j_max: 80.0,
+    });
     cfg.solver.max_iterations = 1500;
     let validator = common::wide_validator::<6>();
     let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
@@ -1064,7 +1095,11 @@ fn microscopic_final_segment_endpoint_squeeze() {
     ];
     let path = SRobotPath::<6, f64>::try_new(wps).unwrap();
     let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 6.0, 250.0);
-    cfg.tcp = Some(TcpLimits { v_max: 1.0, a_max: 6.0, j_max: 100.0 });
+    cfg.tcp = Some(TcpLimits {
+        v_max: 1.0,
+        a_max: 6.0,
+        j_max: 100.0,
+    });
     let validator = common::wide_validator::<6>();
     let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("microscopic final segment:\n{}", diag);
@@ -1079,11 +1114,11 @@ fn microscopic_final_segment_endpoint_squeeze() {
 fn locked_base_curved_wrist() {
     let fk = common::dh_6dof();
     let wps = vec![
-        SRobotQ::from_array([0.5, -0.8, 1.0,  0.0,  0.0,  0.0]),
-        SRobotQ::from_array([0.5, -0.8, 1.0,  0.3,  0.5,  0.5]),
-        SRobotQ::from_array([0.5, -0.8, 1.0,  0.6,  0.8,  1.2]),
-        SRobotQ::from_array([0.5, -0.8, 1.0,  0.5,  1.0,  1.8]),
-        SRobotQ::from_array([0.5, -0.8, 1.0,  0.2,  1.1,  2.4]),
+        SRobotQ::from_array([0.5, -0.8, 1.0, 0.0, 0.0, 0.0]),
+        SRobotQ::from_array([0.5, -0.8, 1.0, 0.3, 0.5, 0.5]),
+        SRobotQ::from_array([0.5, -0.8, 1.0, 0.6, 0.8, 1.2]),
+        SRobotQ::from_array([0.5, -0.8, 1.0, 0.5, 1.0, 1.8]),
+        SRobotQ::from_array([0.5, -0.8, 1.0, 0.2, 1.1, 2.4]),
     ];
     let path = SRobotPath::<6, f64>::try_new(wps).unwrap();
     let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(2.0, 10.0, 400.0);
@@ -1107,7 +1142,11 @@ fn boundary_residual_near_tolerance_with_tcp() {
     ])
     .unwrap();
     let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 6.0, 200.0);
-    cfg.tcp = Some(TcpLimits { v_max: 1.0, a_max: 5.0, j_max: 80.0 });
+    cfg.tcp = Some(TcpLimits {
+        v_max: 1.0,
+        a_max: 5.0,
+        j_max: 80.0,
+    });
     // Chord direction is dominated by joint 0; v_start chosen to project cleanly onto it
     // with only a small (~5e-3) perpendicular residual against a tolerance of 1e-2.
     cfg.boundary = BoundaryConditions {
@@ -1146,7 +1185,11 @@ fn nearly_active_tcp_a_everywhere() {
     let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(2.0, 10.0, 500.0);
     // Curvature-times-cruise-squared at peak ≈ 0.5; pick a_max just above that so the
     // optimizer wants to ride against the cone almost everywhere.
-    cfg.tcp = Some(TcpLimits { v_max: f64::INFINITY, a_max: 0.6, j_max: f64::INFINITY });
+    cfg.tcp = Some(TcpLimits {
+        v_max: f64::INFINITY,
+        a_max: 0.6,
+        j_max: f64::INFINITY,
+    });
     cfg.solver.max_iterations = 1500;
     let validator = common::wide_validator::<6>();
     let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
@@ -1204,7 +1247,11 @@ fn fuzz_seeded_6wp_paths() {
         let wps = fuzz_random_walk::<6>(seed, start, 6, 0.4);
         let path = SRobotPath::<6, f64>::try_new(wps).unwrap();
         let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 6.0, 250.0);
-        cfg.tcp = Some(TcpLimits { v_max: 1.0, a_max: 8.0, j_max: 100.0 });
+        cfg.tcp = Some(TcpLimits {
+            v_max: 1.0,
+            a_max: 8.0,
+            j_max: 100.0,
+        });
         cfg.solver.max_iterations = 1500;
         let validator = common::wide_validator::<6>();
         let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
@@ -1213,7 +1260,11 @@ fn fuzz_seeded_6wp_paths() {
             failures.push(format!("seed {:#x}: {}", seed, e));
         }
     }
-    assert!(failures.is_empty(), "fuzz failures:\n  {}", failures.join("\n  "));
+    assert!(
+        failures.is_empty(),
+        "fuzz failures:\n  {}",
+        failures.join("\n  ")
+    );
 }
 
 /// Aggressive fuzz: same 6 seeds, delta `±0.6` (close to joint v_max in a unit-time
@@ -1239,7 +1290,11 @@ fn fuzz_seeded_6wp_paths_aggressive() {
         let wps = fuzz_random_walk::<6>(seed, start, 6, 0.6);
         let path = SRobotPath::<6, f64>::try_new(wps).unwrap();
         let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 6.0, 250.0);
-        cfg.tcp = Some(TcpLimits { v_max: 1.0, a_max: 8.0, j_max: 100.0 });
+        cfg.tcp = Some(TcpLimits {
+            v_max: 1.0,
+            a_max: 8.0,
+            j_max: 100.0,
+        });
         cfg.solver.max_iterations = 1500;
         let validator = common::wide_validator::<6>();
         let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
@@ -1251,9 +1306,12 @@ fn fuzz_seeded_6wp_paths_aggressive() {
             failures.push(format!("seed {:#x}: {}", seed, e));
         }
     }
-    assert!(failures.is_empty(), "aggressive fuzz failures:\n  {}", failures.join("\n  "));
+    assert!(
+        failures.is_empty(),
+        "aggressive fuzz failures:\n  {}",
+        failures.join("\n  ")
+    );
 }
-
 
 /// Output trajectory must reproduce the user-requested start velocity within slack.
 /// Stronger than `aligned_non_zero_velocity_is_feasible` (which uses 0.15 tolerance);
@@ -1261,11 +1319,9 @@ fn fuzz_seeded_6wp_paths_aggressive() {
 #[test]
 fn output_start_velocity_matches_requested_within_slack() {
     let fk = common::dh_1dof();
-    let path = SRobotPath::<1, f64>::try_new(vec![
-        SRobotQ::from_array([0.0]),
-        SRobotQ::from_array([1.0]),
-    ])
-    .unwrap();
+    let path =
+        SRobotPath::<1, f64>::try_new(vec![SRobotQ::from_array([0.0]), SRobotQ::from_array([1.0])])
+            .unwrap();
     let mut cfg = Topp3Tcp6Constraints::<1>::symmetric(1.0, 5.0, 200.0);
     cfg.boundary = BoundaryConditions {
         v_start: SRobotQ::from_array([0.4]),
