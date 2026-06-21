@@ -2,9 +2,9 @@ name: Check
 
 # The eight pure-Rust members get cargo check / clippy / test on a native runner
 # per target, so tests actually execute on each platform. deke-topp3tcp-nlp and
-# deke-bench-retimers (which depends on it) are excluded from that matrix and built
-# on their own Linux job: they pull sleipnir, which needs CMake and a C++23
-# toolchain (GCC 14+ / MSVC 19.37+) and won't build across musl/Windows runners.
+# deke-bench-retimers (which depends on it) are excluded: they pull sleipnir, which
+# needs CMake and a C++23 toolchain (GCC 14+ / MSVC 19.37+) and won't build across
+# the musl/Windows runners, so they get no CI coverage here.
 
 on:
   push:
@@ -49,34 +49,3 @@ jobs:
 
       - name: Tests
         run: cargo test --workspace --exclude deke-topp3tcp-nlp --exclude deke-bench-retimers --target ${{ matrix.platform.target }}
-
-  check-nlp:
-    runs-on: ubuntu-latest
-    name: deke-topp3tcp-nlp
-
-    env:
-      CC: gcc-14
-      CXX: g++-14
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-
-      - name: Install CMake and a C++23 toolchain
-        run: sudo apt-get update && sudo apt-get install -y cmake g++-14
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: nlp-sleipnir
-
-      - name: Cargo check
-        run: cargo check -p deke-topp3tcp-nlp -p deke-bench-retimers
-
-      - name: Clippy
-        run: cargo clippy -p deke-topp3tcp-nlp -p deke-bench-retimers -- -D warnings
-
-      - name: Tests
-        run: cargo test -p deke-topp3tcp-nlp -p deke-bench-retimers
