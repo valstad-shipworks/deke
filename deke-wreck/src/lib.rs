@@ -399,13 +399,13 @@ impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
             extras_scratch.resize_with(ctx.extra_attachments.len(), Collider::default);
             for (dst, src) in extras_scratch.iter_mut().zip(ctx.extra_attachments.iter()) {
                 dst.clone_from(&src.collision);
-                if let Some(idx) = src.mounted_on {
-                    if let Some(tf) = mounted_tf::<N>(idx, &transforms, ee_tf, base_tf) {
+                if let Some(idx) = src.mounted_on
+                    && let Some(tf) = mounted_tf::<N>(idx, &transforms, ee_tf, base_tf) {
                         dst.transform(tf);
                     }
-                }
             }
 
+            #[allow(clippy::needless_range_loop)]
             for i in 0..N {
                 check_body_env(&self.links[i], Some(&scratch[i]), i, ctx, extras_scratch)?;
             }
@@ -761,6 +761,7 @@ impl<const N: usize, FK: FKChain<N>> WreckValidator<N, FK> {
         if let Some(base) = &self.base {
             push_body(base, Some(base_tf));
         }
+        #[allow(clippy::needless_range_loop)]
         for i in 0..N {
             push_body(&self.links[i], Some(transforms[i]));
         }

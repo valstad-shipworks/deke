@@ -234,12 +234,11 @@ impl<'a, const N: usize, FK: ContinuousFKChain<N, f64>> Retimer<N, f64> for Topp
         };
         diag.phase_timing.resample = t_resample.elapsed();
 
-        if constraints.post_validation {
-            if let Err(e) = validator.validate_motion(traj_path.iter().as_slice(), ctx) {
+        if constraints.post_validation
+            && let Err(e) = validator.validate_motion(traj_path.iter().as_slice(), ctx) {
                 diag.message = Some(format!("validator rejected output: {}", e));
                 return (Err(e), diag);
             }
-        }
 
         if constraints.check_output_dynamics {
             if let Err(e) = check_dynamics_against_limits::<N>(
@@ -747,8 +746,10 @@ fn derivative_stats_from_deriv<const N: usize>(
 /// failure mode.
 fn tcp_stats_from_deriv<const N: usize>(deriv: &PathDerivatives<N>) -> TcpStats {
     let m = deriv.num_waypoints();
-    let mut out = TcpStats::default();
-    out.min_abs_pp_per_axis = [f64::INFINITY; 3];
+    let mut out = TcpStats {
+        min_abs_pp_per_axis: [f64::INFINITY; 3],
+        ..Default::default()
+    };
     for k in 0..m {
         let pp = &deriv.pp[k];
         let ppp = &deriv.ppp[k];

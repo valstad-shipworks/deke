@@ -1,18 +1,15 @@
 use tinyrand::{Rand, Seeded, SplitMix, Wyrand, Xorshift};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum RandomizerType {
+    #[default]
     Wyrand,
     SplitMix,
     Xorshift,
     Halton,
 }
 
-impl Default for RandomizerType {
-    fn default() -> Self {
-        Self::Wyrand
-    }
-}
 
 const F64_FROM_U64: f64 = 1.0 / (1u64 << 53) as f64;
 
@@ -359,8 +356,8 @@ mod tests {
         // one sample_unit call.
         let mut a = HaltonRand::<M>::new(0);
         let mut row_a = [0.0f64; M];
-        for i in 0..M {
-            row_a[i] = u64_to_unit_f64(<HaltonRand<M> as DekeRng<M>>::next_u64(&mut a));
+        for slot in row_a.iter_mut() {
+            *slot = u64_to_unit_f64(<HaltonRand<M> as DekeRng<M>>::next_u64(&mut a));
         }
 
         let mut b = HaltonRand::<M>::new(0);
@@ -383,7 +380,7 @@ mod tests {
         for _ in 0..10_000 {
             let s = h.sample_unit();
             for v in s {
-                assert!(v >= 0.0 && v < 1.0, "out of range: {v}");
+                assert!((0.0..1.0).contains(&v), "out of range: {v}");
             }
         }
     }

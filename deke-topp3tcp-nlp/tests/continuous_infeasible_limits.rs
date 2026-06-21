@@ -15,8 +15,8 @@ fn impossible_bounds_return_error_not_panic() {
     // v_max nearly zero but jerk and accel still finite — the solver cannot traverse the path.
     let cfg = Topp3Tcp6Constraints::<1>::symmetric(1e-4, 1e-3, 1e-2);
 
-    let mut validator = common::wide_validator::<1>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<1>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("{}", diag);
     match result {
         Err(DekeError::RetimerFailed(_)) => {}

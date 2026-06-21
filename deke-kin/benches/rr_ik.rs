@@ -1,5 +1,5 @@
 //! Benchmark the complete general-6R solver (`rr_ik`, Raghavan–Roth elimination
-//! + Manocha–Canny eigenvalues) on a *generic* chain — one with no spherical
+//! and Manocha–Canny eigenvalues) on a *generic* chain — one with no spherical
 //! wrist and no parallel/intersecting axes, i.e. the case the analytical path
 //! cannot solve. Two measurements:
 //!

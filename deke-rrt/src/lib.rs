@@ -22,8 +22,10 @@ pub use scurve::{JointKinLimits, KinematicLimits, direction_cosine};
 /// from "we ran out of budget" without re-parsing the [`DekeError`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
+#[derive(Default)]
 pub enum RrtTermination {
     /// Default for an unfinished diagnostic.
+    #[default]
     NotStarted,
     /// `start ≈ goal`; a trivial single-waypoint path was returned.
     DegenerateStartGoal,
@@ -45,11 +47,6 @@ pub enum RrtTermination {
     NoInitialPath,
 }
 
-impl Default for RrtTermination {
-    fn default() -> Self {
-        Self::NotStarted
-    }
-}
 
 impl fmt::Display for RrtTermination {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

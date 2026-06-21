@@ -36,8 +36,8 @@ fn f32_built_chain_drives_f64_topp_retimer() {
 
     let cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 4.0, 200.0);
 
-    let mut validator = common::wide_validator::<6>();
-    let (result, diag) = Topp3Tcp6::new(&chain_f64).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6::new(&chain_f64).retime(&cfg, &path, &validator, &());
     eprintln!("{}", diag);
     assert!(result.is_ok(), "retime failed: {}", diag);
     assert_eq!(diag.status, SolveStatus::Success);

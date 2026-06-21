@@ -437,12 +437,11 @@ impl<'a, const N: usize, FK: ContinuousFKChain<N, f64>> Retimer<N, f64> for Topp
             return (Err(e), diag);
         }
 
-        if constraints.post_validation {
-            if let Err(e) = validator.validate_motion(traj_path.iter().as_slice(), ctx) {
+        if constraints.post_validation
+            && let Err(e) = validator.validate_motion(traj_path.iter().as_slice(), ctx) {
                 diag.message = Some(format!("validator rejected output: {}", e));
                 return (Err(e), diag);
             }
-        }
 
         populate_peak_kinematics::<N, _>(
             &mut diag,

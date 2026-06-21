@@ -256,10 +256,9 @@ impl<const N: usize> FKChain<N, f64> for NeverFK<N> {
 /// constant per segment; same averaging at interior knots.
 ///
 /// Per-dimension; each output dimension fitted independently.
-fn spline_derivatives<const D: usize>(
-    y: &[[f64; D]],
-    ds: &[f64],
-) -> (Vec<[f64; D]>, Vec<[f64; D]>, Vec<[f64; D]>) {
+type SplineDerivs<const D: usize> = (Vec<[f64; D]>, Vec<[f64; D]>, Vec<[f64; D]>);
+
+fn spline_derivatives<const D: usize>(y: &[[f64; D]], ds: &[f64]) -> SplineDerivs<D> {
     let m = y.len();
     let mut yp = vec![[0.0_f64; D]; m];
     let mut ypp = vec![[0.0_f64; D]; m];

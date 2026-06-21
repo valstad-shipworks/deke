@@ -19,8 +19,8 @@ fn tcp_velocity_is_limiting() {
     });
     cfg.solver.max_iterations = 2_000;
 
-    let mut validator = common::wide_validator::<6>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("{}", diag);
     assert!(result.is_ok(), "retime failed: {}", diag);
     assert_eq!(diag.status, SolveStatus::Success);

@@ -13,7 +13,7 @@ valuable = ["dep:valuable", "deke-types/valuable", "wreck/valuable"]
 
 [dependencies]
 deke-types = { version = "2.0", path = "../deke-types" }
-wreck = "0.3.5"
+wreck = "0.4.0"
 glam = "0.32.1"
 uuid = { version = "1", features = ["v4"] }
 valuable = { version = "0.1", default-features = false, features = ["alloc"], optional = true }

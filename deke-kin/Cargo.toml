@@ -6,7 +6,7 @@ description = "Pure-Rust port of EAIK — Efficient Analytical Inverse Kinematic
 license = "MIT"
 
 [dependencies]
-deke-types = { path = "../deke-types" }
+deke-types = { version = "2.0", path = "../deke-types" }
 const_soft_float = "0.1.4"
 glam = "0.32.1"
 glam-traits-ext = "0.32.3"

@@ -1,0 +1,100 @@
+name: Publish
+
+# Workspace publish for the deke crates. The crates.io sparse index is the gate:
+# on every push to main each publishable member is compared against what's already
+# uploaded, and only versions that are missing get published — so a single version
+# bump on main releases just that crate, and re-runs are idempotent.
+#
+# deke-bench-retimers is `publish = false` (skipped automatically). deke-topp3tcp-nlp
+# is excluded because it depends on sleipnir via a git URL, which crates.io rejects;
+# add it back once that dependency resolves from a registry.
+#
+# Needs the CARGO_REGISTRY_TOKEN secret.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  EXCLUDE_NLP: deke-topp3tcp-nlp
+
+jobs:
+  crates-dry-run:
+    runs-on: ubuntu-latest
+    name: cargo publish --dry-run
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: publish-dry-run
+
+      - run: cargo publish --workspace --dry-run --exclude "$EXCLUDE_NLP"
+
+  publish-crates:
+    runs-on: ubuntu-latest
+    name: Publish to crates.io
+    if: github.event_name == 'push'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish new versions to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # Dependency order: deke-types first; deke-topp-speed before anything that
+          # would consume it. cargo publish waits for each crate to land in the index
+          # before returning, so dependents resolve the freshly published versions.
+          publish_order="deke-types deke-topp-speed deke-kin deke-wreck deke-rrt \
+            deke-topp3tcp-spline deke-linear deke-multipath"
+
+          for crate in $publish_order; do
+            version="$(cargo metadata --no-deps --format-version 1 \
+              | jq -r --arg c "$crate" '.packages[] | select(.name == $c) | .version')"
+
+            index_path="${crate:0:2}/${crate:2:2}/${crate}"
+
+            # The sparse index occasionally 5xx's or times out. Only 200 (crate
+            # exists) and 404 (it doesn't yet) are authoritative; retry anything
+            # else rather than treating a transient error as "not published" and
+            # republishing an existing version (which would fail the whole job).
+            http=""
+            for attempt in 1 2 3 4 5; do
+              http="$(curl -sS -o /tmp/index.json -w '%{http_code}' \
+                "https://index.crates.io/${index_path}" || echo 000)"
+              case "$http" in
+                200 | 404) break ;;
+                *) echo "index returned $http for $crate (attempt $attempt/5); retrying"; sleep 3 ;;
+              esac
+            done
+
+            case "$http" in
+              200)
+                if jq -e --slurp --arg v "$version" 'any(.[]; .vers == $v)' \
+                     /tmp/index.json >/dev/null; then
+                  echo "skip    $crate $version — already on crates.io"
+                  continue
+                fi
+                ;;
+              404) ;;  # crate/version not on the index yet → publish
+              *)
+                echo "error: crates.io index unreachable for $crate (last status $http)" >&2
+                exit 1
+                ;;
+            esac
+
+            echo "publish $crate $version"
+            cargo publish -p "$crate"
+          done

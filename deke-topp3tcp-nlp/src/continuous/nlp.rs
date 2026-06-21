@@ -487,7 +487,7 @@ fn build_and_solve_inner<const N: usize>(
     if h > 0.0 && !path_too_short_for_fd {
         for k in 0..seg {
             let ds_k = deriv.ds[k];
-            if !(ds_k > 0.0) {
+            if !matches!(ds_k.partial_cmp(&0.0), Some(std::cmp::Ordering::Greater)) {
                 continue;
             }
             let a = deriv.waypoints[k].0;
@@ -1251,21 +1251,13 @@ fn propagate_symmetric_initial_guess<const N: usize>(
         }
     }
 
-    for k in 0..=mid {
-        sdd_guess[k] = sdd_fwd[k];
-    }
+    sdd_guess[..=mid].copy_from_slice(&sdd_fwd[..=mid]);
     sdd_guess[mid] = 0.5 * (sdd_fwd[mid] + sdd_bwd[mid]);
-    for k in (mid + 1)..m {
-        sdd_guess[k] = sdd_bwd[k];
-    }
-    for k in 0..mid {
-        sddd_guess[k] = sddd_fwd[k];
-        dt_guess[k] = dt_fwd[k];
-    }
-    for k in mid..seg {
-        sddd_guess[k] = sddd_bwd[k];
-        dt_guess[k] = dt_bwd[k];
-    }
+    sdd_guess[(mid + 1)..m].copy_from_slice(&sdd_bwd[(mid + 1)..m]);
+    sddd_guess[..mid].copy_from_slice(&sddd_fwd[..mid]);
+    dt_guess[..mid].copy_from_slice(&dt_fwd[..mid]);
+    sddd_guess[mid..seg].copy_from_slice(&sddd_bwd[mid..seg]);
+    dt_guess[mid..seg].copy_from_slice(&dt_bwd[mid..seg]);
 }
 
 /// Backward analogue of [`propagate_initial_guess`]. Starts from `end_sdd` at the last

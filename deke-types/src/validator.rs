@@ -13,6 +13,8 @@ pub trait Leaf: ValidatorContext {}
 
 impl ValidatorContext for () {}
 
+type ExtraCheck<const N: usize, F> = Box<dyn Fn(&SRobotQ<N, F>) -> bool + Send + Sync>;
+
 #[macro_export]
 macro_rules! validator_context_type_impl {
     ($($ident:ident),*) => {
@@ -465,7 +467,7 @@ where
     ) -> BitVec {
         match self {
             MaybeValidator::Active(v) => v.validate_batched(qs, ctx),
-            MaybeValidator::Disabled => core::iter::repeat(false).take(qs.len()).collect(),
+            MaybeValidator::Disabled => std::iter::repeat_n(false, qs.len()).collect(),
         }
     }
 }
@@ -474,7 +476,7 @@ where
 pub struct JointValidator<const N: usize, F: KinScalar = f32> {
     lower: SRobotQ<N, F>,
     upper: SRobotQ<N, F>,
-    extras: Option<Arc<[Box<dyn Fn(&SRobotQ<N, F>) -> bool + Send + Sync>]>>,
+    extras: Option<Arc<[ExtraCheck<N, F>]>>,
 }
 
 impl<const N: usize, F: KinScalar> Debug for JointValidator<N, F> {
@@ -505,7 +507,7 @@ impl<const N: usize, F: KinScalar> JointValidator<N, F> {
     pub fn new_with_extras(
         lower: SRobotQ<N, F>,
         upper: SRobotQ<N, F>,
-        extras: Vec<Box<dyn Fn(&SRobotQ<N, F>) -> bool + Send + Sync>>,
+        extras: Vec<ExtraCheck<N, F>>,
     ) -> Self {
         Self {
             lower,

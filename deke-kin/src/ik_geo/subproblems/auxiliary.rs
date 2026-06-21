@@ -76,7 +76,7 @@ pub fn cone_polynomials(
 
     let r_coeff = (2.0 * beta).powi(2);
     let r = [
-        -1.0 * r_coeff,
+        -r_coeff,
         2.0 * delta * r_coeff,
         (-delta * delta + norm_ki_x_pi_sq * norm_ki_x_k2_sq) * r_coeff,
     ];

@@ -21,8 +21,8 @@ fn aligned_non_zero_velocity_is_feasible() {
         projection_tolerance: 1e-3,
     };
 
-    let mut validator = common::wide_validator::<1>();
-    let (result, diag) = Topp3Tcp6Discrete::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<1>();
+    let (result, diag) = Topp3Tcp6Discrete::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("{}", diag);
     let traj = result.expect("retime failed");
     assert_eq!(diag.status, SolveStatus::Success);
@@ -52,8 +52,8 @@ fn perpendicular_velocity_rejects() {
         projection_tolerance: 1e-3,
     };
 
-    let mut validator = common::wide_validator::<6>();
-    let (result, _diag) = Topp3Tcp6Discrete::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, _diag) = Topp3Tcp6Discrete::new(&fk).retime(&cfg, &path, &validator, &());
     match result {
         Err(DekeError::BoundaryInfeasible(_)) => {}
         other => panic!("expected BoundaryInfeasible, got {:?}", other),

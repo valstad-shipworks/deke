@@ -498,9 +498,10 @@ impl<const N: usize, F: KinScalar> WaypointSolver<N, F> {
     /// - call [`apply_step_length_update`](Self::apply_step_length_update) to
     ///   pick a step size that shrinks the total duration without breaking
     ///   feasibility
+    ///
     /// Stops when the duration plateau is hit (and the synchronising joint
     /// stays put) or when the per-solve time budget is exceeded.
-    fn run_global_optimization_pass(&mut self, profile_buffer: &mut Vec<[Segment<F>; N]>) {
+    fn run_global_optimization_pass(&mut self, profile_buffer: &mut [[Segment<F>; N]]) {
         // Each trial rewrites every `segments_tmp` cell before reading it:
         // non-zero-gradient (seg, dof) cells via StepA, zero-gradient cells
         // via the explicit refresh inside the trial loop, and
@@ -605,7 +606,7 @@ impl<const N: usize, F: KinScalar> WaypointSolver<N, F> {
     /// reattempted.
     fn apply_step_length_update(
         &mut self,
-        profile_trial: &mut Vec<[Segment<F>; N]>,
+        profile_trial: &mut [[Segment<F>; N]],
         new_total_duration: &mut F,
         current_duration: F,
         sync_axis_changed: &mut bool,
@@ -648,7 +649,9 @@ impl<const N: usize, F: KinScalar> WaypointSolver<N, F> {
             let mut profiles_valid = true;
             let mut step_length_consistent = true;
 
+            #[allow(clippy::needless_range_loop)]
             for seg_idx in 0..self.segments.len() {
+                #[allow(clippy::needless_range_loop)]
                 for dof_idx in 0..N {
                     let left_zero = seg_idx == 0
                         || (fabs(self.gradient_buffer[seg_idx - 1][dof_idx].delta_v) < dbl_eps
@@ -791,7 +794,7 @@ impl<const N: usize, F: KinScalar> WaypointSolver<N, F> {
     /// Three-segment sliding-window relaxation. Walks `[start, start+1,
     /// start+2]` triples through the segment array in alternating phase and
     /// runs a small inner gradient-descent on the two interior waypoints.
-    fn optimize_three_segment_window(&mut self, profile_buffer: &mut Vec<[Segment<F>; N]>) {
+    fn optimize_three_segment_window(&mut self, profile_buffer: &mut [[Segment<F>; N]]) {
         let max_relax_iterations = 4usize;
         if self.segments.len() < 3 {
             return;
@@ -941,7 +944,7 @@ impl<const N: usize, F: KinScalar> WaypointSolver<N, F> {
     /// Inner relaxation step for [`optimize_three_segment_window`].
     fn try_three_segment_window(
         &mut self,
-        profile_buffer: &mut Vec<[Segment<F>; N]>,
+        profile_buffer: &mut [[Segment<F>; N]],
         step_scale: &mut F,
         window_start: usize,
         new_duration: &mut F,
@@ -950,6 +953,7 @@ impl<const N: usize, F: KinScalar> WaypointSolver<N, F> {
         let dbl_eps = from_f::<F>(f64::EPSILON);
         for _iteration in 0..8usize {
             let mut window_valid = true;
+            #[allow(clippy::needless_range_loop)]
             for dof_idx in 0..N {
                 let limits_left = self.segment_limits[window_start][dof_idx];
                 let limits_mid = self.segment_limits[window_start + 1][dof_idx];
@@ -1086,7 +1090,7 @@ impl<const N: usize, F: KinScalar> WaypointSolver<N, F> {
     /// Two-segment sliding-window relaxation. Same structure as the
     /// three-segment pass but with one degree of freedom: only the waypoint
     /// at `window_start + 1` is moved.
-    fn optimize_two_segment_window(&mut self, profile_buffer: &mut Vec<[Segment<F>; N]>) {
+    fn optimize_two_segment_window(&mut self, profile_buffer: &mut [[Segment<F>; N]]) {
         let step_repeats = 4usize;
         let grid_stride = 2usize;
         let mut prev_total_duration = F::zero();
@@ -1197,7 +1201,7 @@ impl<const N: usize, F: KinScalar> WaypointSolver<N, F> {
     /// Inner relaxation step for [`optimize_two_segment_window`].
     fn try_two_segment_window(
         &mut self,
-        profile_buffer: &mut Vec<[Segment<F>; N]>,
+        profile_buffer: &mut [[Segment<F>; N]],
         step_scale: &mut F,
         window_start: usize,
         new_duration: &mut F,
@@ -1206,6 +1210,7 @@ impl<const N: usize, F: KinScalar> WaypointSolver<N, F> {
         let dbl_eps = from_f::<F>(f64::EPSILON);
         for _iteration in 0..8usize {
             let mut window_valid = true;
+            #[allow(clippy::needless_range_loop)]
             for dof_idx in 0..N {
                 let limits_left = self.segment_limits[window_start][dof_idx];
                 let limits_right = self.segment_limits[window_start + 1][dof_idx];

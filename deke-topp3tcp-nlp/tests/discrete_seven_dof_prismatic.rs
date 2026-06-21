@@ -23,9 +23,9 @@ fn seven_dof_curved_with_tcp_solves_and_is_feasible() {
         a_max: 10.0,
         j_max: 500.0,
     });
-    let mut validator = common::wide_validator::<7>();
+    let validator = common::wide_validator::<7>();
 
-    let (result, diag) = Topp3Tcp6Discrete::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let (result, diag) = Topp3Tcp6Discrete::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("{}", diag);
     assert!(result.is_ok(), "7-DOF retime failed: {}", diag);
     assert_eq!(diag.status, SolveStatus::Success);
@@ -50,9 +50,9 @@ fn seven_dof_locked_rail_acts_like_6dof() {
 
     let mut cfg = Topp3Tcp6DiscreteConstraints::<7>::symmetric(1.5, 8.0, 400.0);
     cfg.locked_prefix = 1;
-    let mut validator = common::wide_validator::<7>();
+    let validator = common::wide_validator::<7>();
 
-    let (result, diag) = Topp3Tcp6Discrete::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let (result, diag) = Topp3Tcp6Discrete::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("{}", diag);
     let traj = result.expect("locked-rail retime failed");
     assert_eq!(diag.status, SolveStatus::Success);
@@ -86,9 +86,9 @@ fn seven_dof_rail_dominant_motion() {
         j_max: 250.0,
     });
     cfg.solver.max_iterations = 3_000;
-    let mut validator = common::wide_validator::<7>();
+    let validator = common::wide_validator::<7>();
 
-    let (result, diag) = Topp3Tcp6Discrete::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let (result, diag) = Topp3Tcp6Discrete::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("{}", diag);
     assert!(result.is_ok(), "rail-dominant retime failed: {}", diag);
     assert_eq!(diag.status, SolveStatus::Success);

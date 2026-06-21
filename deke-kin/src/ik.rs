@@ -197,7 +197,7 @@ pub(crate) fn resolve_ik<const N: usize, F: KinScalar>(
                 effective_dof: N,
                 reason,
             },
-            spec: spec.clone(),
+            spec,
             limits: limits.clone(),
             roles,
             wrap: wrap.clone(),
@@ -212,6 +212,7 @@ pub(crate) fn resolve_ik<const N: usize, F: KinScalar>(
     // Free joints must be revolute and number ≤ 6.
     let mut free_dof = 0usize;
     let mut discrete = 0usize;
+    #[allow(clippy::needless_range_loop)]
     for i in 0..N {
         match roles[i] {
             Role::Free => {
@@ -341,15 +342,12 @@ fn solve_ruled<const N: usize>(r: &IkResolved<N>, target: &DMat4) -> Vec<[f64; N
         }
 
         // Cheap reach prune for a prismatic discrete first axis.
-        if let Some(reach) = reach {
-            if discrete_axes.first() == Some(&0)
+        if let Some(reach) = reach
+            && discrete_axes.first() == Some(&0)
                 && matches!(r.spec.joints[0].1, JointSpec::Prismatic { .. })
-            {
-                if !within_reach(r, &frozen, target, reach) {
+                && !within_reach(r, &frozen, target, reach) {
                     return;
                 }
-            }
-        }
 
         for full in solve_reduced(r, &frozen, target) {
             push_filtered(r, full, &mut out);
@@ -411,10 +409,10 @@ fn joint_tf(j: &(DAffine3, JointSpec<f64>), q: f64) -> DAffine3 {
 /// Full forward kinematics of an f64 [`KinSpec`] at configuration `q`.
 fn kinspec_fk<const N: usize>(spec: &KinSpec<f64, N>, q: &[f64; N]) -> DMat4 {
     let mut t = spec.base_to_first;
-    for i in 0..N {
-        t = t * joint_tf(&spec.joints[i], q[i]);
+    for (joint, &qi) in spec.joints.iter().zip(q.iter()) {
+        t *= joint_tf(joint, qi);
     }
-    t = t * spec.end_to_ee;
+    t *= spec.end_to_ee;
     DMat4::from(t)
 }
 
@@ -432,7 +430,7 @@ fn reduced_screws(
     let mut origins = Vec::with_capacity(n);
     let mut current = base;
     for j in joints {
-        current = current * j.0;
+        current *= j.0;
         origins.push(current.translation);
         let axis = match j.1 {
             JointSpec::Revolute { axis_local } => axis_local.normalize(),
@@ -460,18 +458,18 @@ fn reduced_screws(
 /// A frozen revolute folds in as a fixed rotation and a frozen prismatic as a
 /// fixed translation — the "fold a fixed axis into the next link as a static
 /// offset" optimization, generalized to linear axes.
-fn fold<const N: usize>(
-    spec: &KinSpec<f64, N>,
-    frozen: &[Option<f64>; N],
-) -> (Vec<(DAffine3, JointSpec<f64>)>, Vec<usize>, DAffine3, DAffine3) {
+type FoldedChain = (Vec<(DAffine3, JointSpec<f64>)>, Vec<usize>, DAffine3, DAffine3);
+
+fn fold<const N: usize>(spec: &KinSpec<f64, N>, frozen: &[Option<f64>; N]) -> FoldedChain {
     let mut joints: Vec<(DAffine3, JointSpec<f64>)> = Vec::new();
     let mut free_idx: Vec<usize> = Vec::new();
     let mut pending = spec.base_to_first;
     let mut base = spec.base_to_first;
     let mut prefix_set = false;
+    #[allow(clippy::needless_range_loop)]
     for i in 0..N {
         match frozen[i] {
-            Some(v) => pending = pending * joint_tf(&spec.joints[i], v),
+            Some(v) => pending *= joint_tf(&spec.joints[i], v),
             None => {
                 let origin = if prefix_set {
                     pending * spec.joints[i].0
@@ -570,6 +568,7 @@ fn solve_reduced<const N: usize>(
 
 /// Append `full` to `out` iff it lies within joint limits and is not a duplicate.
 fn push_filtered<const N: usize>(r: &IkResolved<N>, full: [f64; N], out: &mut Vec<[f64; N]>) {
+    #[allow(clippy::needless_range_loop)]
     for i in 0..N {
         if full[i] < r.limits.lower[i] - 1e-9 || full[i] > r.limits.upper[i] + 1e-9 {
             return;
@@ -634,7 +633,7 @@ fn reduced_max_reach<const N: usize>(r: &IkResolved<N>) -> Option<f64> {
     let mut prev = DVec3::ZERO;
     let mut cur = DAffine3::IDENTITY;
     for (k, j) in joints.iter().enumerate() {
-        cur = cur * j.0;
+        cur *= j.0;
         if k > 0 {
             total += (cur.translation - prev).length();
         }

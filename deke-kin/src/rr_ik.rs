@@ -96,6 +96,7 @@ type M4 = [[f64; 4]; 4];
 
 fn m4_identity() -> M4 {
     let mut m = [[0.0; 4]; 4];
+    #[allow(clippy::needless_range_loop)]
     for i in 0..4 {
         m[i][i] = 1.0;
     }
@@ -126,8 +127,8 @@ fn m4_inv_se3(t: &M4) -> M4 {
     }
     for i in 0..3 {
         let mut s = 0.0;
-        for k in 0..3 {
-            s += t[k][i] * t[k][3];
+        for row in t.iter().take(3) {
+            s += row[i] * row[3];
         }
         o[i][3] = -s;
     }
@@ -304,6 +305,7 @@ fn gauss_solve<const N: usize, const M: usize>(
 fn gram_det(q: &SMat<14, 8>, rows: impl Iterator<Item = usize>, k: usize) -> f64 {
     let mut s = [[0.0f64; 8]; 8];
     for (a, r) in rows.enumerate() {
+        #[allow(clippy::needless_range_loop)]
         for j in 0..8 {
             s[a][j] = q.at(r, j);
         }
@@ -311,10 +313,7 @@ fn gram_det(q: &SMat<14, 8>, rows: impl Iterator<Item = usize>, k: usize) -> f64
     let mut g = [[0.0f64; 8]; 8];
     for a in 0..k {
         for b in 0..k {
-            let mut acc = 0.0;
-            for j in 0..8 {
-                acc += s[a][j] * s[b][j];
-            }
+            let acc: f64 = s[a].iter().zip(s[b].iter()).map(|(x, y)| x * y).sum();
             g[a][b] = acc;
         }
     }
@@ -324,6 +323,7 @@ fn gram_det(q: &SMat<14, 8>, rows: impl Iterator<Item = usize>, k: usize) -> f64
     for col in 0..k {
         let mut piv = col;
         let mut best = g[col][col].abs();
+        #[allow(clippy::needless_range_loop)]
         for r in (col + 1)..k {
             let v = g[r][col].abs();
             if v > best {
@@ -344,6 +344,7 @@ fn gram_det(q: &SMat<14, 8>, rows: impl Iterator<Item = usize>, k: usize) -> f64
             if f == 0.0 {
                 continue;
             }
+            #[allow(clippy::needless_range_loop)]
             for j in col..k {
                 g[r][j] -= f * g[col][j];
             }
@@ -475,11 +476,11 @@ fn feature_matrix() -> SMat<17, 17> {
     for (i, s) in SAMPLE_ANGLES.iter().enumerate() {
         let a = m45(s[2], s[3]);
         let b = m12(s[0], s[1]);
-        for j in 0..9 {
-            f.set(i, j, a[j]);
+        for (j, &aj) in a.iter().enumerate() {
+            f.set(i, j, aj);
         }
-        for j in 0..8 {
-            f.set(i, 9 + j, -b[j]);
+        for (j, &bj) in b.iter().enumerate() {
+            f.set(i, 9 + j, -bj);
         }
     }
     f
@@ -493,8 +494,8 @@ fn pq_at_x3(c: &[M4; 6], target: &M4, x3: f64, finv_solver: &FInv) -> (SMat<14, 
     for (i, s) in SAMPLE_ANGLES.iter().enumerate() {
         let q = [s[0], s[1], theta3, s[2], s[3], 0.0];
         let e = eqs14(c, target, &q);
-        for j in 0..14 {
-            y.set(i, j, e[j]);
+        for (j, &ej) in e.iter().enumerate() {
+            y.set(i, j, ej);
         }
     }
     let coeff = finv_solver.apply(&y); // (17×14) = F⁻¹ Y
@@ -964,8 +965,8 @@ fn solve_x4x5(e9: &SMat<6, 9>) -> Vec<(f64, f64)> {
                     let mut worst = 0.0f64;
                     for rr in 0..6 {
                         let mut s = 0.0;
-                        for k in 0..9 {
-                            s += e9.at(rr, k) * vec[k];
+                        for (k, &vk) in vec.iter().enumerate() {
+                            s += e9.at(rr, k) * vk;
                         }
                         worst = worst.max(s.abs());
                     }
@@ -985,8 +986,8 @@ fn recover_theta12(p: &SMat<14, 9>, q: &SMat<14, 8>, t4: f64, t5: f64) -> (f64, 
     let mut rhs = SMat::<14, 1>::zeros();
     for k in 0..14 {
         let mut s = 0.0;
-        for j in 0..9 {
-            s += p.at(k, j) * m[j];
+        for (j, &mj) in m.iter().enumerate() {
+            s += p.at(k, j) * mj;
         }
         rhs.set(k, 0, s);
     }
@@ -1199,7 +1200,7 @@ pub fn solve_kinspec(
         &m4_inv_se3(&e),
     );
     let sols = solve_screw(&c, &target, cfg);
-    Ok(sols.into_iter().map(|q| SRobotQ::<6, f64>::from_array(q)).collect())
+    Ok(sols.into_iter().map(SRobotQ::<6, f64>::from_array).collect())
 }
 
 #[cfg(test)]
@@ -1227,6 +1228,7 @@ mod tests {
     /// Published Raghavan–Roth (1990) numerical example. DH (a, alpha, d) and EE
     /// pose from the ambuj-Shahi `example1` test vector; the paper reports 16
     /// solutions, two of which are real.
+    #[allow(clippy::approx_constant)] // published DH twist values, not an approximation of π/4
     fn rr1990() -> ([DhJoint; 6], M4) {
         let a = [0.8, 1.2, 0.33, 1.8, 0.6, 2.2];
         let alpha = [0.349066, 0.541052, 0.785398, 1.41372, 0.20944, 1.74533];
@@ -1356,15 +1358,15 @@ mod tests {
         // KinSpec FK (mirrors deke_types forward_pass) to build the target.
         let kinspec_fk = |q: &[f64; 6]| -> DMat4 {
             let mut t = spec.base_to_first;
-            for i in 0..6 {
-                t = t * spec.joints[i].0;
-                let axis = match spec.joints[i].1 {
+            for (joint, &qi) in spec.joints.iter().zip(q.iter()) {
+                t *= joint.0;
+                let axis = match joint.1 {
                     JointSpec::Revolute { axis_local } => axis_local.normalize(),
                     JointSpec::Prismatic { .. } => unreachable!(),
                 };
-                t = t * DAffine3::from_axis_angle(axis, q[i]);
+                t *= DAffine3::from_axis_angle(axis, qi);
             }
-            t = t * spec.end_to_ee;
+            t *= spec.end_to_ee;
             DMat4::from(t)
         };
 

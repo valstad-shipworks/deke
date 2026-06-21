@@ -62,7 +62,7 @@ pub fn remodel_kinematics(
 
         let mut i = 0usize;
         while i < n_h.saturating_sub(4) {
-            p0 = p0 + p_new[i];
+            p0 += p_new[i];
             if do_axes_intersect(&h[i], &h[i + 1], &p[i + 1], zero_threshold, axis_intersect_threshold) {
                 let p0_i1 = p0;
                 let intersection = calc_intersection(&h[i], &h[i + 1], &p0_i1, &p[i + 1], zero_threshold);
@@ -75,7 +75,7 @@ pub fn remodel_kinematics(
                 {
                     p_new[j] = DVec3::ZERO;
                     j += 1;
-                    p0j = p0j + p[j];
+                    p0j += p[j];
                 }
                 let p_new_i = p_new[i];
                 p_new[i] = intersection - (p0_i1 - p_new_i);
@@ -86,11 +86,11 @@ pub fn remodel_kinematics(
             i += 1;
         }
 
-        p0 = p0 + p[n_h - 4];
+        p0 += p[n_h - 4];
 
         let mut i = n_h - 3;
         while i < n_h - 1 {
-            p0 = p0 + p_new[i];
+            p0 += p_new[i];
             if do_axes_intersect(&h[i], &h[i + 1], &p[i + 1], zero_threshold, axis_intersect_threshold) {
                 let p0_i1 = p0;
                 let intersection = calc_intersection(
@@ -109,7 +109,7 @@ pub fn remodel_kinematics(
                 {
                     p_new[j] = DVec3::ZERO;
                     j += 1;
-                    p0_j_plus_1 = p0_j_plus_1 + p[j];
+                    p0_j_plus_1 += p[j];
                 }
 
                 let p_new_i = p_new[i];
@@ -124,7 +124,7 @@ pub fn remodel_kinematics(
         let mut p0 = DVec3::ZERO;
         let mut i = 0usize;
         while i + 1 < n_h {
-            p0 = p0 + p_new[i];
+            p0 += p_new[i];
             if do_axes_intersect(&h[i], &h[i + 1], &p[i + 1], zero_threshold, axis_intersect_threshold) {
                 let p0_i1 = p0;
                 let intersection = calc_intersection(
@@ -147,7 +147,7 @@ pub fn remodel_kinematics(
                     p_new[j] = DVec3::ZERO;
                     j += 1;
                     if j < p.len() {
-                        p0_j_plus_1 = p0_j_plus_1 + p[j];
+                        p0_j_plus_1 += p[j];
                     }
                 }
 
@@ -175,7 +175,7 @@ pub fn normalise_axes(h: &mut [DVec3]) {
     for v in h.iter_mut() {
         let n = v.length();
         if n > 0.0 {
-            *v = *v / n;
+            *v /= n;
         }
     }
 }

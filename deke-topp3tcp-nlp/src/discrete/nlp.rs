@@ -203,7 +203,7 @@ fn build_and_solve_discrete_inner<const N: usize>(
         return Err(DekeError::PathTooShort(m));
     }
     let s_total = deriv.total_length();
-    if !(s_total > 0.0) {
+    if !matches!(s_total.partial_cmp(&0.0), Some(std::cmp::Ordering::Greater)) {
         return Err(DekeError::PathTooShort(m));
     }
     let lock = constraints.locked_prefix.min(N);
@@ -346,8 +346,8 @@ fn build_and_solve_discrete_inner<const N: usize>(
         let tan_cutoff_sq = 1e-12 * max_tan_sq;
 
         for i in 1..k_samples {
-            if let Some(row) = tcp_stencil_coeffs(deriv, &bins, i, 1, tan_cutoff_sq) {
-                if tcp.v_max.is_finite() && tcp.v_max > 0.0 {
+            if let Some(row) = tcp_stencil_coeffs(deriv, &bins, i, 1, tan_cutoff_sq)
+                && tcp.v_max.is_finite() && tcp.v_max > 0.0 {
                     let rhs = tcp.v_max * h;
                     let up = build_row_expr(&sigma, &row, slack, with_slacks, 1.0, rhs);
                     subject_to!(problem, up <= rhs);
@@ -355,11 +355,10 @@ fn build_and_solve_discrete_inner<const N: usize>(
                     subject_to!(problem, lo <= rhs);
                     counts.tcp_v += 2;
                 }
-            }
         }
         for i in 2..k_samples {
-            if let Some(row) = tcp_stencil_coeffs(deriv, &bins, i, 2, tan_cutoff_sq) {
-                if tcp.a_max.is_finite() && tcp.a_max > 0.0 {
+            if let Some(row) = tcp_stencil_coeffs(deriv, &bins, i, 2, tan_cutoff_sq)
+                && tcp.a_max.is_finite() && tcp.a_max > 0.0 {
                     let rhs = tcp.a_max * h2;
                     let up = build_row_expr(&sigma, &row, slack, with_slacks, 1.0, rhs);
                     subject_to!(problem, up <= rhs);
@@ -367,11 +366,10 @@ fn build_and_solve_discrete_inner<const N: usize>(
                     subject_to!(problem, lo <= rhs);
                     counts.tcp_a += 2;
                 }
-            }
         }
         for i in 3..k_samples {
-            if let Some(row) = tcp_stencil_coeffs(deriv, &bins, i, 3, tan_cutoff_sq) {
-                if tcp.j_max.is_finite() && tcp.j_max > 0.0 {
+            if let Some(row) = tcp_stencil_coeffs(deriv, &bins, i, 3, tan_cutoff_sq)
+                && tcp.j_max.is_finite() && tcp.j_max > 0.0 {
                     let rhs = tcp.j_max * h3;
                     let up = build_row_expr(&sigma, &row, slack, with_slacks, 1.0, rhs);
                     subject_to!(problem, up <= rhs);
@@ -379,7 +377,6 @@ fn build_and_solve_discrete_inner<const N: usize>(
                     subject_to!(problem, lo <= rhs);
                     counts.tcp_j += 2;
                 }
-            }
         }
     }
 
@@ -411,7 +408,10 @@ fn build_and_solve_discrete_inner<const N: usize>(
                 j_star = j;
             }
         }
-        if !(sec_star > qp_cutoffs[j_star]) {
+        if !matches!(
+            sec_star.partial_cmp(&qp_cutoffs[j_star]),
+            Some(std::cmp::Ordering::Greater)
+        ) {
             continue;
         }
         let (sd_t, sdd_t) = match side {

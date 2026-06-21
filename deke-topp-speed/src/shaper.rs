@@ -272,6 +272,7 @@ fn enforce_tcp_speed_limit_per_section<const N: usize, F: KinScalar, FK: Continu
     let global_predicted = baseline_duration * global_scale;
     let per_section_predicted = {
         let mut sum = zero;
+        #[allow(clippy::needless_range_loop)]
         for sec_idx in 0..n_sections {
             let start_t = if sec_idx == 0 {
                 zero
@@ -407,8 +408,7 @@ fn sample_section_tcp_peaks<const N: usize, F: KinScalar, FK: ContinuousFKChain<
         for _ in 0..=SAMPLES_PER_SECTION {
             let (pose, vel, _, _, _) = plan.sample_at(t);
             let jac = fk
-                .jacobian(&pose)
-                .map_err(|e| -> DekeError { e.into() })?;
+                .jacobian(&pose)?;
             let mut vx = zero;
             let mut vy = zero;
             let mut vz = zero;
@@ -449,8 +449,7 @@ fn sample_overall_tcp_peak<const N: usize, F: KinScalar, FK: ContinuousFKChain<N
     for _ in 0..=n {
         let (pose, vel, _, _, _) = plan.sample_at(t);
         let jac = fk
-            .jacobian(&pose)
-            .map_err(|e| -> DekeError { e.into() })?;
+            .jacobian(&pose)?;
         let mut vx = zero;
         let mut vy = zero;
         let mut vz = zero;

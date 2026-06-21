@@ -135,17 +135,16 @@ impl<const N: usize, F: KinScalar> Plan<N, F> {
                 .profiles
                 .last()
                 .expect("Plan always has at least one section");
-            for dof_idx in 0..N {
-                let halt_dur = last[dof_idx].halt.duration;
+            for (dof_idx, seg) in last.iter().enumerate() {
+                let halt_dur = seg.halt.duration;
                 let t_offset = if self.profiles.len() > 1 {
                     // The end of the section before the last.
                     self.intermediate_durations[self.intermediate_durations.len() - 2]
                 } else {
                     halt_dur
                 };
-                let dt = t - (t_offset + last[dof_idx].duration);
-                let end_state =
-                    KinThirdPose::new(last[dof_idx].p[7], last[dof_idx].v[7], last[dof_idx].a[7]);
+                let dt = t - (t_offset + seg.duration);
+                let end_state = KinThirdPose::new(seg.p[7], seg.v[7], seg.a[7]);
                 let final_state = end_state.next(dt, F::zero());
                 Self::write_state(
                     dof_idx,
@@ -501,8 +500,8 @@ impl<const N: usize, F: KinScalar> Plan<N, F> {
             *end_t = *end_t * time_scale;
         }
         for section in self.profiles.iter_mut() {
-            for dof_idx in 0..N {
-                section[dof_idx].scale(position_scale, time_scale);
+            for seg in section.iter_mut() {
+                seg.scale(position_scale, time_scale);
             }
         }
         for dof_idx in 0..N {

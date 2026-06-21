@@ -24,6 +24,8 @@
 //!   `boundary_slack_usage.end_sdd` near `boundary_slack`.
 //! - **Path geometry** → `path_stats.segment_length_ratio` huge.
 
+#![allow(clippy::approx_constant)] // URDF fixture RPY data, not the math constant
+
 // Two-stage / build_and_solve / boundary internal APIs are continuous-time
 // specific; the discrete crate's bisection driver replaces them. The
 // `two_stage_solve` helper from the original file was dropped during port.
@@ -167,8 +169,8 @@ fn run_external_traj(
             return false;
         }
     };
-    let mut validator = wide_validator();
-    let (result, diag) = Topp3Tcp6Discrete::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = wide_validator();
+    let (result, diag) = Topp3Tcp6Discrete::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("[{name}] diagnostic:\n{diag}");
     if let Err(e) = &result {
         eprintln!("[{name}] retime returned error: {e}");
@@ -447,7 +449,7 @@ fn bench_multi_seg_50wp_is_deterministic_within_binary() {
     let waypoints = bench_multi_seg_50wp_waypoints();
     let fk = external_chain();
     let cfg = external_cfg();
-    let mut validator = wide_validator();
+    let validator = wide_validator();
 
     let mut prev = None::<deke_topp3tcp_nlp::discrete::Topp3Tcp6DiscreteDiagnostic>;
     // Reduced from the original crate's 5 runs to 3: each retime of the 50wp
@@ -456,7 +458,7 @@ fn bench_multi_seg_50wp_is_deterministic_within_binary() {
     // drift that takes longer to surface.
     for run in 0..3 {
         let path = SRobotPath::<6, f64>::try_new(waypoints.clone()).unwrap();
-        let (_result, diag) = Topp3Tcp6Discrete::new(&fk).retime(&cfg, &path, &mut validator, &());
+        let (_result, diag) = Topp3Tcp6Discrete::new(&fk).retime(&cfg, &path, &validator, &());
         eprintln!(
             "run {}: status={:?} iter={} final_k={} fd_jv={:.6e}",
             run,
@@ -792,8 +794,8 @@ fn probe_2wp_long_chord_f32_fk() {
         ]),
     ];
     let path = SRobotPath::<6, f64>::try_new(waypoints).unwrap();
-    let mut validator = wide_validator();
-    let (result, diag) = Topp3Tcp6Discrete::new(&fk).retime(&external_cfg(), &path, &mut validator, &());
+    let validator = wide_validator();
+    let (result, diag) = Topp3Tcp6Discrete::new(&fk).retime(&external_cfg(), &path, &validator, &());
     eprintln!("[probe_2wp_long_chord_f32_fk] {}", diag);
     assert!(result.is_ok(), "f32 FK probe failed");
 }

@@ -263,11 +263,10 @@ pub fn subproblem5(
             let v1 = a_1.mul_vec2(sc1) + p1_s;
             let v3 = a_3.mul_vec2(sc3) + p3_s;
 
-            if ((v1 - *k2 * h).length() - (v3 - *k2 * h).length()).abs() < 1e-6 {
-                if let Some(theta2_value) = subproblem1(&v3, &v1, k2) {
+            if ((v1 - *k2 * h).length() - (v3 - *k2 * h).length()).abs() < 1e-6
+                && let Some(theta2_value) = subproblem1(&v3, &v1, k2) {
                     theta.push((sc1.x.atan2(sc1.y), theta2_value, sc3.x.atan2(sc3.y)));
                 }
-            }
         }
     }
 
@@ -357,6 +356,7 @@ pub fn subproblem6(
     // after orthogonalising against q3 as q4. Standard Gram-Schmidt on a 2D null space.
     let mut idx_max = 0;
     let mut max_norm = candidates[0].length_squared();
+    #[allow(clippy::needless_range_loop)]
     for i in 1..4 {
         let n = candidates[i].length_squared();
         if n > max_norm {
@@ -368,6 +368,7 @@ pub fn subproblem6(
 
     let mut q4_candidate = DVec4::ZERO;
     let mut max_perp_norm = 0.0;
+    #[allow(clippy::needless_range_loop)]
     for i in 0..4 {
         if i == idx_max {
             continue;

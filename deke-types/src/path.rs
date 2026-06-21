@@ -55,6 +55,10 @@ impl<const N: usize, F: Float> SRobotPath<N, F> {
         self.waypoints.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.waypoints.is_empty()
+    }
+
     pub fn get(&self, index: usize) -> Option<&SRobotQ<N, F>> {
         self.waypoints.get(index)
     }
@@ -556,8 +560,6 @@ fn srdp_mark<const N: usize, F: Float>(
         srdp_mark(pts, start, max_idx, tol, keep);
         srdp_mark(pts, max_idx, end, tol, keep);
     } else {
-        for k in (start + 1)..end {
-            keep[k] = false;
-        }
+        keep[(start + 1)..end].fill(false);
     }
 }

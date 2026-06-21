@@ -11,7 +11,7 @@ valuable = ["dep:valuable", "deke-types/valuable", "glam-traits-ext/Valuable"]
 
 [dependencies]
 deke-types = { version = "2.0" }
-deke-topp-speed = { path = "../deke-topp-speed" }
+deke-topp-speed = { version = "2.0", path = "../deke-topp-speed" }
 glam-traits-ext = { version = "0.32.3", features = ["approx"] }
 sleipnir = { git = "https://github.com/oh-yes-0-fps/Sleipnir.git", branch = "rust-with-regularized-ldlt-patch", default-features = false }
 ndarray = { version = "0.17.2", features = ["approx"] }

@@ -16,9 +16,9 @@ fn multi_waypoint_curved_path_solves_and_is_feasible() {
     let path = SRobotPath::<6, f64>::try_new(waypoints).unwrap();
 
     let cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 8.0, 400.0);
-    let mut validator = common::wide_validator::<6>();
+    let validator = common::wide_validator::<6>();
 
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("{}", diag);
     assert!(result.is_ok(), "retime failed: {}", diag);
     assert_eq!(diag.status, SolveStatus::Success);

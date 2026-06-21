@@ -31,8 +31,8 @@ fn corner_180_reversal_single_joint() {
     .unwrap();
 
     let cfg = Topp3Tcp6Constraints::<1>::symmetric(1.0, 2.0, 50.0);
-    let mut validator = common::wide_validator::<1>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<1>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("180° reversal:\n{}", diag);
     assert!(result.is_ok(), "180° reversal retime failed: {}", diag);
 }
@@ -57,8 +57,8 @@ fn sharp_90_corner_with_tight_tcp_a() {
         a_max: 1.5,
         j_max: 50.0,
     });
-    let mut validator = common::wide_validator::<6>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("sharp 90° corner with tight TCP a:\n{}", diag);
     assert!(result.is_ok(), "sharp corner retime failed: {}", diag);
 }
@@ -76,8 +76,8 @@ fn zigzag_pattern() {
     let path = SRobotPath::<1, f64>::try_new(wps).unwrap();
 
     let cfg = Topp3Tcp6Constraints::<1>::symmetric(1.0, 5.0, 200.0);
-    let mut validator = common::wide_validator::<1>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<1>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("zigzag pattern:\n{}", diag);
     assert!(result.is_ok(), "zigzag retime failed: {}", diag);
 }
@@ -100,8 +100,8 @@ fn wrist_only_rotation_with_tcp_bounds() {
         a_max: 5.0,
         j_max: 200.0,
     });
-    let mut validator = common::wide_validator::<6>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("wrist-only with TCP bounds:\n{}", diag);
     assert!(result.is_ok(), "wrist-only retime failed: {}", diag);
 }
@@ -126,8 +126,8 @@ fn through_elbow_singularity() {
         a_max: 5.0,
         j_max: 200.0,
     });
-    let mut validator = common::wide_validator::<6>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("through elbow singularity:\n{}", diag);
     assert!(result.is_ok(), "singular path retime failed: {}", diag);
 }
@@ -151,8 +151,8 @@ fn all_limits_simultaneously_tight() {
         a_max: 2.0,
         j_max: 30.0,
     });
-    let mut validator = common::wide_validator::<6>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("all limits tight:\n{}", diag);
     assert!(result.is_ok(), "all-tight retime failed: {}", diag);
 }
@@ -180,8 +180,8 @@ fn long_path_many_waypoints() {
     // PCHIP zeros the slope at every detected extremum; sin/cos-rich long paths have many
     // pseudo-corners and need a higher IPM budget than the default 1500 to converge.
     cfg.solver.max_iterations = 3000;
-    let mut validator = common::wide_validator::<6>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("long path 50 waypoints:\n{}", diag);
     assert!(result.is_ok(), "long path retime failed: {}", diag);
 }
@@ -199,8 +199,8 @@ fn microscopic_path_length() {
     let path = SRobotPath::<6, f64>::try_new(vec![a, b]).unwrap();
 
     let cfg = Topp3Tcp6Constraints::<6>::symmetric(1.0, 5.0, 200.0);
-    let mut validator = common::wide_validator::<6>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("microscopic path:\n{}", diag);
     assert!(result.is_ok(), "tiny path retime failed: {}", diag);
 }
@@ -219,8 +219,8 @@ fn near_duplicate_waypoints() {
     let path = SRobotPath::<6, f64>::try_new(vec![a, b, c]).unwrap();
 
     let cfg = Topp3Tcp6Constraints::<6>::symmetric(1.0, 5.0, 200.0);
-    let mut validator = common::wide_validator::<6>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("near-duplicate waypoints:\n{}", diag);
     assert!(result.is_ok(), "near-dup retime failed: {}", diag);
 }
@@ -245,8 +245,8 @@ fn high_velocity_boundary() {
         a_end: SRobotQ::from_array([0.0]),
         projection_tolerance: 1e-3,
     };
-    let mut validator = common::wide_validator::<1>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<1>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("high-velocity boundary:\n{}", diag);
     assert!(result.is_ok(), "high-v boundary retime failed: {}", diag);
 }
@@ -269,8 +269,8 @@ fn accelerated_start_boundary() {
         a_end: SRobotQ::zeros(),
         projection_tolerance: 1e-3,
     };
-    let mut validator = common::wide_validator::<1>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<1>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("accelerated start boundary:\n{}", diag);
     assert!(result.is_ok(), "a_start retime failed: {}", diag);
 }
@@ -294,8 +294,8 @@ fn rail_dominant_with_tiny_arm_motion() {
         a_max: 10.0,
         j_max: 500.0,
     });
-    let mut validator = common::wide_validator::<7>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<7>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("rail-dominant + tiny arm:\n{}", diag);
     assert!(result.is_ok(), "rail-dominant retime failed: {}", diag);
 }
@@ -317,8 +317,8 @@ fn asymmetric_joint_limits() {
     cfg.joint.v_max = SRobotQ::from_array([0.3, 0.3, 0.5, 1.0, 2.0, 5.0]);
     cfg.joint.a_max = SRobotQ::from_array([1.0, 1.0, 2.0, 5.0, 10.0, 30.0]);
     cfg.joint.j_max = SRobotQ::from_array([20.0, 20.0, 50.0, 100.0, 300.0, 1000.0]);
-    let mut validator = common::wide_validator::<6>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("asymmetric joint limits:\n{}", diag);
     assert!(result.is_ok(), "asymmetric limits retime failed: {}", diag);
 }
@@ -343,8 +343,8 @@ fn extremely_tight_tcp_jerk() {
         a_max: f64::INFINITY,
         j_max: 2.0, // very tight
     });
-    let mut validator = common::wide_validator::<6>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("extremely tight TCP jerk:\n{}", diag);
     assert!(result.is_ok(), "tight TCP jerk retime failed: {}", diag);
 }
@@ -367,8 +367,8 @@ fn single_joint_per_segment_rotation() {
     ];
     let path = SRobotPath::<6, f64>::try_new(wps).unwrap();
     let cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 5.0, 200.0);
-    let mut validator = common::wide_validator::<6>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("single-joint per segment:\n{}", diag);
     assert!(result.is_ok(), "axis-flipping retime failed: {}", diag);
 }
@@ -385,11 +385,11 @@ fn tight_validator_bounds() {
     .unwrap();
 
     let cfg = Topp3Tcp6Constraints::<6>::symmetric(1.0, 5.0, 200.0);
-    let mut validator = JointValidator::<6, f64>::new(
+    let validator = JointValidator::<6, f64>::new(
         SRobotQ::from_array([-1.0, -2.0, -2.0, -2.0, -2.0, -2.0]),
         SRobotQ::from_array([1.0, 2.0, 2.0, 2.0, 2.0, 2.0]),
     );
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("tight validator bounds:\n{}", diag);
     assert!(result.is_ok(), "tight validator retime failed: {}", diag);
 }
@@ -407,8 +407,8 @@ fn smoke_easy_baseline() {
     ])
     .unwrap();
     let cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 5.0, 200.0);
-    let mut validator = common::wide_validator::<6>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("baseline:\n{}", diag);
     assert!(result.is_ok());
     assert_eq!(diag.status, SolveStatus::Success);
@@ -440,8 +440,8 @@ fn helical_tcp_path_with_tight_a() {
         a_max: 1.0,
         j_max: 50.0,
     });
-    let mut validator = common::wide_validator::<6>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("helical TCP path:\n{}", diag);
     assert!(result.is_ok(), "helical retime failed: {}", diag);
 }
@@ -459,8 +459,8 @@ fn very_high_output_sample_rate() {
     .unwrap();
     let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 5.0, 200.0);
     cfg.sample_rate_hz = 10_000.0;
-    let mut validator = common::wide_validator::<6>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("10 kHz output:\n{}", diag);
     let traj = result.expect("10 kHz retime failed");
     assert!(traj.len() > 5_000, "expected >5k output samples, got {}", traj.len());
@@ -478,8 +478,8 @@ fn very_low_output_sample_rate() {
     .unwrap();
     let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 5.0, 200.0);
     cfg.sample_rate_hz = 5.0;
-    let mut validator = common::wide_validator::<6>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("5 Hz output:\n{}", diag);
     let traj = result.expect("5 Hz retime failed");
     assert!(traj.len() >= 2, "need at least 2 output samples, got {}", traj.len());
@@ -515,8 +515,8 @@ fn closed_loop_returns_to_start() {
     // out of scope. Cap iter low so this test fails fast instead of grinding for a
     // minute every CI run.
     cfg.solver.max_iterations = 400;
-    let mut validator = common::wide_validator::<6>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("closed loop:\n{}", diag);
     assert!(result.is_ok(), "closed loop retime failed: {}", diag);
 }
@@ -531,8 +531,8 @@ fn zero_length_path_rejected_by_retimer() {
     let q = SRobotQ::<6, f64>::from_array([0.0, -1.0, 1.2, 0.0, 0.0, 0.0]);
     let path = SRobotPath::<6, f64>::try_new(vec![q, q]).unwrap();
     let cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 5.0, 200.0);
-    let mut validator = common::wide_validator::<6>();
-    let (result, _diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, _diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     match result {
         Err(deke_types::DekeError::DuplicateWaypoints) => {}
         Err(deke_types::DekeError::PathTooShort(_)) => {}
@@ -554,8 +554,8 @@ fn locked_prefix_equals_chain_length() {
     let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(1.0, 5.0, 200.0);
     cfg.locked_prefix = 6; // every joint locked
 
-    let mut validator = common::wide_validator::<6>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("locked_prefix=N:\n{}", diag);
     // First joint moves 0.001 but is locked; this should be a `LockedPrefixViolation`.
     match result {
@@ -589,8 +589,8 @@ fn densification_disabled_long_sparse_path() {
     let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 5.0, 200.0);
     cfg.densification.max_segment_step = None;
     cfg.densification.min_samples = 0;
-    let mut validator = common::wide_validator::<6>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("densification disabled:\n{}", diag);
     assert!(result.is_ok(), "densification-off retime failed: {}", diag);
 }
@@ -621,8 +621,8 @@ fn multi_frequency_joint_motion() {
     let path = SRobotPath::<6, f64>::try_new(wps).unwrap();
     let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 5.0, 200.0);
     cfg.solver.max_iterations = 500; // fail fast
-    let mut validator = common::wide_validator::<6>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("multi-freq joint motion:\n{}", diag);
     assert!(result.is_ok(), "multi-freq retime failed: {}", diag);
 }
@@ -642,8 +642,8 @@ fn cusp_with_direction_change() {
     ])
     .unwrap();
     let cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 5.0, 200.0);
-    let mut validator = common::wide_validator::<6>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("cusp:\n{}", diag);
     assert!(result.is_ok(), "cusp retime failed: {}", diag);
 }
@@ -661,8 +661,8 @@ fn tight_solver_tolerance() {
     .unwrap();
     let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 5.0, 200.0);
     cfg.solver.tolerance = 1e-10;
-    let mut validator = common::wide_validator::<6>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("tight tolerance:\n{}", diag);
     assert!(result.is_ok(), "tight tolerance retime failed: {}", diag);
 }
@@ -680,8 +680,8 @@ fn boundary_slack_disabled() {
     .unwrap();
     let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 5.0, 200.0);
     cfg.solver.boundary_slack = 0.0;
-    let mut validator = common::wide_validator::<6>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("boundary slack=0:\n{}", diag);
     assert!(result.is_ok(), "hard-boundary retime failed: {}", diag);
 }
@@ -699,8 +699,8 @@ fn one_joint_v_max_zero_static_joint() {
     .unwrap();
     let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 5.0, 200.0);
     cfg.joint.v_max.0[1] = 0.0; // joint 1 frozen
-    let mut validator = common::wide_validator::<6>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("v_max=0 on static joint:\n{}", diag);
     assert!(result.is_ok(), "v_max=0 on static joint retime failed: {}", diag);
 }
@@ -726,8 +726,8 @@ fn seven_dof_perfectly_correlated_dims() {
     }
     let path = SRobotPath::<7, f64>::try_new(wps).unwrap();
     let cfg = Topp3Tcp6Constraints::<7>::symmetric(1.5, 5.0, 200.0);
-    let mut validator = common::wide_validator::<7>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<7>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("7-DOF correlated:\n{}", diag);
     assert!(result.is_ok(), "7-DOF correlated retime failed: {}", diag);
 }
@@ -752,8 +752,8 @@ fn boundary_velocity_at_v_max_saturation() {
         a_end: SRobotQ::zeros(),
         projection_tolerance: 1e-3,
     };
-    let mut validator = common::wide_validator::<1>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<1>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("v_max saturation at boundary:\n{}", diag);
     assert!(result.is_ok(), "v_max-saturation retime failed: {}", diag);
 }
@@ -787,8 +787,8 @@ fn many_near_duplicates_interleaved() {
     let path = SRobotPath::<6, f64>::try_new(wps).unwrap();
     let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 5.0, 200.0);
     cfg.solver.max_iterations = 500; // fail fast
-    let mut validator = common::wide_validator::<6>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("interleaved near-dups:\n{}", diag);
     assert!(result.is_ok(), "interleaved-dup retime failed: {}", diag);
 }
@@ -801,8 +801,8 @@ fn constant_joint_pose_rejected() {
     let q = SRobotQ::<6, f64>::from_array([0.0, -1.0, 1.2, 0.0, 0.0, 0.0]);
     let path = SRobotPath::<6, f64>::try_new(vec![q; 5]).unwrap();
     let cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 5.0, 200.0);
-    let mut validator = common::wide_validator::<6>();
-    let (result, _diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, _diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     match result {
         Err(deke_types::DekeError::DuplicateWaypoints) => {}
         other => panic!("expected DuplicateWaypoints; got {:?}", other),
@@ -827,8 +827,8 @@ fn boundary_residual_at_tolerance() {
         a_end: SRobotQ::zeros(),
         projection_tolerance: 1e-12, // essentially zero — any FP noise breaks it
     };
-    let mut validator = common::wide_validator::<1>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<1>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("boundary tol borderline:\n{}", diag);
     // No assertion on success here — this test is exploratory. The point is to see
     // whether the projection check rejects FP noise that the user clearly did not
@@ -862,8 +862,8 @@ fn slow_section_with_tiny_qp() {
     let path = SRobotPath::<6, f64>::try_new(wps).unwrap();
     let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 5.0, 200.0);
     cfg.solver.max_iterations = 500; // fail fast
-    let mut validator = common::wide_validator::<6>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("slow tiny-qp section:\n{}", diag);
     assert!(result.is_ok(), "slow-section retime failed: {}", diag);
 }
@@ -904,8 +904,8 @@ fn pchip_spike_uneven_segments_4wp() {
     let path = SRobotPath::<6, f64>::try_new(wps).unwrap();
     let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(2.0, 8.0, 300.0);
     cfg.tcp = Some(TcpLimits { v_max: 1.5, a_max: 12.0, j_max: 150.0 });
-    let mut validator = common::wide_validator::<6>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("PCHIP spike uneven 4wp:\n{}", diag);
     assert!(result.is_ok(), "uneven-seg 4wp retime failed: {}", diag);
 }
@@ -928,8 +928,8 @@ fn pchip_multi_knot_geometric_segment_ratios() {
     let path = SRobotPath::<6, f64>::try_new(wps).unwrap();
     let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(2.0, 8.0, 300.0);
     cfg.tcp = Some(TcpLimits { v_max: 1.5, a_max: 15.0, j_max: 200.0 });
-    let mut validator = common::wide_validator::<6>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("multi-knot geometric ratios:\n{}", diag);
     assert!(result.is_ok(), "geometric-ratio retime failed: {}", diag);
 }
@@ -951,8 +951,8 @@ fn mixed_per_joint_flip_versus_monotone() {
     let path = SRobotPath::<6, f64>::try_new(wps).unwrap();
     let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 6.0, 250.0);
     cfg.tcp = Some(TcpLimits { v_max: 1.0, a_max: 8.0, j_max: 100.0 });
-    let mut validator = common::wide_validator::<6>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("mixed flip vs monotone:\n{}", diag);
     assert!(result.is_ok(), "mixed-flip retime failed: {}", diag);
 }
@@ -971,8 +971,8 @@ fn extreme_secant_magnitude_ratio_at_knot() {
     ])
     .unwrap();
     let cfg = Topp3Tcp6Constraints::<1>::symmetric(1.0, 5.0, 200.0);
-    let mut validator = common::wide_validator::<1>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<1>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("extreme secant ratio:\n{}", diag);
     assert!(result.is_ok(), "extreme-ratio retime failed: {}", diag);
 }
@@ -993,8 +993,8 @@ fn wrist_alignment_singularity_traverse() {
     let path = SRobotPath::<6, f64>::try_new(wps).unwrap();
     let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 6.0, 200.0);
     cfg.tcp = Some(TcpLimits { v_max: 0.3, a_max: 3.0, j_max: 60.0 });
-    let mut validator = common::wide_validator::<6>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("wrist alignment traverse:\n{}", diag);
     assert!(result.is_ok(), "wrist-alignment retime failed: {}", diag);
 }
@@ -1043,8 +1043,8 @@ fn long_path_mixed_smooth_zigzag_smooth() {
     let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 6.0, 250.0);
     cfg.tcp = Some(TcpLimits { v_max: 0.5, a_max: 4.0, j_max: 80.0 });
     cfg.solver.max_iterations = 1500;
-    let mut validator = common::wide_validator::<6>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("smooth+zigzag+smooth:\n{}", diag);
     assert!(result.is_ok(), "mixed-regime retime failed: {}", diag);
 }
@@ -1065,8 +1065,8 @@ fn microscopic_final_segment_endpoint_squeeze() {
     let path = SRobotPath::<6, f64>::try_new(wps).unwrap();
     let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 6.0, 250.0);
     cfg.tcp = Some(TcpLimits { v_max: 1.0, a_max: 6.0, j_max: 100.0 });
-    let mut validator = common::wide_validator::<6>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("microscopic final segment:\n{}", diag);
     assert!(result.is_ok(), "microscopic-final retime failed: {}", diag);
 }
@@ -1088,8 +1088,8 @@ fn locked_base_curved_wrist() {
     let path = SRobotPath::<6, f64>::try_new(wps).unwrap();
     let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(2.0, 10.0, 400.0);
     cfg.locked_prefix = 3;
-    let mut validator = common::wide_validator::<6>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("locked base + curved wrist:\n{}", diag);
     assert!(result.is_ok(), "locked-base retime failed: {}", diag);
 }
@@ -1117,8 +1117,8 @@ fn boundary_residual_near_tolerance_with_tcp() {
         a_end: SRobotQ::zeros(),
         projection_tolerance: 1e-2,
     };
-    let mut validator = common::wide_validator::<6>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("boundary residual near tol with TCP:\n{}", diag);
     assert!(result.is_ok(), "boundary-near-tol retime failed: {}", diag);
 }
@@ -1148,8 +1148,8 @@ fn nearly_active_tcp_a_everywhere() {
     // optimizer wants to ride against the cone almost everywhere.
     cfg.tcp = Some(TcpLimits { v_max: f64::INFINITY, a_max: 0.6, j_max: f64::INFINITY });
     cfg.solver.max_iterations = 1500;
-    let mut validator = common::wide_validator::<6>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("nearly-active TCP a everywhere:\n{}", diag);
     assert!(result.is_ok(), "near-active-cone retime failed: {}", diag);
 }
@@ -1173,8 +1173,8 @@ fn fuzz_random_walk<const N: usize>(
     let mut wps = vec![start];
     let mut cur = start.0;
     for _ in 1..n {
-        for j in 0..N {
-            cur[j] += delta * next(&mut s);
+        for c in cur.iter_mut() {
+            *c += delta * next(&mut s);
         }
         wps.push(SRobotQ::from_array(cur));
     }
@@ -1206,8 +1206,8 @@ fn fuzz_seeded_6wp_paths() {
         let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 6.0, 250.0);
         cfg.tcp = Some(TcpLimits { v_max: 1.0, a_max: 8.0, j_max: 100.0 });
         cfg.solver.max_iterations = 1500;
-        let mut validator = common::wide_validator::<6>();
-        let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+        let validator = common::wide_validator::<6>();
+        let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
         eprintln!("fuzz seed {:#x} (#{}): status={:?}", seed, i, diag.status);
         if let Err(e) = result {
             failures.push(format!("seed {:#x}: {}", seed, e));
@@ -1241,8 +1241,8 @@ fn fuzz_seeded_6wp_paths_aggressive() {
         let mut cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 6.0, 250.0);
         cfg.tcp = Some(TcpLimits { v_max: 1.0, a_max: 8.0, j_max: 100.0 });
         cfg.solver.max_iterations = 1500;
-        let mut validator = common::wide_validator::<6>();
-        let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+        let validator = common::wide_validator::<6>();
+        let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
         eprintln!(
             "aggressive fuzz seed {:#x}: status={:?} tol_used={:.0e}",
             seed, diag.status, diag.solver_tolerance_used,
@@ -1275,8 +1275,8 @@ fn output_start_velocity_matches_requested_within_slack() {
         projection_tolerance: 1e-3,
     };
     cfg.sample_rate_hz = 1000.0;
-    let mut validator = common::wide_validator::<1>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<1>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     let traj = result.expect("retime failed");
     let v0 = traj.velocity_at(0).unwrap().0[0];
     eprintln!("output_start_velocity test:\n{}\n  v0 = {}", diag, v0);

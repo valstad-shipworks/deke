@@ -66,6 +66,7 @@ fn problem(name: &'static str, robot: Robot, waypoints: &[[f64; 6]]) -> BenchPro
     }
 }
 
+#[allow(clippy::vec_init_then_push)]
 fn problems() -> Vec<(Robot, BenchProblem<6>)> {
     let mut out: Vec<(Robot, BenchProblem<6>)> = Vec::new();
 
@@ -460,9 +461,9 @@ fn slicer_real_world() {
     );
     println!();
     println!(
-        "  {:>3} {:<22} {:<19} {:>3}  {:>8} {:>7} {:>5} {:>5} {:>5} {:>5} {:>5} {:>5} {:>7}   {}",
+        "  {:>3} {:<22} {:<19} {:>3}  {:>8} {:>7} {:>5} {:>5} {:>5} {:>5} {:>5} {:>5} {:>7}   status",
         "rob", "problem", "retimer", "wps", "solve_ms", "dur_s", "u_jv", "u_ja", "u_jj", "u_tcp",
-        "max_u", "peak_u", "dev_rad", "status"
+        "max_u", "peak_u", "dev_rad"
     );
     println!(
         "  {}",

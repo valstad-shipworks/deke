@@ -12,15 +12,15 @@ fn tight_jerk_limit_increases_total_time() {
     ])
     .unwrap();
 
-    let mut validator = common::wide_validator::<1>();
+    let validator = common::wide_validator::<1>();
 
     let loose = Topp3Tcp6Constraints::<1>::symmetric(1.0, 2.0, 500.0);
-    let (r1, d1) = Topp3Tcp6::new(&fk).retime(&loose, &path, &mut validator, &());
+    let (r1, d1) = Topp3Tcp6::new(&fk).retime(&loose, &path, &validator, &());
     let t1 = r1.expect("loose-jerk retime failed").duration().as_secs_f64();
     eprintln!("loose jerk:\n{}", d1);
 
     let tight = Topp3Tcp6Constraints::<1>::symmetric(1.0, 2.0, 4.0);
-    let (r2, d2) = Topp3Tcp6::new(&fk).retime(&tight, &path, &mut validator, &());
+    let (r2, d2) = Topp3Tcp6::new(&fk).retime(&tight, &path, &validator, &());
     let t2 = r2.expect("tight-jerk retime failed").duration().as_secs_f64();
     eprintln!("tight jerk:\n{}", d2);
 

@@ -127,7 +127,7 @@ impl<const N: usize, F: KinScalar> Kinematics<N, F> {
         for j in joints {
             let spec = match j.r#type {
                 URDFJointType::Fixed => {
-                    pending = pending * urdf_origin::<F>(j.xyz, j.rpy);
+                    pending *= urdf_origin::<F>(j.xyz, j.rpy);
                     continue;
                 }
                 URDFJointType::Revolute { axis } => JointSpec::Revolute {
@@ -353,9 +353,9 @@ impl<const N: usize, F: KinScalar> Kinematics<N, F> {
         let mut c1 = AVec3::<F>::Y;
         let mut c2 = AVec3::<F>::Z;
         let mut t = AVec3::<F>::ZERO;
-        for i in 0..N {
+        for (i, slot) in out.iter_mut().enumerate() {
             self.step(i, q.0[i], &mut c0, &mut c1, &mut c2, &mut t);
-            out[i] = AAffine3::<F>::from_mat3_translation(AMat3::<F>::from_cols(c0, c1, c2), t);
+            *slot = AAffine3::<F>::from_mat3_translation(AMat3::<F>::from_cols(c0, c1, c2), t);
         }
         Ok(out)
     }
@@ -406,7 +406,7 @@ impl<const N: usize, F: KinScalar> FKChain<N, F> for Kinematics<N, F> {
             end = self.base_tf * end;
         }
         if !self.ee_id {
-            end = end * self.ee_tf;
+            end *= self.ee_tf;
         }
         Ok(end)
     }
@@ -478,10 +478,12 @@ fn classify<F: KinScalar>(js: &JointSpec<F>) -> JointKind<F> {
 /// A chain `∏ Rz(θ_i + off_i)·M_i` is rewritten as `origin_0 = Rz(off_0)`,
 /// `origin_i = M_{i-1}·Rz(off_i)`, with the final `M_{N-1}` becoming the
 /// intrinsic end-effector offset. `decode` returns each joint's `(M_i, off_i)`.
+type CoreChain<const N: usize, F> = ([(AAffine3<F>, JointSpec<F>); N], AAffine3<F>);
+
 fn factor_offsets<const N: usize, F: KinScalar, J: Copy>(
     joints: &[J; N],
     decode: impl Fn(J) -> (AAffine3<F>, F),
-) -> ([(AAffine3<F>, JointSpec<F>); N], AAffine3<F>) {
+) -> CoreChain<N, F> {
     let z = AVec3::<F>::Z;
     let mut core = [(AAffine3::<F>::IDENTITY, JointSpec::Revolute { axis_local: z }); N];
     let mut prev_m = AAffine3::<F>::IDENTITY;
@@ -648,6 +650,57 @@ mod tests {
             assert!((j[1][i] - dy).abs() < 1e-4, "Jy[{i}] {} vs {}", j[1][i], dy);
             assert!((j[2][i] - dz).abs() < 1e-4, "Jz[{i}] {} vs {}", j[2][i], dz);
         }
+    }
+
+    /// Yoshikawa manipulability must equal `|det(J)|` for a square (6-DOF)
+    /// Jacobian, since `det(J Jᵀ) = det(J)²`. The implementation forms `J Jᵀ`
+    /// and takes a root, so checking it against the determinant of the raw
+    /// Jacobian exercises a genuinely independent path.
+    #[test]
+    fn manipulability_matches_jacobian_determinant() {
+        let chain = puma();
+        for cfg in [
+            [0.2, -0.4, 0.7, 0.3, -0.6, 0.5],
+            [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
+        ] {
+            let w = chain.manipulability(&q6(cfg)).unwrap();
+            let det = det6(chain.jacobian(&q6(cfg)).unwrap());
+            assert!(w > 0.0, "cfg {cfg:?}: expected positive manipulability, got {w}");
+            assert!(
+                (w - det.abs()).abs() < 1e-6,
+                "cfg {cfg:?}: manip {w} vs |det J| {}",
+                det.abs()
+            );
+        }
+    }
+
+    fn det6(j: [[f64; 6]; 6]) -> f64 {
+        let mut m = j;
+        let mut det = 1.0;
+        for col in 0..6 {
+            let mut piv = col;
+            for (r, row) in m.iter().enumerate().skip(col + 1) {
+                if row[col].abs() > m[piv][col].abs() {
+                    piv = r;
+                }
+            }
+            if m[piv][col].abs() < 1e-12 {
+                return 0.0;
+            }
+            if piv != col {
+                m.swap(piv, col);
+                det = -det;
+            }
+            let pivot_row = m[col];
+            det *= pivot_row[col];
+            for row in m.iter_mut().skip(col + 1) {
+                let f = row[col] / pivot_row[col];
+                for (c, &pv) in pivot_row.iter().enumerate().skip(col) {
+                    row[c] -= f * pv;
+                }
+            }
+        }
+        det
     }
 
     /// Routing the same robot through `from_kinspec(structure())` must preserve

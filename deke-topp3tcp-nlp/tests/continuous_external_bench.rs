@@ -14,6 +14,8 @@
 //! comparable across versions. Bumping the seed (`SEED` const at the top) gives a
 //! different draw of trajectories from the same shape distribution.
 
+#![allow(clippy::approx_constant)] // URDF fixture RPY data, not the math constant
+
 use std::time::{Duration, Instant};
 
 use deke_kin::{JointLimits as KinLimits, Kinematics, URDFJoint};
@@ -107,6 +109,7 @@ fn validator() -> JointValidator<6, f64> {
 // Deterministic trajectory generator (small LCG; we don't pull in the rand crate
 // just for repeatable benchmark inputs).
 
+#[allow(clippy::unusual_byte_groupings)]
 const SEED: u64 = 0xC0FFEE_DECAF_F00D;
 
 struct Lcg(u64);
@@ -250,9 +253,9 @@ fn run_one(
             };
         }
     };
-    let mut v = validator();
+    let v = validator();
     let t0 = Instant::now();
-    let (_result, diag) = Topp3Tcp6::new(fk).retime(cfg, &path, &mut v, &());
+    let (_result, diag) = Topp3Tcp6::new(fk).retime(cfg, &path, &v, &());
     let wall = t0.elapsed();
     RunResult {
         iterations: diag.iterations,
@@ -448,7 +451,8 @@ fn benchmark_typical_trajectories() {
     let cfg = external_cfg();
 
     // (name, runs_per_category, generator)
-    let categories: Vec<(&'static str, usize, Box<dyn Fn(&mut Lcg) -> Vec<SRobotQ<6, f64>>>)> = vec![
+    type Category = (&'static str, usize, Box<dyn Fn(&mut Lcg) -> Vec<SRobotQ<6, f64>>>);
+    let categories: Vec<Category> = vec![
         ("p2p tiny (Δ≈0.05 rad)", 8, Box::new(|r| gen_two_wp(r, 0.05))),
         ("p2p small (Δ≈0.2 rad)", 8, Box::new(|r| gen_two_wp(r, 0.2))),
         ("p2p medium (Δ≈0.6 rad)", 8, Box::new(|r| gen_two_wp(r, 0.6))),

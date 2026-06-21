@@ -359,10 +359,10 @@ fn classify(h: &[DVec3], p: &[DVec3], zt: f64, at: f64) -> (Class4, Option<Box<R
             }
             return (Class4::NoneParallelNoneIntersecting, None);
         }
-        return (Class4::SecondThirdParallel, None);
+        (Class4::SecondThirdParallel, None)
     } else if h1.cross(h2).length() > zt {
-        return (Class4::FirstSecondParallel, None);
+        (Class4::FirstSecondParallel, None)
     } else {
-        return (Class4::Reversed, Some(make_reversed()));
+        (Class4::Reversed, Some(make_reversed()))
     }
 }

@@ -37,7 +37,7 @@ pub fn dh_to_hp(alpha: &[f64], a: &[f64], d: &[f64]) -> (Vec<DVec3>, Vec<DVec3>,
         let off = DVec3::new(a[i], 0.0, d[i]);
         p.push(r * off);
 
-        r = r * r_loc;
+        r *= r_loc;
     }
 
     (h, p, r)
@@ -52,8 +52,8 @@ pub fn fwdkin(h: &[DVec3], p: &[DVec3], q: &[f64]) -> DMat4 {
     let mut r = DMat3::IDENTITY;
     let mut pos = p[0];
     for i in 0..q.len() {
-        r = r * axis_angle(&h[i], q[i]);
-        pos = pos + r * p[i + 1];
+        r *= axis_angle(&h[i], q[i]);
+        pos += r * p[i + 1];
     }
     let mut pose = DMat4::from_mat3(r);
     pose.w_axis.x = pos.x;
@@ -120,7 +120,7 @@ pub fn partial_joint_parametrization(
     let mut r6t_new = *r6t;
 
     let mut sorted: Vec<FixedAxis> = fixed_axes.to_vec();
-    sorted.sort_by(|a, b| b.joint.cmp(&a.joint));
+    sorted.sort_by_key(|fa| std::cmp::Reverse(fa.joint));
 
     for fa in sorted {
         let axis_idx = fa.joint;

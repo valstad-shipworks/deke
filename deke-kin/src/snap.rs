@@ -101,10 +101,7 @@ pub fn min_snap_spherical_wrist(
 
     let delta_p_i1 = snap_pair_intersect(h, p, i, zero_threshold);
 
-    let mut p0_i = DVec3::ZERO;
-    for k in 0..=i {
-        p0_i += p[k];
-    }
+    let p0_i: DVec3 = p[..=i].iter().sum();
     let p0_i1 = p0_i + p[i + 1];
     let isect = intersection(h[i], h[i + 1], p0_i, p[i + 1]);
 

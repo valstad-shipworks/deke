@@ -121,7 +121,8 @@ impl<'a, const N: usize, FK: ContinuousFKChain<N, f64>> Retimer<N, f64> for Topp
                         Ok(a) => a,
                         Err(_) => break,
                     };
-                    if !(alpha > 1.0 + 1e-9) {
+                    if !matches!(alpha.partial_cmp(&(1.0 + 1e-9)), Some(std::cmp::Ordering::Greater))
+                    {
                         break;
                     }
                     traj.rescale_time_in_place(alpha);

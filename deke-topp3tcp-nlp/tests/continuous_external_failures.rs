@@ -24,6 +24,8 @@
 //!   `boundary_slack_usage.end_sdd` near `boundary_slack`.
 //! - **Path geometry** → `path_stats.segment_length_ratio` huge.
 
+#![allow(clippy::approx_constant)] // URDF fixture RPY data, not the math constant
+
 use deke_topp3tcp_nlp::continuous::nlp::{build_and_solve, build_and_solve_warm};
 use deke_topp3tcp_nlp::common::path_derivatives::PathDerivatives;
 use deke_topp3tcp_nlp::continuous::{
@@ -171,8 +173,8 @@ fn run_external_traj(
             return false;
         }
     };
-    let mut validator = wide_validator();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = wide_validator();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("[{name}] diagnostic:\n{diag}");
     if let Err(e) = &result {
         eprintln!("[{name}] retime returned error: {e}");
@@ -451,12 +453,12 @@ fn bench_multi_seg_50wp_is_deterministic_within_binary() {
     let waypoints = bench_multi_seg_50wp_waypoints();
     let fk = external_chain();
     let cfg = external_cfg();
-    let mut validator = wide_validator();
+    let validator = wide_validator();
 
     let mut prev = None::<deke_topp3tcp_nlp::continuous::Topp3Tcp6Diagnostic>;
     for run in 0..5 {
         let path = SRobotPath::<6, f64>::try_new(waypoints.clone()).unwrap();
-        let (_result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+        let (_result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
         eprintln!(
             "run {}: status={:?} iter={} sddd_init_max={:.6e} slack_sd0={:.6e}",
             run,
@@ -793,8 +795,8 @@ fn probe_2wp_long_chord_f32_fk() {
         ]),
     ];
     let path = SRobotPath::<6, f64>::try_new(waypoints).unwrap();
-    let mut validator = wide_validator();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&external_cfg(), &path, &mut validator, &());
+    let validator = wide_validator();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&external_cfg(), &path, &validator, &());
     eprintln!("[probe_2wp_long_chord_f32_fk] {}", diag);
     assert!(result.is_ok(), "f32 FK probe failed");
 }
@@ -1233,7 +1235,7 @@ fn two_stage_p2p_small() {
 /// consecutive arenas.
 #[test]
 fn two_stage_repeat_varied_paths() {
-    let paths = vec![
+    let paths = [
         // 2wp
         vec![
             SRobotQ::from_array([0.0, -1.0, 1.2, 0.0, 0.0, 0.0]),

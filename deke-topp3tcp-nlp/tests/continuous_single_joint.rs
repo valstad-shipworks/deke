@@ -15,8 +15,8 @@ fn single_joint_rest_to_rest_matches_trapezoidal() {
     // v_max = 1 rad/s, a_max = 2 rad/s², loose jerk.
     let cfg = Topp3Tcp6Constraints::<1>::symmetric(1.0, 2.0, 200.0);
 
-    let mut validator = common::wide_validator::<1>();
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<1>();
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("{}", diag);
     assert!(result.is_ok(), "retime failed: {}", diag);
     let traj = result.unwrap();

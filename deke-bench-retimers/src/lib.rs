@@ -17,6 +17,8 @@
 //! single binary test ([`tests::comparative`]) that runs the full sweep and
 //! prints a comparison table.
 
+#![allow(clippy::approx_constant)] // URDF fixture RPY data, not the math constant
+
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -397,7 +399,7 @@ pub fn max_path_deviation<const N: usize>(
     traj: &SRobotTraj<N, f64>,
     waypoints: &[SRobotQ<N, f64>],
 ) -> f64 {
-    if waypoints.len() < 2 || traj.len() == 0 {
+    if waypoints.len() < 2 || traj.is_empty() {
         return 0.0;
     }
     let mut max_d = 0.0_f64;
@@ -524,8 +526,7 @@ pub fn average_utilization<const N: usize, FK: ContinuousFKChain<N, f64>>(
     let tcp_limit = problem
         .tcp_v_max
         .filter(|l| l.is_finite() && *l > 0.0);
-    let tcp_u_per_sample: Option<Vec<f64>> = if tcp_limit.is_some() {
-        let limit = tcp_limit.unwrap();
+    let tcp_u_per_sample: Option<Vec<f64>> = if let Some(limit) = tcp_limit {
         let mut positions = Vec::with_capacity(n);
         for q in traj.iter() {
             let pose = fk.fk_end(q)?;
