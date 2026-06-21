@@ -1,7 +1,7 @@
 use std::{fmt::Debug, sync::Arc};
 
 use bitvec::vec::BitVec;
-use wide::{CmpGt, CmpLt, f32x8, f64x4};
+use wide::{f32x8, f64x4};
 
 use crate::{DekeError, DekeResult, KinScalar, SRobotQ, SRobotQLike};
 
