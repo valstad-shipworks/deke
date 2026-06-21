@@ -13,8 +13,8 @@ fn locks_first_two_joints_across_trajectory() {
     let mut cfg = Topp3Tcp6DiscreteConstraints::<6>::symmetric(1.5, 4.0, 400.0);
     cfg.locked_prefix = 2;
 
-    let mut validator = common::wide_validator::<6>();
-    let (result, diag) = Topp3Tcp6Discrete::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6Discrete::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("{}", diag);
     let traj = result.expect("retime failed");
     assert_eq!(diag.status, SolveStatus::Success);
@@ -22,7 +22,11 @@ fn locks_first_two_joints_across_trajectory() {
     // Every sample must preserve joints 0 and 1 at their starting values.
     for q in traj.iter() {
         assert!((q.0[0] - 0.2).abs() < 1e-4, "joint 0 drifted: {}", q.0[0]);
-        assert!((q.0[1] - (-0.9)).abs() < 1e-4, "joint 1 drifted: {}", q.0[1]);
+        assert!(
+            (q.0[1] - (-0.9)).abs() < 1e-4,
+            "joint 1 drifted: {}",
+            q.0[1]
+        );
     }
 }
 
@@ -36,10 +40,13 @@ fn mismatched_locked_prefix_errors() {
     let mut cfg = Topp3Tcp6DiscreteConstraints::<6>::symmetric(1.5, 4.0, 400.0);
     cfg.locked_prefix = 2;
 
-    let mut validator = common::wide_validator::<6>();
-    let (result, _diag) = Topp3Tcp6Discrete::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, _diag) = Topp3Tcp6Discrete::new(&fk).retime(&cfg, &path, &validator, &());
     match result {
-        Err(DekeError::LockedPrefixViolation { waypoint: _, joint: 0 }) => {}
+        Err(DekeError::LockedPrefixViolation {
+            waypoint: _,
+            joint: 0,
+        }) => {}
         other => panic!("expected LockedPrefixViolation on joint 0, got {:?}", other),
     }
 }

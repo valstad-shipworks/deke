@@ -5,7 +5,6 @@
 // that don't have a scratch buffer.
 #![allow(dead_code)]
 
-use core::f64::{EPSILON, MAX as F64_MAX};
 use num_traits::Float;
 
 use crate::check::third_order_pose;
@@ -29,7 +28,7 @@ fn copysign_one<F: Float>(x: F) -> F {
 
 #[inline]
 fn next_after_zero<F: Float>(x: F) -> F {
-    let eps = F::from(EPSILON).unwrap_or_else(F::epsilon);
+    let eps = F::from(f64::EPSILON).unwrap_or_else(F::epsilon);
     if x > F::zero() {
         x - eps * x.abs()
     } else if x < F::zero() {
@@ -41,8 +40,8 @@ fn next_after_zero<F: Float>(x: F) -> F {
 
 #[inline]
 fn next_after_max<F: Float>(x: F) -> F {
-    let eps = F::from(EPSILON).unwrap_or_else(F::epsilon);
-    let big = F::from(F64_MAX).unwrap_or_else(F::max_value);
+    let eps = F::from(f64::EPSILON).unwrap_or_else(F::epsilon);
+    let big = F::from(f64::MAX).unwrap_or_else(F::max_value);
     if x >= big {
         x
     } else {
@@ -344,7 +343,7 @@ impl<F: Float> StepA<F> {
         let jerk = limits.jerk;
         let max_a = limits.max_accel;
         let min_a = limits.min_accel;
-        let eps = F::from(EPSILON).unwrap_or_else(F::epsilon);
+        let eps = F::from(f64::EPSILON).unwrap_or_else(F::epsilon);
         let eps_tol = F::from(1e-9).unwrap();
         let vel_offset = (self.ca_sq - self.af_sq) / (two * jerk) + (self.vf - self.cv);
         let vel_offset_sq = vel_offset * vel_offset;
@@ -749,7 +748,7 @@ impl<F: Float> StepA<F> {
     }
 
     fn check_profile_zero(&self, profile: &mut Segment<F>, limits: &LimitsThirdPose<F>) -> bool {
-        let eps = F::from(EPSILON).unwrap_or_else(F::epsilon);
+        let eps = F::from(f64::EPSILON).unwrap_or_else(F::epsilon);
         let two = F::from(2.0).unwrap();
         if (self.af - self.ca).abs() > eps {
             return false;
@@ -826,7 +825,7 @@ impl<F: Float> StepA<F> {
         block: &mut Feasible<F>,
         profiles: &mut [Segment<F>; 6],
     ) -> bool {
-        let eps = F::from(EPSILON).unwrap_or_else(F::epsilon);
+        let eps = F::from(f64::EPSILON).unwrap_or_else(F::epsilon);
         let limit_is_zero = self.limits.jerk == F::zero()
             || self.limits.max_accel == F::zero()
             || self.limits.min_accel == F::zero()
@@ -839,7 +838,7 @@ impl<F: Float> StepA<F> {
                 block.t_min =
                     profile.duration + profile.halt.duration + profile.accel_halt.duration;
                 if self.cv.abs() > eps || self.ca.abs() > eps {
-                    let big = F::from(F64_MAX).unwrap_or_else(F::max_value);
+                    let big = F::from(f64::MAX).unwrap_or_else(F::max_value);
                     block.blocked_interval_a = Some(Span::from_times(block.t_min, big));
                 }
                 return true;
@@ -1170,7 +1169,7 @@ impl<F: Float> StepB<F> {
         let jerk = limits.jerk;
         let max_a = limits.max_accel;
         let min_a = limits.min_accel;
-        let eps = F::from(EPSILON).unwrap_or_else(F::epsilon);
+        let eps = F::from(f64::EPSILON).unwrap_or_else(F::epsilon);
         {
             let poly_b = self.ca * (self.ca - min_a) + square(self.af - min_a)
                 - two * jerk * (self.velocity_from_target - min_a * self.tf);
@@ -1331,7 +1330,7 @@ impl<F: Float> StepB<F> {
         let jerk = limits.jerk;
         let max_a = limits.max_accel;
         let min_a = limits.min_accel;
-        let eps = F::from(EPSILON).unwrap_or_else(F::epsilon);
+        let eps = F::from(f64::EPSILON).unwrap_or_else(F::epsilon);
         if self.tf < fmax((-self.ca + max_a) / jerk, F::zero()) + fmax(max_a / jerk, F::zero()) {
             return false;
         }
@@ -1622,7 +1621,7 @@ impl<F: Float> StepB<F> {
         let sixty_four = F::from(64.0).unwrap();
         let jerk = limits.jerk;
         let max_a = limits.max_accel;
-        let eps = F::from(EPSILON).unwrap_or_else(F::epsilon);
+        let eps = F::from(f64::EPSILON).unwrap_or_else(F::epsilon);
         let root_tol = F::from(ROOT_TOLERANCE).unwrap();
         let t_lower = fmax(F::zero(), -self.ca / jerk);
         let t_upper = fmin((self.tf - self.ca / jerk) / two, (max_a - self.ca) / jerk);
@@ -1861,8 +1860,7 @@ impl<F: Float> StepB<F> {
                 interval_count += 1;
             }
             let mut t_root_alt = t_lower;
-            for i in 0..interval_count {
-                let interval = intervals[i];
+            for interval in intervals.iter().take(interval_count) {
                 let t_root_inner = poly_root_newton::<F, 6, 5>(&poly6_d1, interval.0, interval.1);
                 if t_root_inner >= t_upper {
                     continue;
@@ -1901,7 +1899,7 @@ impl<F: Float> StepB<F> {
         let twelve = F::from(12.0).unwrap();
         let max_a = limits.max_accel;
         let min_a = limits.min_accel;
-        let eps = F::from(EPSILON).unwrap_or_else(F::epsilon);
+        let eps = F::from(f64::EPSILON).unwrap_or_else(F::epsilon);
         if self.ca.abs() < eps && self.af.abs() < eps {
             let disc_num = two * min_a * self.cv_tf_offset
                 + self.velocity_from_target_sq
@@ -2354,7 +2352,7 @@ impl<F: Float> StepB<F> {
         let jerk = limits.jerk;
         let max_a = limits.max_accel;
         let min_a = limits.min_accel;
-        let eps = F::from(EPSILON).unwrap_or_else(F::epsilon);
+        let eps = F::from(f64::EPSILON).unwrap_or_else(F::epsilon);
         if self.ca.abs() < eps && self.af.abs() < eps {
             if self.cv.abs() < eps {
                 let disc_sqrt = (self.tf_sq * self.vf_sq

@@ -76,6 +76,7 @@ pub(crate) fn weighted_distance<const N: usize>(
     coeffs: &[f64; N],
 ) -> f64 {
     let mut sum = 0.0;
+    #[allow(clippy::needless_range_loop)]
     for i in 0..N {
         let d = a.0[i] - b.0[i];
         sum += coeffs[i] * d * d;
@@ -303,9 +304,7 @@ pub(crate) fn solve<const N: usize, V: Validator<N, (), f64>, R: DekeRng<N>>(
     let timer = std::time::Instant::now();
     let dof_coeffs = {
         let mut c = [0.0f64; N];
-        for i in 0..N {
-            c[i] = settings.dof_cost_weights.0[i] as f64;
-        }
+        c[..N].copy_from_slice(&settings.dof_cost_weights.0[..N]);
         c
     };
 
@@ -485,6 +484,7 @@ pub(crate) fn solve<const N: usize, V: Validator<N, (), f64>, R: DekeRng<N>>(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn extend_and_connect<const N: usize, V: Validator<N, (), f64>>(
     tree_a: &mut RrtTree<N>,
     tree_b: &mut RrtTree<N>,
@@ -547,8 +547,15 @@ fn extend_and_connect<const N: usize, V: Validator<N, (), f64>>(
 
         let q_step = steer(&q_connect, &q_new, settings.range, coeffs);
 
-        if validate_edge_stats(&q_connect, &q_step, settings.resolution, validator, ctx, stats)
-            .is_err()
+        if validate_edge_stats(
+            &q_connect,
+            &q_step,
+            settings.resolution,
+            validator,
+            ctx,
+            stats,
+        )
+        .is_err()
         {
             return None;
         }

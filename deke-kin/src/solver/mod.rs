@@ -2,6 +2,7 @@
 
 use deke_types::SRobotQ;
 use glam::{DMat4, DVec3};
+use smallvec::SmallVec;
 
 mod r1;
 mod r2;
@@ -51,6 +52,11 @@ pub type Chain6 = Chain<6, 7>;
 /// are zero-padding. The outer [`crate::Robot::ik`] knows the effective DOF
 /// and slices off the padding before re-inserting any locked axes.
 pub(crate) type Joints = SRobotQ<6, f64>;
+
+/// Per-solve solution list. An analytic decomposition yields at most 8
+/// configurations, so the inline storage never spills to the heap on the
+/// IK hot path.
+pub(crate) type Solutions = SmallVec<[Joints; 8]>;
 
 /// Build a [`Joints`] from a slice of up to 6 raw joint values, padding the
 /// remaining slots with `0.0`.
@@ -112,7 +118,7 @@ impl Solver {
         }
     }
 
-    pub fn solve(&self, pose: &DMat4) -> Vec<Joints> {
+    pub fn solve(&self, pose: &DMat4) -> Solutions {
         match self {
             Solver::R1(s) => s.solve(pose),
             Solver::R2(s) => s.solve(pose),

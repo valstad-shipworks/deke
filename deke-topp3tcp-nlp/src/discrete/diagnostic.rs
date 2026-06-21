@@ -282,13 +282,15 @@ impl fmt::Display for Topp3Tcp6DiscreteDiagnostic {
             self.path_stats.max_segment_length,
             self.path_stats.segment_length_ratio,
         )?;
-        writeln!(f, "  total time      : {:.4}s", self.total_time.as_secs_f64())?;
+        writeln!(
+            f,
+            "  total time      : {:.4}s",
+            self.total_time.as_secs_f64()
+        )?;
         writeln!(
             f,
             "  peak joint v/a/j: {:.3} / {:.3} / {:.3}",
-            self.peak_joint_velocity,
-            self.peak_joint_acceleration,
-            self.peak_joint_jerk,
+            self.peak_joint_velocity, self.peak_joint_acceleration, self.peak_joint_jerk,
         )?;
         writeln!(
             f,

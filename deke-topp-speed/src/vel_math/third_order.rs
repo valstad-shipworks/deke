@@ -415,12 +415,10 @@ fn calculate_feasible<F: Float>(
             && valid_profiles[0].sweep != valid_profiles[1].sweep
         {
             remove_profile(valid_profiles, &mut valid_profile_cnt, 1);
-        } else if (valid_profiles[2].duration - valid_profiles[3].duration).abs() < eps_256
-            && valid_profiles[2].sweep != valid_profiles[3].sweep
-        {
-            remove_profile(valid_profiles, &mut valid_profile_cnt, 3);
-        } else if (valid_profiles[0].duration - valid_profiles[3].duration).abs() < eps_256
-            && valid_profiles[0].sweep != valid_profiles[3].sweep
+        } else if ((valid_profiles[2].duration - valid_profiles[3].duration).abs() < eps_256
+            && valid_profiles[2].sweep != valid_profiles[3].sweep)
+            || ((valid_profiles[0].duration - valid_profiles[3].duration).abs() < eps_256
+                && valid_profiles[0].sweep != valid_profiles[3].sweep)
         {
             remove_profile(valid_profiles, &mut valid_profile_cnt, 3);
         } else {
@@ -431,8 +429,13 @@ fn calculate_feasible<F: Float>(
     }
     let mut idx_fastest = 0usize;
     let mut t_fastest = valid_profiles[0].duration;
-    for i in 1..valid_profile_cnt {
-        let t_current = valid_profiles[i].duration;
+    for (i, profile) in valid_profiles
+        .iter()
+        .enumerate()
+        .take(valid_profile_cnt)
+        .skip(1)
+    {
+        let t_current = profile.duration;
         if t_current < t_fastest {
             t_fastest = t_current;
             idx_fastest = i;

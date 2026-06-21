@@ -8,6 +8,8 @@ members = [
     "deke-topp3tcp-spline",
     "deke-topp-speed",
     "deke-bench-retimers",
+    "deke-linear",
+    "deke-multipath",
 ]
 resolver = "2"
 

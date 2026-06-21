@@ -2,8 +2,8 @@ use deke_types::{DekeResult, SRobotPath, SRobotQ, Validator};
 
 use crate::randomizer::{DekeRng, RandomizerType};
 use crate::rrtc::{
-    RrtcSettings, path_cost, reduce, sample_uniform, shortcut, smooth_bspline,
-    solve as rrtc_solve, validate_edge_stats, weighted_distance,
+    RrtcSettings, path_cost, reduce, sample_uniform, shortcut, smooth_bspline, solve as rrtc_solve,
+    validate_edge_stats, weighted_distance,
 };
 use crate::tree::RrtTree;
 use crate::{AnytimeInfo, RrtDiagnostic, RrtTermination};
@@ -81,8 +81,8 @@ impl<const N: usize> Phs<N> {
         let mut scaled_goal = [0.0; N];
         let mut center = [0.0; N];
         for i in 0..N {
-            scaled_start[i] = start.0[i] as f64 * sqrt_coeffs[i];
-            scaled_goal[i] = goal.0[i] as f64 * sqrt_coeffs[i];
+            scaled_start[i] = start.0[i] * sqrt_coeffs[i];
+            scaled_goal[i] = goal.0[i] * sqrt_coeffs[i];
             center[i] = (scaled_start[i] + scaled_goal[i]) * 0.5;
         }
 
@@ -127,6 +127,7 @@ impl<const N: usize> Phs<N> {
             }
 
             let mut point = [0.0; N];
+            #[allow(clippy::needless_range_loop)]
             for i in 0..N {
                 for j in 0..N {
                     point[i] += self.basis[j][i] * scaled_ball[j];
@@ -171,6 +172,7 @@ fn build_orthonormal_basis<const N: usize>(
     let mut basis = [[0.0; N]; N];
 
     if c_min < 1e-10 {
+        #[allow(clippy::needless_range_loop)]
         for i in 0..N {
             basis[i][i] = 1.0;
         }
@@ -185,6 +187,7 @@ fn build_orthonormal_basis<const N: usize>(
         let mut v = [0.0; N];
         v[i] = 1.0;
 
+        #[allow(clippy::needless_range_loop)]
         for j in 0..i {
             let dot: f64 = (0..N).map(|k| v[k] * basis[j][k]).sum();
             for k in 0..N {
@@ -267,12 +270,12 @@ pub(crate) fn solve<const N: usize, V: Validator<N, (), f64>, S: DekeRng<N>, A: 
     let timer = std::time::Instant::now();
     let dof_coeffs = {
         let mut c = [0.0f64; N];
-        for i in 0..N {
-            c[i] = settings.dof_cost_weights.0[i] as f64;
+        for (i, ci) in c.iter_mut().enumerate() {
+            *ci = settings.dof_cost_weights.0[i];
             if settings.penalize_static_dof {
                 let delta = (start.0[i] - goal.0[i]).abs();
                 if delta < settings.static_dof_threshold {
-                    c[i] *= settings.static_dof_penalty as f64;
+                    *ci *= settings.static_dof_penalty;
                 }
             }
         }
@@ -545,7 +548,12 @@ pub(crate) fn solve<const N: usize, V: Validator<N, (), f64>, S: DekeRng<N>, A: 
     }
 
     if settings.simplify_shortcut {
-        shortcut(&mut best_waypoints, validator, ctx, settings.rrtc.resolution);
+        shortcut(
+            &mut best_waypoints,
+            validator,
+            ctx,
+            settings.rrtc.resolution,
+        );
     }
 
     if settings.simplify_bspline_steps > 0 {
@@ -560,7 +568,12 @@ pub(crate) fn solve<const N: usize, V: Validator<N, (), f64>, S: DekeRng<N>, A: 
         );
 
         if settings.simplify_shortcut {
-            shortcut(&mut best_waypoints, validator, ctx, settings.rrtc.resolution);
+            shortcut(
+                &mut best_waypoints,
+                validator,
+                ctx,
+                settings.rrtc.resolution,
+            );
         }
     }
 

@@ -313,7 +313,11 @@ impl fmt::Display for Topp3Tcp6Diagnostic {
             self.path_stats.max_segment_length,
             self.path_stats.segment_length_ratio,
         )?;
-        writeln!(f, "  total time      : {:.4}s", self.total_time.as_secs_f64())?;
+        writeln!(
+            f,
+            "  total time      : {:.4}s",
+            self.total_time.as_secs_f64()
+        )?;
         writeln!(
             f,
             "  peak joint v/a/j: {:.3} (s={}, j={}) / {:.3} (s={}, j={}) / {:.3} (s={}, j={})",
@@ -357,9 +361,7 @@ impl fmt::Display for Topp3Tcp6Diagnostic {
         writeln!(
             f,
             "  TCP geometry    : max|pp|={:.3e}, max|ppp|={:.3e}, max|pppp|={:.3e}",
-            self.tcp_stats.max_abs_pp,
-            self.tcp_stats.max_abs_ppp,
-            self.tcp_stats.max_abs_pppp,
+            self.tcp_stats.max_abs_pp, self.tcp_stats.max_abs_ppp, self.tcp_stats.max_abs_pppp,
         )?;
         writeln!(
             f,

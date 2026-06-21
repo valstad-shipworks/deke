@@ -11,12 +11,42 @@ use deke_types::{JointValidator, SRobotQ};
 pub fn dh_6dof() -> Kinematics<6, f64> {
     Kinematics::from_dh(
         [
-            DHJoint { a: 0.0, alpha: FRAC_PI_2, d: 0.089, theta_offset: 0.0 },
-            DHJoint { a: -0.425, alpha: 0.0, d: 0.0, theta_offset: 0.0 },
-            DHJoint { a: -0.392, alpha: 0.0, d: 0.0, theta_offset: 0.0 },
-            DHJoint { a: 0.0, alpha: FRAC_PI_2, d: 0.109, theta_offset: 0.0 },
-            DHJoint { a: 0.0, alpha: -FRAC_PI_2, d: 0.094, theta_offset: 0.0 },
-            DHJoint { a: 0.0, alpha: 0.0, d: 0.082, theta_offset: 0.0 },
+            DHJoint {
+                a: 0.0,
+                alpha: FRAC_PI_2,
+                d: 0.089,
+                theta_offset: 0.0,
+            },
+            DHJoint {
+                a: -0.425,
+                alpha: 0.0,
+                d: 0.0,
+                theta_offset: 0.0,
+            },
+            DHJoint {
+                a: -0.392,
+                alpha: 0.0,
+                d: 0.0,
+                theta_offset: 0.0,
+            },
+            DHJoint {
+                a: 0.0,
+                alpha: FRAC_PI_2,
+                d: 0.109,
+                theta_offset: 0.0,
+            },
+            DHJoint {
+                a: 0.0,
+                alpha: -FRAC_PI_2,
+                d: 0.094,
+                theta_offset: 0.0,
+            },
+            DHJoint {
+                a: 0.0,
+                alpha: 0.0,
+                d: 0.082,
+                theta_offset: 0.0,
+            },
         ],
         JointLimits::symmetric(10.0),
         &[],
@@ -25,7 +55,12 @@ pub fn dh_6dof() -> Kinematics<6, f64> {
 
 pub fn dh_1dof() -> Kinematics<1, f64> {
     Kinematics::from_dh(
-        [DHJoint { a: 0.3, alpha: 0.0, d: 0.0, theta_offset: 0.0 }],
+        [DHJoint {
+            a: 0.3,
+            alpha: 0.0,
+            d: 0.0,
+            theta_offset: 0.0,
+        }],
         JointLimits::symmetric(10.0),
         &[],
     )
@@ -40,7 +75,12 @@ pub fn dh_7dof_prismatic() -> Kinematics<7, f64> {
     let arm = dh_6dof().structure();
     let joints: [(DAffine3, JointSpec<f64>); 7] = std::array::from_fn(|i| {
         if i == 0 {
-            (DAffine3::IDENTITY, JointSpec::Prismatic { axis_local: DVec3::X })
+            (
+                DAffine3::IDENTITY,
+                JointSpec::Prismatic {
+                    axis_local: DVec3::X,
+                },
+            )
         } else {
             arm.joints[i - 1]
         }

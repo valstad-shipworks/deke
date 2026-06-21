@@ -6,15 +6,15 @@ use deke_types::{
     ContinuousFKChain, DekeError, DekeResult, FKChain, Retimer, SRobotPath, SRobotTraj, Validator,
 };
 
-use crate::common::boundary::project;
 use super::constraints::Topp3Tcp6Constraints;
 use super::diagnostic::{
     DerivativeStats, LimitingGroup, PathStats, PeakLocation, SolveStatus, TcpStats,
     Topp3Tcp6Diagnostic,
 };
 use super::nlp::{Solution, build_and_solve, build_and_solve_warm};
-use crate::common::path_derivatives::PathDerivatives;
 use super::resample::resample_to_uniform;
+use crate::common::boundary::project;
+use crate::common::path_derivatives::PathDerivatives;
 
 /// Time-optimal path-parameterization retimer with per-joint and per-TCP velocity, acceleration
 /// and jerk constraints. See the crate-level docs for the mathematical formulation.
@@ -52,15 +52,14 @@ impl<'a, const N: usize, FK: ContinuousFKChain<N, f64>> Retimer<N, f64> for Topp
         }
 
         let t_densify = Instant::now();
-        let (densified, merged_count) =
-            match densify_path(path, &constraints.densification) {
-                Ok(out) => out,
-                Err(e) => {
-                    diag.message = Some(format!("{}", e));
-                    diag.phase_timing.densify = t_densify.elapsed();
-                    return (Err(e), diag);
-                }
-            };
+        let (densified, merged_count) = match densify_path(path, &constraints.densification) {
+            Ok(out) => out,
+            Err(e) => {
+                diag.message = Some(format!("{}", e));
+                diag.phase_timing.densify = t_densify.elapsed();
+                return (Err(e), diag);
+            }
+        };
         diag.phase_timing.densify = t_densify.elapsed();
         diag.densified_samples = densified.len();
         diag.path_stats.merged_waypoints = merged_count;
@@ -123,7 +122,10 @@ impl<'a, const N: usize, FK: ContinuousFKChain<N, f64>> Retimer<N, f64> for Topp
             }
         };
         let is_success = |r: &DekeResult<Solution>| -> bool {
-            matches!(r.as_ref().ok().map(|s| s.status), Some(SolveStatus::Success))
+            matches!(
+                r.as_ref().ok().map(|s| s.status),
+                Some(SolveStatus::Success)
+            )
         };
 
         // Tolerance-relaxation retry ladder. The user's requested tolerance is what
@@ -234,16 +236,20 @@ impl<'a, const N: usize, FK: ContinuousFKChain<N, f64>> Retimer<N, f64> for Topp
         };
         diag.phase_timing.resample = t_resample.elapsed();
 
-        if constraints.post_validation {
-            if let Err(e) = validator.validate_motion(traj_path.iter().as_slice(), ctx) {
-                diag.message = Some(format!("validator rejected output: {}", e));
-                return (Err(e), diag);
-            }
+        if constraints.post_validation
+            && let Err(e) = validator.validate_motion(traj_path.iter().as_slice(), ctx)
+        {
+            diag.message = Some(format!("validator rejected output: {}", e));
+            return (Err(e), diag);
         }
 
         if constraints.check_output_dynamics {
             if let Err(e) = check_dynamics_against_limits::<N>(
-                &solution, &deriv, constraints, dt_out, tolerance_used,
+                &solution,
+                &deriv,
+                constraints,
+                dt_out,
+                tolerance_used,
             ) {
                 diag.message = Some(format!("{}", e));
                 return (Err(e), diag);
@@ -747,8 +753,10 @@ fn derivative_stats_from_deriv<const N: usize>(
 /// failure mode.
 fn tcp_stats_from_deriv<const N: usize>(deriv: &PathDerivatives<N>) -> TcpStats {
     let m = deriv.num_waypoints();
-    let mut out = TcpStats::default();
-    out.min_abs_pp_per_axis = [f64::INFINITY; 3];
+    let mut out = TcpStats {
+        min_abs_pp_per_axis: [f64::INFINITY; 3],
+        ..Default::default()
+    };
     for k in 0..m {
         let pp = &deriv.pp[k];
         let ppp = &deriv.ppp[k];
@@ -924,12 +932,14 @@ fn infer_limiting_group<const N: usize>(
     deriv: &PathDerivatives<N>,
     constraints: &Topp3Tcp6Constraints<N>,
 ) -> (Option<LimitingGroup>, Option<usize>) {
-    if matches!(solution.status, SolveStatus::LocallyInfeasible | SolveStatus::GloballyInfeasible) {
+    if matches!(
+        solution.status,
+        SolveStatus::LocallyInfeasible | SolveStatus::GloballyInfeasible
+    ) {
         let lock = constraints.locked_prefix.min(N);
         let m = deriv.num_waypoints();
         // (excess, group, sample_idx)
-        let mut worst: (f64, LimitingGroup, usize) =
-            (0.0, LimitingGroup::JointVelocity, 0);
+        let mut worst: (f64, LimitingGroup, usize) = (0.0, LimitingGroup::JointVelocity, 0);
         for k in 0..m {
             let sd = solution.sd[k].max(0.0);
             let sdd = solution.sdd[k];

@@ -1,0 +1,20 @@
+[package]
+name = "deke-linear"
+version = "2.0.0"
+edition = "2024"
+description = "Constant-TCP-speed Cartesian polyline following for serial manipulators."
+license = "Apache-2.0"
+
+[dependencies]
+deke-types = { version = "2.0" }
+squiggle = { version = "1.0.0" }
+glam = "0.32.1"
+thiserror = "2.0.18"
+
+[dev-dependencies]
+deke-kin = { version = "2.0", path = "../deke-kin" }
+criterion = "0.8.2"
+
+[[bench]]
+name = "planners"
+harness = false

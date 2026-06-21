@@ -5,7 +5,7 @@ use glam::{DMat4, DVec3};
 use crate::ik_geo::subproblems::auxiliary::rot as axis_angle;
 use crate::ik_geo::subproblems::{subproblem1, subproblem2, subproblem3};
 use crate::remodel::do_axes_intersect;
-use crate::solver::{Chain2, Joints};
+use crate::solver::{Chain2, Solutions};
 
 pub struct R2 {
     chain: Chain2,
@@ -20,7 +20,7 @@ impl R2 {
         }
     }
 
-    pub fn solve(&self, pose: &DMat4) -> Vec<Joints> {
+    pub fn solve(&self, pose: &DMat4) -> Solutions {
         let p_t = pose.w_axis.truncate();
         let p_1ee = p_t - self.chain.p[0];
 
@@ -29,7 +29,7 @@ impl R2 {
         let p1 = self.chain.p[1];
         let p2 = self.chain.p[2];
 
-        let mut out: Vec<Joints> = Vec::with_capacity(8);
+        let mut out: Solutions = Solutions::new();
 
         if do_axes_intersect(&h0, &h1, &p1, self.zero_thresh, self.zero_thresh) {
             let set = subproblem2(&p_1ee, &p2, &(-h0), &h1);

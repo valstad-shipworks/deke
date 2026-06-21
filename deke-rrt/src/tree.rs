@@ -29,6 +29,7 @@ impl<const N: usize> RrtTree<N> {
 
     fn scale(&self, q: &SRobotQ<N, f64>) -> [f64; N] {
         let mut scaled = [0.0; N];
+        #[allow(clippy::needless_range_loop)]
         for i in 0..N {
             scaled[i] = q.0[i] * self.sqrt_coeffs[i];
         }
@@ -105,6 +106,7 @@ impl<const N: usize> RrtTree<N> {
     /// Falls back to root (index 0) if no node satisfies the constraint.
     pub fn find_nearest_ao(&self, q: &SRobotQ<N, f64>, cost_bound: f64) -> (usize, f64) {
         let mut scaled = [0.0f64; N];
+        #[allow(clippy::needless_range_loop)]
         for i in 0..N {
             scaled[i] = q.0[i] * self.sqrt_coeffs[i];
         }
@@ -123,6 +125,7 @@ impl<const N: usize> RrtTree<N> {
 
             let mut dist_sq = 0.0;
             let node = &self.nodes[i];
+            #[allow(clippy::needless_range_loop)]
             for j in 0..N {
                 let d = scaled[j] - node.0[j] * self.sqrt_coeffs[j];
                 dist_sq += d * d;

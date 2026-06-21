@@ -31,7 +31,11 @@ pub struct KrrtcSettings<const N: usize> {
 }
 
 impl<const N: usize> KrrtcSettings<N> {
-    pub fn new(lower: SRobotQ<N, f64>, upper: SRobotQ<N, f64>, kin_limits: KinematicLimits<N>) -> Self {
+    pub fn new(
+        lower: SRobotQ<N, f64>,
+        upper: SRobotQ<N, f64>,
+        kin_limits: KinematicLimits<N>,
+    ) -> Self {
         Self {
             range: 0.5,
             max_iterations: 100_000,
@@ -474,6 +478,7 @@ pub(crate) fn solve<const N: usize, V: Validator<N, (), f64>, R: DekeRng<N>>(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn extend_and_connect<const N: usize, V: Validator<N, (), f64>>(
     tree_a: &mut RrtTree<N>,
     tree_b: &mut RrtTree<N>,
@@ -535,8 +540,15 @@ fn extend_and_connect<const N: usize, V: Validator<N, (), f64>>(
 
         let q_step = kinematic_steer(&q_connect, &q_new, settings.range, &settings.kin_limits);
 
-        if validate_edge_stats(&q_connect, &q_step, settings.resolution, validator, ctx, stats)
-            .is_err()
+        if validate_edge_stats(
+            &q_connect,
+            &q_step,
+            settings.resolution,
+            validator,
+            ctx,
+            stats,
+        )
+        .is_err()
         {
             return None;
         }

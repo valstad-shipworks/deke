@@ -44,10 +44,7 @@ pub struct PathDerivatives<const N: usize> {
 impl<const N: usize> PathDerivatives<N> {
     /// Verifies that the first `locked_prefix` joints are constant across every waypoint in the
     /// input path. Returns the first violation as a [`DekeError::LockedPrefixViolation`].
-    pub fn check_locked_prefix(
-        path: &SRobotPath<N, f64>,
-        locked_prefix: usize,
-    ) -> DekeResult<()> {
+    pub fn check_locked_prefix(path: &SRobotPath<N, f64>, locked_prefix: usize) -> DekeResult<()> {
         if locked_prefix == 0 {
             return Ok(());
         }
@@ -66,10 +63,7 @@ impl<const N: usize> PathDerivatives<N> {
         Ok(())
     }
 
-    pub fn new<FK: FKChain<N, f64>>(
-        densified: &SRobotPath<N, f64>,
-        fk: &FK,
-    ) -> DekeResult<Self> {
+    pub fn new<FK: FKChain<N, f64>>(densified: &SRobotPath<N, f64>, fk: &FK) -> DekeResult<Self> {
         Self::build(densified, Some(fk))
     }
 
@@ -144,8 +138,8 @@ impl<const N: usize> PathDerivatives<N> {
             // Closer sampling near the endpoints catches the J(q) extremes that
             // typically dominate the chord-tangent peak on near-singularity paths.
             const U_SAMPLES: [f64; 19] = [
-                0.025, 0.075, 0.125, 0.175, 0.225, 0.275, 0.325, 0.4, 0.475, 0.5,
-                0.525, 0.6, 0.675, 0.725, 0.775, 0.825, 0.875, 0.925, 0.975,
+                0.025, 0.075, 0.125, 0.175, 0.225, 0.275, 0.325, 0.4, 0.475, 0.5, 0.525, 0.6,
+                0.675, 0.725, 0.775, 0.825, 0.875, 0.925, 0.975,
             ];
             const EPS_U: f64 = 1e-3;
             let mut chord_tangent_max_sq = Vec::with_capacity(m - 1);
@@ -167,9 +161,11 @@ impl<const N: usize> PathDerivatives<N> {
                         q_plus[j] = a[j] + u_plus * dq;
                         q_minus[j] = a[j] + u_minus * dq;
                     }
-                    let t_plus_pose = fk.fk_end(&SRobotQ::from_array(q_plus))
+                    let t_plus_pose = fk
+                        .fk_end(&SRobotQ::from_array(q_plus))
                         .map_err(|e| e.into())?;
-                    let t_minus_pose = fk.fk_end(&SRobotQ::from_array(q_minus))
+                    let t_minus_pose = fk
+                        .fk_end(&SRobotQ::from_array(q_minus))
                         .map_err(|e| e.into())?;
                     let t_plus_v = t_plus_pose.translation();
                     let t_minus_v = t_minus_pose.translation();
@@ -256,10 +252,9 @@ impl<const N: usize> FKChain<N, f64> for NeverFK<N> {
 /// constant per segment; same averaging at interior knots.
 ///
 /// Per-dimension; each output dimension fitted independently.
-fn spline_derivatives<const D: usize>(
-    y: &[[f64; D]],
-    ds: &[f64],
-) -> (Vec<[f64; D]>, Vec<[f64; D]>, Vec<[f64; D]>) {
+type SplineDerivs<const D: usize> = (Vec<[f64; D]>, Vec<[f64; D]>, Vec<[f64; D]>);
+
+fn spline_derivatives<const D: usize>(y: &[[f64; D]], ds: &[f64]) -> SplineDerivs<D> {
     let m = y.len();
     let mut yp = vec![[0.0_f64; D]; m];
     let mut ypp = vec![[0.0_f64; D]; m];
@@ -294,23 +289,15 @@ fn spline_derivatives<const D: usize>(
     // ypp on segment k at t=1: (-6·Δ_k + 2·d_k + 4·d_{k+1}) / h_k
     for d in 0..D {
         ypp[0][d] = (6.0 * delta[0][d] - 4.0 * slopes[0][d] - 2.0 * slopes[1][d]) / ds[0];
-        ypp[m - 1][d] = (-6.0 * delta[m - 2][d]
-            + 2.0 * slopes[m - 2][d]
-            + 4.0 * slopes[m - 1][d])
-            / ds[m - 2];
+        ypp[m - 1][d] =
+            (-6.0 * delta[m - 2][d] + 2.0 * slopes[m - 2][d] + 4.0 * slopes[m - 1][d]) / ds[m - 2];
     }
     for k in 1..m - 1 {
         let h_l = ds[k - 1];
         let h_r = ds[k];
         for d in 0..D {
-            let left = (-6.0 * delta[k - 1][d]
-                + 2.0 * slopes[k - 1][d]
-                + 4.0 * slopes[k][d])
-                / h_l;
-            let right = (6.0 * delta[k][d]
-                - 4.0 * slopes[k][d]
-                - 2.0 * slopes[k + 1][d])
-                / h_r;
+            let left = (-6.0 * delta[k - 1][d] + 2.0 * slopes[k - 1][d] + 4.0 * slopes[k][d]) / h_l;
+            let right = (6.0 * delta[k][d] - 4.0 * slopes[k][d] - 2.0 * slopes[k + 1][d]) / h_r;
             ypp[k][d] = 0.5 * (left + right);
         }
     }
@@ -320,20 +307,17 @@ fn spline_derivatives<const D: usize>(
         let h0 = ds[0];
         yppp[0][d] = (-12.0 * delta[0][d] + 6.0 * (slopes[0][d] + slopes[1][d])) / (h0 * h0);
         let hl = ds[m - 2];
-        yppp[m - 1][d] = (-12.0 * delta[m - 2][d]
-            + 6.0 * (slopes[m - 2][d] + slopes[m - 1][d]))
-            / (hl * hl);
+        yppp[m - 1][d] =
+            (-12.0 * delta[m - 2][d] + 6.0 * (slopes[m - 2][d] + slopes[m - 1][d])) / (hl * hl);
     }
     for k in 1..m - 1 {
         let h_l = ds[k - 1];
         let h_r = ds[k];
         for d in 0..D {
-            let left = (-12.0 * delta[k - 1][d]
-                + 6.0 * (slopes[k - 1][d] + slopes[k][d]))
-                / (h_l * h_l);
-            let right = (-12.0 * delta[k][d]
-                + 6.0 * (slopes[k][d] + slopes[k + 1][d]))
-                / (h_r * h_r);
+            let left =
+                (-12.0 * delta[k - 1][d] + 6.0 * (slopes[k - 1][d] + slopes[k][d])) / (h_l * h_l);
+            let right =
+                (-12.0 * delta[k][d] + 6.0 * (slopes[k][d] + slopes[k + 1][d])) / (h_r * h_r);
             yppp[k][d] = 0.5 * (left + right);
         }
     }

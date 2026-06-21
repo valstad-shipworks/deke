@@ -88,11 +88,11 @@ fn problems() -> Vec<BenchProblem<6>> {
         waypoints: vec![
             SRobotQ::from_array([-1.2_f64, -1.2, 1.4, 0.0, 0.0, 0.0]), // start (far)
             SRobotQ::from_array([-0.10, -0.60, 0.80, 0.20, 0.10, 0.30]), // enter kink
-            SRobotQ::from_array([0.00, -0.70, 0.85, 0.25, 0.15, 0.40]),  // zig
-            SRobotQ::from_array([0.05, -0.60, 0.80, 0.30, 0.20, 0.50]),  // zag
-            SRobotQ::from_array([0.10, -0.70, 0.85, 0.35, 0.15, 0.40]),  // zig
-            SRobotQ::from_array([0.15, -0.60, 0.80, 0.40, 0.10, 0.50]),  // exit kink
-            SRobotQ::from_array([1.20, 0.00, 0.40, 0.50, 0.00, 0.30]),   // end (far)
+            SRobotQ::from_array([0.00, -0.70, 0.85, 0.25, 0.15, 0.40]), // zig
+            SRobotQ::from_array([0.05, -0.60, 0.80, 0.30, 0.20, 0.50]), // zag
+            SRobotQ::from_array([0.10, -0.70, 0.85, 0.35, 0.15, 0.40]), // zig
+            SRobotQ::from_array([0.15, -0.60, 0.80, 0.40, 0.10, 0.50]), // exit kink
+            SRobotQ::from_array([1.20, 0.00, 0.40, 0.50, 0.00, 0.30]), // end (far)
         ],
         v_max: v,
         a_max: a,
@@ -109,7 +109,16 @@ fn print_header(problem_name: &str) {
     println!("=== {} ===", problem_name);
     println!(
         "  {:<20} {:>10} {:>10} {:>9}  {:>6} {:>6} {:>6} {:>7} {:>6} {:>7}",
-        "retimer", "solve_ms", "dur_s", "samples", "u_jv", "u_ja", "u_jj", "u_tcpv", "max_u", "dev_rad"
+        "retimer",
+        "solve_ms",
+        "dur_s",
+        "samples",
+        "u_jv",
+        "u_ja",
+        "u_jj",
+        "u_tcpv",
+        "max_u",
+        "dev_rad"
     );
 }
 
@@ -132,8 +141,16 @@ fn print_row(r: &BenchResult<6>) {
     };
     println!(
         "  {:<20} {:>10.2} {:>10.4} {:>9}  {:>6.3} {:>6.3} {:>6.3} {:>7} {:>6.3} {}   {}",
-        r.retimer, solve_ms, dur_s, r.num_samples,
-        u.joint_v, u.joint_a, u.joint_j, tcp_u, u.max_u, dev,
+        r.retimer,
+        solve_ms,
+        dur_s,
+        r.num_samples,
+        u.joint_v,
+        u.joint_a,
+        u.joint_j,
+        tcp_u,
+        u.max_u,
+        dev,
         status_or_err,
     );
 }
@@ -190,12 +207,8 @@ fn comparative() {
     println!(
         "Comparative retimer analysis (production 6-DOF URDF chain). Columns: solve_ms = wall-clock,"
     );
-    println!(
-        "dur_s = trajectory length, samples = output points, u_* = AVERAGE per-sample"
-    );
-    println!(
-        "utilization (per-sample max_j(|x|/limit), averaged across samples)."
-    );
+    println!("dur_s = trajectory length, samples = output points, u_* = AVERAGE per-sample");
+    println!("utilization (per-sample max_j(|x|/limit), averaged across samples).");
 
     for problem in problems() {
         print_header(problem.name);

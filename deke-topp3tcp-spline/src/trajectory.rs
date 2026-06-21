@@ -170,8 +170,8 @@ fn j_pos_dot<const N: usize>(j: &[[f64; N]; 6], v: &SRobotQ<N, f64>) -> [f64; 3]
     let mut out = [0.0f64; 3];
     for i in 0..3 {
         let mut s = 0.0f64;
-        for k in 0..N {
-            s += j[i][k] * v.0[k];
+        for (jik, vk) in j[i].iter().zip(&v.0) {
+            s += jik * vk;
         }
         out[i] = s;
     }
@@ -462,9 +462,7 @@ impl<'a, const N: usize, FK: ContinuousFKChain<N, f64>> Trajectory<'a, N, FK> {
     }
 
     /// Return `(times, s, sdot, sddot, sdddot)` arrays.
-    pub fn get_s_state_arrays(
-        &self,
-    ) -> (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>) {
+    pub fn get_s_state_arrays(&self) -> (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>) {
         let n = self.states.len();
         let mut times = Vec::with_capacity(n);
         let mut s = Vec::with_capacity(n);
@@ -523,6 +521,7 @@ impl<'a, const N: usize, FK: ContinuousFKChain<N, f64>> Trajectory<'a, N, FK> {
         // Pull out the current jerks; leave endpoint segments alone so the
         // start/end boundary states keep their DFS-validated jerk.
         let mut new_jerks: Vec<f64> = self.states.iter().map(|s| s.state[3]).collect();
+        #[allow(clippy::needless_range_loop)]
         for k in 1..(n - 1) {
             let j_prev = self.states[k - 1].state[3];
             let j_curr = self.states[k].state[3];
@@ -646,7 +645,11 @@ impl<'a, const N: usize, FK: ContinuousFKChain<N, f64>> Trajectory<'a, N, FK> {
             }
             let p0 = tcp_pos[k];
             let p1 = tcp_pos[k - 1];
-            let dv = [(p0[0] - p1[0]) / dt, (p0[1] - p1[1]) / dt, (p0[2] - p1[2]) / dt];
+            let dv = [
+                (p0[0] - p1[0]) / dt,
+                (p0[1] - p1[1]) / dt,
+                (p0[2] - p1[2]) / dt,
+            ];
             let v = (dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2]).sqrt();
             let u = v / tcp.v_max;
             if u > limit {
@@ -663,7 +666,9 @@ impl<'a, const N: usize, FK: ContinuousFKChain<N, f64>> Trajectory<'a, N, FK> {
     /// produces a sample sequence that takes `α × original_time` and
     /// whose backward-FD readings scale down accordingly.
     pub fn rescale_time_in_place(&mut self, alpha: f64) {
-        if !(alpha > 1.0) || !alpha.is_finite() {
+        if !matches!(alpha.partial_cmp(&1.0), Some(std::cmp::Ordering::Greater))
+            || !alpha.is_finite()
+        {
             return;
         }
         let inv = 1.0 / alpha;
@@ -829,8 +834,7 @@ impl<'a, const N: usize, FK: ContinuousFKChain<N, f64>> Trajectory<'a, N, FK> {
                     }
                 }
 
-                let (sdddot_min, sdddot_max) =
-                    self.jerk_range_from_jerk_constraints(&next_node)?;
+                let (sdddot_min, sdddot_max) = self.jerk_range_from_jerk_constraints(&next_node)?;
                 // Optional jerk-jump cap: restrict the next segment's
                 // jerk to within `max_jerk_jump` of the prior segment's
                 // jerk (= `next_node.state[3]`, the jerk just applied
@@ -867,8 +871,7 @@ impl<'a, const N: usize, FK: ContinuousFKChain<N, f64>> Trajectory<'a, N, FK> {
         }
 
         Err(DekeError::RetimerFailed(
-            "topp3tcp-spline: depth-first search exhausted all jerk candidates"
-                .to_string(),
+            "topp3tcp-spline: depth-first search exhausted all jerk candidates".to_string(),
         ))
     }
 

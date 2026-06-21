@@ -1,0 +1,27 @@
+[package]
+name = "deke-multipath"
+version = "2.0.0"
+edition = "2024"
+license = "Apache-2.0"
+authors = ["Bowan Foryt <bowan@valstad.com>"]
+description = "Optimal ordering and orientation of required robot paths (asymmetric generalized TSP) for the Deke project."
+repository = "https://github.com/valstad-shipworks/deke"
+
+[features]
+default = []
+# Use rayon to plan connectors and expand heuristic seeds concurrently.
+rayon = ["dep:rayon"]
+
+[dependencies]
+deke-types = { version = "2.0", path = "../deke-types" }
+thiserror = "2.0.18"
+tracing = "0.1"
+rayon = { version = "1", optional = true }
+
+[dev-dependencies]
+deke-rrt = { version = "2.0", path = "../deke-rrt" }
+criterion = "0.5"
+
+[[bench]]
+name = "agtsp"
+harness = false

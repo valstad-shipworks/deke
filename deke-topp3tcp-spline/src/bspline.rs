@@ -32,6 +32,7 @@ pub(crate) fn find_span(knots: &[f64], k: usize, n_coeffs: usize, x: f64) -> usi
 ///
 /// Returns `ders[d][j]` = d-th derivative of `N_{i-k+j, k}(x)` for
 /// `d = 0..=nd`, `j = 0..=k`. Algorithm A2.3 from *The NURBS Book*.
+#[allow(clippy::needless_range_loop)]
 pub(crate) fn ders_basis_funs(
     knots: &[f64],
     i: usize,
@@ -125,7 +126,8 @@ pub(crate) fn ders_basis_funs(
 
 /// Solve a dense `n × n` system `A x = b` via Gaussian elimination with
 /// partial pivoting. On return `b` contains the solution.
-pub(crate) fn solve_dense(a: &mut Vec<Vec<f64>>, b: &mut Vec<f64>) {
+#[allow(clippy::needless_range_loop)]
+pub(crate) fn solve_dense(a: &mut [Vec<f64>], b: &mut [f64]) {
     let n = b.len();
     for col in 0..n {
         let mut best = col;
@@ -178,6 +180,7 @@ impl BSpline {
     /// Build an interpolating B-spline of the given `degree` that passes
     /// through `(sites[i], values[i])` with optional derivative BCs at the
     /// endpoints.
+    #[allow(clippy::needless_range_loop)]
     pub fn interpolate(
         sites: &[f64],
         values: &[f64],
@@ -203,8 +206,7 @@ impl BSpline {
         for j in 0..n_interior {
             let start = j + 1;
             let end = (j + degree).min(n_data - 1);
-            let avg: f64 =
-                (start..=end).map(|i| sites[i]).sum::<f64>() / (end - start + 1) as f64;
+            let avg: f64 = (start..=end).map(|i| sites[i]).sum::<f64>() / (end - start + 1) as f64;
             knots.push(avg);
         }
         for _ in 0..(degree + 1 + nr) {
@@ -275,6 +277,7 @@ impl BSpline {
         self.eval_deriv(x, 0)
     }
 
+    #[allow(clippy::needless_range_loop)]
     pub fn eval_deriv(&self, x: f64, nu: usize) -> f64 {
         if nu > self.degree {
             return 0.0;

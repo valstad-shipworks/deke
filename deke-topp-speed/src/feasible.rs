@@ -102,12 +102,10 @@ impl<F: Float> Feasible<F> {
                 && profiles[0].sweep != profiles[1].sweep
             {
                 Self::remove_at(profiles, &mut count, 1);
-            } else if (profiles[2].duration - profiles[3].duration).abs() < two_fifty_six * eps
-                && profiles[2].sweep != profiles[3].sweep
-            {
-                Self::remove_at(profiles, &mut count, 3);
-            } else if (profiles[0].duration - profiles[3].duration).abs() < two_fifty_six * eps
-                && profiles[0].sweep != profiles[3].sweep
+            } else if ((profiles[2].duration - profiles[3].duration).abs() < two_fifty_six * eps
+                && profiles[2].sweep != profiles[3].sweep)
+                || ((profiles[0].duration - profiles[3].duration).abs() < two_fifty_six * eps
+                    && profiles[0].sweep != profiles[3].sweep)
             {
                 Self::remove_at(profiles, &mut count, 3);
             } else {
@@ -118,8 +116,8 @@ impl<F: Float> Feasible<F> {
         }
         let mut idx_fastest = 0usize;
         let mut t_fastest = profiles[0].duration;
-        for i in 1..count {
-            let t_current = profiles[i].duration;
+        for (i, profile) in profiles.iter().enumerate().take(count).skip(1) {
+            let t_current = profile.duration;
             if t_current < t_fastest {
                 t_fastest = t_current;
                 idx_fastest = i;

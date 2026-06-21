@@ -3,8 +3,7 @@
 use std::time::{Duration, Instant};
 
 use deke_types::{
-    ContinuousFKChain, DekeError, DekeResult, Retimer, SRobotPath, SRobotQ, SRobotTraj,
-    Validator,
+    ContinuousFKChain, DekeError, DekeResult, Retimer, SRobotPath, SRobotQ, SRobotTraj, Validator,
 };
 
 use crate::constraints::Topp3TcpSplineConstraints;
@@ -36,7 +35,9 @@ impl<'a, const N: usize, FK: ContinuousFKChain<N, f64>> Topp3TcpSpline<'a, N, FK
     }
 }
 
-impl<'a, const N: usize, FK: ContinuousFKChain<N, f64>> Retimer<N, f64> for Topp3TcpSpline<'a, N, FK> {
+impl<'a, const N: usize, FK: ContinuousFKChain<N, f64>> Retimer<N, f64>
+    for Topp3TcpSpline<'a, N, FK>
+{
     type Diagnostic = Topp3TcpSplineDiagnostic;
     type Constraints = Topp3TcpSplineConstraints<N>;
 
@@ -113,15 +114,15 @@ impl<'a, const N: usize, FK: ContinuousFKChain<N, f64>> Retimer<N, f64> for Topp
                         .iter()
                         .map(|st| spline_path.eval(st.s()).0)
                         .collect();
-                    let alpha = match traj.peak_fd_overshoot_scale(
-                        &q_samples,
-                        dt_emit,
-                        safety_slack,
+                    let alpha =
+                        match traj.peak_fd_overshoot_scale(&q_samples, dt_emit, safety_slack) {
+                            Ok(a) => a,
+                            Err(_) => break,
+                        };
+                    if !matches!(
+                        alpha.partial_cmp(&(1.0 + 1e-9)),
+                        Some(std::cmp::Ordering::Greater)
                     ) {
-                        Ok(a) => a,
-                        Err(_) => break,
-                    };
-                    if !(alpha > 1.0 + 1e-9) {
                         break;
                     }
                     traj.rescale_time_in_place(alpha);
@@ -133,9 +134,8 @@ impl<'a, const N: usize, FK: ContinuousFKChain<N, f64>> Retimer<N, f64> for Topp
 
                 let states = states_for_eval;
                 diag.output_states = states.len();
-                diag.total_time = Duration::from_secs_f64(
-                    (states.len() as f64 - 1.0).max(0.0) * dt_emit,
-                );
+                diag.total_time =
+                    Duration::from_secs_f64((states.len() as f64 - 1.0).max(0.0) * dt_emit);
                 diag.status = SolveStatus::Success;
 
                 // Reconstruct joint samples at every state by evaluating the

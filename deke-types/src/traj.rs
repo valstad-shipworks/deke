@@ -45,8 +45,7 @@ impl<F: Float> RobotTraj<F> {
     }
 
     pub fn duration(&self) -> Duration {
-        self.dt
-            .saturating_mul(self.len().saturating_sub(1) as u32)
+        self.dt.saturating_mul(self.len().saturating_sub(1) as u32)
     }
 
     pub fn time_at(&self, index: usize) -> Duration {
@@ -118,8 +117,7 @@ impl<const N: usize, F: Float> SRobotTraj<N, F> {
     }
 
     pub fn duration(&self) -> Duration {
-        self.dt
-            .saturating_mul(self.len().saturating_sub(1) as u32)
+        self.dt.saturating_mul(self.len().saturating_sub(1) as u32)
     }
 
     pub fn time_at(&self, index: usize) -> Duration {

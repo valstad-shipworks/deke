@@ -17,7 +17,9 @@ mod sealed {
 /// For `f32`, the aligned types are `Vec3A`/`Mat3A`/`Affine3A` (16-byte SIMD).
 /// For `f64`, they are `DVec3`/`DMat3`/`DAffine3` (already efficient packing).
 /// Both share a uniform interface via the `T*` traits in `glam-traits-ext`.
-pub trait KinScalar: FloatScalar + Copy + std::fmt::Debug + Send + Sync + 'static + sealed::Sealed {
+pub trait KinScalar:
+    FloatScalar + Copy + std::fmt::Debug + Send + Sync + 'static + sealed::Sealed + crate::BatchLimits
+{
     type AVec3: TVec3<Self, MaybeAligned = Self::AVec3>;
     type AMat3: TMat3<Self, MaybeAligned = Self::AMat3>
         + FloatMat<Self, Col = Self::AVec3>
@@ -44,6 +46,9 @@ pub type AAffine3<F: KinScalar> = F::AAffine3;
 #[allow(type_alias_bounds)]
 pub type AVec3<F: KinScalar> = F::AVec3;
 
+#[allow(type_alias_bounds)]
+pub type AllFk<const N: usize, F: KinScalar> = (AAffine3<F>, [AAffine3<F>; N], AAffine3<F>);
+
 #[inline(always)]
 #[cfg(debug_assertions)]
 pub fn check_finite<const N: usize, F: FloatScalar>(q: &SRobotQ<N, F>) -> Result<(), DekeError> {
@@ -55,13 +60,15 @@ pub fn check_finite<const N: usize, F: FloatScalar>(q: &SRobotQ<N, F>) -> Result
 
 #[inline(always)]
 #[cfg(not(debug_assertions))]
-pub fn check_finite<const N: usize, F: FloatScalar>(_: &SRobotQ<N, F>) -> Result<(), std::convert::Infallible> {
+pub fn check_finite<const N: usize, F: FloatScalar>(
+    _: &SRobotQ<N, F>,
+) -> Result<(), std::convert::Infallible> {
     Ok(())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum JointSpec<F: KinScalar> {
-    Revolute  { axis_local: AVec3<F> },
+    Revolute { axis_local: AVec3<F> },
     Prismatic { axis_local: AVec3<F> },
 }
 
@@ -117,10 +124,7 @@ pub trait FKChain<const N: usize, F: KinScalar = f32>: Clone + Send + Sync {
 
     /// Compute base transform, per-link frames, and the end-effector frame
     /// in one call.
-    fn all_fk(
-        &self,
-        q: &SRobotQ<N, F>,
-    ) -> Result<(AAffine3<F>, [AAffine3<F>; N], AAffine3<F>), Self::Error> {
+    fn all_fk(&self, q: &SRobotQ<N, F>) -> Result<AllFk<N, F>, Self::Error> {
         let base = self.base_tf();
         let frames = self.fk(q)?;
         let end = self.fk_end(q)?;
@@ -134,7 +138,9 @@ pub trait FKChain<const N: usize, F: KinScalar = f32>: Clone + Send + Sync {
 /// (`jacobian`, `jacobian_dot`, `jacobian_ddot`) and the link-length-sum
 /// `max_reach` estimate, all provided as defaults that respect each joint's
 /// [`JointSpec`] (so prismatic and revolute columns are formed correctly).
-pub trait ContinuousFKChain<const N: usize, F: KinScalar = f32>: FKChain<N, F, Error = DekeError> {
+pub trait ContinuousFKChain<const N: usize, F: KinScalar = f32>:
+    FKChain<N, F, Error = DekeError>
+{
     fn structure(&self) -> KinSpec<F, N>;
 
     /// Theoretical maximum reach: sum of link lengths at `q = 0` (upper bound,
@@ -144,9 +150,9 @@ pub trait ContinuousFKChain<const N: usize, F: KinScalar = f32>: FKChain<N, F, E
         let (_, p, p_ee) = forward_pass(&spec, &SRobotQ::zeros());
         let mut total = F::zero();
         let mut prev = p[0];
-        for i in 1..N {
-            total = total + (p[i] - prev).length();
-            prev = p[i];
+        for &point in p.iter().take(N).skip(1) {
+            total = total + (point - prev).length();
+            prev = point;
         }
         total = total + (p_ee - prev).length();
         Ok(total)
@@ -156,7 +162,7 @@ pub trait ContinuousFKChain<const N: usize, F: KinScalar = f32>: FKChain<N, F, E
     /// Rows 0–2: linear velocity, rows 3–5: angular velocity.
     fn jacobian(&self, q: &SRobotQ<N, F>) -> Result<[[F; N]; 6], Self::Error> {
         #[cfg(debug_assertions)]
-        check_finite::<N, F>(q).map_err(Self::Error::from)?;
+        check_finite::<N, F>(q)?;
         let spec = self.structure();
         let (z, p, p_ee) = forward_pass(&spec, q);
         let mut j = [[F::zero(); N]; 6];
@@ -181,6 +187,48 @@ pub trait ContinuousFKChain<const N: usize, F: KinScalar = f32>: FKChain<N, F, E
         Ok(j)
     }
 
+    /// Yoshikawa manipulability `w = sqrt(det(J Jᵀ))` at configuration `q` — the
+    /// volume of the velocity ellipsoid, a scalar dexterity measure that falls
+    /// to zero at a singularity.
+    ///
+    /// For an under-actuated chain (`N < 6`) the velocity ellipsoid lives in an
+    /// `N`-dimensional subspace, so the full `6×6` `J Jᵀ` is rank-deficient and
+    /// its determinant is identically zero; the equivalent `sqrt(det(Jᵀ J))`
+    /// over the `N×N` Gram matrix is used instead. Both forms equal the product
+    /// of the Jacobian's singular values.
+    fn manipulability(&self, q: &SRobotQ<N, F>) -> Result<F, Self::Error> {
+        let j = self.jacobian(q)?;
+        // Gram matrix of the shorter dimension: J Jᵀ (6×6) when the chain has
+        // ≥6 joints, else Jᵀ J (N×N). Either way it is k×k with k = min(6, N)
+        // and positive semidefinite, so its determinant is the squared product
+        // of the Jacobian's singular values.
+        let k = if N >= 6 { 6 } else { N };
+        let mut g = [[F::zero(); 6]; 6];
+        if N >= 6 {
+            // J Jᵀ: g[r][c] = row r · row c of J.
+            for (r, grow) in g.iter_mut().enumerate() {
+                for (c, gval) in grow.iter_mut().enumerate() {
+                    *gval = j[r]
+                        .iter()
+                        .zip(j[c].iter())
+                        .fold(F::zero(), |acc, (&a, &b)| acc + a * b);
+                }
+            }
+        } else {
+            // Jᵀ J over the top-left N×N block: g[r][c] = column r · column c.
+            for (r, grow) in g.iter_mut().enumerate().take(N) {
+                for (c, gval) in grow.iter_mut().enumerate().take(N) {
+                    *gval = j
+                        .iter()
+                        .fold(F::zero(), |acc, jrow| acc + jrow[r] * jrow[c]);
+                }
+            }
+        }
+        // The determinant is non-negative in exact arithmetic, but rounding can
+        // push a near-singular value slightly below zero; clamp before the root.
+        Ok(gram_determinant::<F>(g, k).max(F::zero()).sqrt())
+    }
+
     /// First time-derivative of the geometric Jacobian.
     fn jacobian_dot(
         &self,
@@ -189,8 +237,8 @@ pub trait ContinuousFKChain<const N: usize, F: KinScalar = f32>: FKChain<N, F, E
     ) -> Result<[[F; N]; 6], Self::Error> {
         #[cfg(debug_assertions)]
         {
-            check_finite::<N, F>(q).map_err(Self::Error::from)?;
-            check_finite::<N, F>(qdot).map_err(Self::Error::from)?;
+            check_finite::<N, F>(q)?;
+            check_finite::<N, F>(qdot)?;
         }
         let spec = self.structure();
         let (z, p, p_ee) = forward_pass(&spec, q);
@@ -250,9 +298,9 @@ pub trait ContinuousFKChain<const N: usize, F: KinScalar = f32>: FKChain<N, F, E
     ) -> Result<[[F; N]; 6], Self::Error> {
         #[cfg(debug_assertions)]
         {
-            check_finite::<N, F>(q).map_err(Self::Error::from)?;
-            check_finite::<N, F>(qdot).map_err(Self::Error::from)?;
-            check_finite::<N, F>(qddot).map_err(Self::Error::from)?;
+            check_finite::<N, F>(q)?;
+            check_finite::<N, F>(qdot)?;
+            check_finite::<N, F>(qddot)?;
         }
         let spec = self.structure();
         let (z, p, p_ee) = forward_pass(&spec, q);
@@ -320,6 +368,45 @@ pub trait ContinuousFKChain<const N: usize, F: KinScalar = f32>: FKChain<N, F, E
     }
 }
 
+/// Determinant of the top-left `k×k` block (`k ≤ 6`) of `m` via Gaussian
+/// elimination with partial pivoting. Used by
+/// [`ContinuousFKChain::manipulability`] on a symmetric positive-semidefinite
+/// Gram matrix, so a vanishing pivot means the matrix is singular and the
+/// determinant is exactly zero.
+fn gram_determinant<F: KinScalar>(mut m: [[F; 6]; 6], k: usize) -> F {
+    let mut det = F::one();
+    for col in 0..k {
+        let mut pivot = col;
+        let mut pivot_abs = m[col][col].abs();
+        for (r, row) in m.iter().enumerate().take(k).skip(col + 1) {
+            let v = row[col].abs();
+            if v > pivot_abs {
+                pivot_abs = v;
+                pivot = r;
+            }
+        }
+        // A non-positive largest pivot (zero, or NaN — which compares as
+        // `None`) leaves the column degenerate: the matrix is singular, det = 0.
+        if pivot_abs.partial_cmp(&F::zero()) != Some(core::cmp::Ordering::Greater) {
+            return F::zero();
+        }
+        if pivot != col {
+            m.swap(pivot, col);
+            det = -det;
+        }
+        let pivot_row = m[col];
+        let diag = pivot_row[col];
+        det = det * diag;
+        for row in m.iter_mut().take(k).skip(col + 1) {
+            let factor = row[col] / diag;
+            for (c, &pv) in pivot_row.iter().enumerate().take(k).skip(col) {
+                row[c] = row[c] - factor * pv;
+            }
+        }
+    }
+    det
+}
+
 /// Walk a [`KinSpec`] at configuration `q` and return per-joint world-frame
 /// axes, per-joint world-frame origins (before each joint's motion is
 /// applied), and the end-effector world position. Joint axes from the spec
@@ -334,27 +421,26 @@ fn forward_pass<F: KinScalar, const N: usize>(
     let mut current = spec.base_to_first;
 
     for i in 0..N {
-        current = current * spec.joints[i].0;
+        current *= spec.joints[i].0;
         p_out[i] = current.translation();
         match spec.joints[i].1 {
             JointSpec::Revolute { axis_local } => {
                 let axis = axis_local.normalize();
                 z_out[i] = current.matrix3() * axis;
-                current = current * AAffine3::<F>::from_axis_angle(axis, q.0[i]);
+                current *= AAffine3::<F>::from_axis_angle(axis, q.0[i]);
             }
             JointSpec::Prismatic { axis_local } => {
                 let axis = axis_local.normalize();
                 z_out[i] = current.matrix3() * axis;
-                current = current * AAffine3::<F>::from_translation(axis * q.0[i]);
+                current *= AAffine3::<F>::from_translation(axis * q.0[i]);
             }
         }
     }
 
-    current = current * spec.end_to_ee;
+    current *= spec.end_to_ee;
     let p_ee = current.translation();
     (z_out, p_out, p_ee)
 }
-
 
 /// Inverse-kinematics solution set. Stays inline on the stack for the common
 /// case of ≤8 solutions (analytic branches) and spills to the heap when a
@@ -363,7 +449,10 @@ pub type IkSolutions<const N: usize, F> = smallvec::SmallVec<[SRobotQ<N, F>; 8]>
 
 pub enum IkOutcome<const N: usize, F: KinScalar> {
     Solved(IkSolutions<N, F>),
-    Failed { partial: Option<IkSolutions<N, F>>, residual: F }
+    Failed {
+        partial: Option<IkSolutions<N, F>>,
+        residual: F,
+    },
 }
 
 impl<const N: usize, F: KinScalar> IkOutcome<N, F> {
@@ -378,7 +467,7 @@ impl<const N: usize, F: KinScalar> IkOutcome<N, F> {
         match self {
             IkOutcome::Solved(solutions) => Ok(solutions),
             IkOutcome::Failed { residual, .. } => Err(DekeError::IkSolverFailed(
-                residual.to_f64().unwrap_or(f64::MAX)
+                residual.to_f64().unwrap_or(f64::MAX),
             )),
         }
     }
@@ -402,7 +491,11 @@ impl<const N: usize, F: KinScalar> IkOutcome<N, F> {
 pub trait IkSolver<const N: usize, F: KinScalar = f32>: FKChain<N, F> {
     type IkConfig: Default + Clone + Send + Sync + 'static;
 
-    fn ik_with_config(&self, target: AAffine3<F>, config: &Self::IkConfig) -> Result<IkOutcome<N, F>, Self::Error>;
+    fn ik_with_config(
+        &self,
+        target: AAffine3<F>,
+        config: &Self::IkConfig,
+    ) -> Result<IkOutcome<N, F>, Self::Error>;
     fn ik(&self, target: AAffine3<F>) -> Result<IkOutcome<N, F>, Self::Error> {
         self.ik_with_config(target, &Self::IkConfig::default())
     }
@@ -412,10 +505,7 @@ trait ErasedFK<const N: usize, F: KinScalar>: Send + Sync {
     fn base_tf(&self) -> AAffine3<F>;
     fn fk(&self, q: &SRobotQ<N, F>) -> Result<[AAffine3<F>; N], DekeError>;
     fn fk_end(&self, q: &SRobotQ<N, F>) -> Result<AAffine3<F>, DekeError>;
-    fn all_fk(
-        &self,
-        q: &SRobotQ<N, F>,
-    ) -> Result<(AAffine3<F>, [AAffine3<F>; N], AAffine3<F>), DekeError>;
+    fn all_fk(&self, q: &SRobotQ<N, F>) -> Result<AllFk<N, F>, DekeError>;
     fn clone_box(&self) -> Box<dyn ErasedFK<N, F>>;
 }
 

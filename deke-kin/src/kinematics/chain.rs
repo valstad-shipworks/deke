@@ -26,18 +26,14 @@ pub fn dh_to_hp(alpha: &[f64], a: &[f64], d: &[f64]) -> (Vec<DVec3>, Vec<DVec3>,
         let ca = alpha[i].cos();
         let sa = alpha[i].sin();
         // Rotation about X by alpha_i, column-major.
-        let r_loc = DMat3::from_cols_array(&[
-            1.0, 0.0, 0.0,
-            0.0, ca, sa,
-            0.0, -sa, ca,
-        ]);
+        let r_loc = DMat3::from_cols_array(&[1.0, 0.0, 0.0, 0.0, ca, sa, 0.0, -sa, ca]);
 
         let z = DVec3::Z;
         h.push(r * z);
         let off = DVec3::new(a[i], 0.0, d[i]);
         p.push(r * off);
 
-        r = r * r_loc;
+        r *= r_loc;
     }
 
     (h, p, r)
@@ -52,8 +48,8 @@ pub fn fwdkin(h: &[DVec3], p: &[DVec3], q: &[f64]) -> DMat4 {
     let mut r = DMat3::IDENTITY;
     let mut pos = p[0];
     for i in 0..q.len() {
-        r = r * axis_angle(&h[i], q[i]);
-        pos = pos + r * p[i + 1];
+        r *= axis_angle(&h[i], q[i]);
+        pos += r * p[i + 1];
     }
     let mut pose = DMat4::from_mat3(r);
     pose.w_axis.x = pos.x;
@@ -66,8 +62,11 @@ pub fn fwdkin(h: &[DVec3], p: &[DVec3], q: &[f64]) -> DMat4 {
 /// Right-multiply the rotation block by `r6t`.
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn apply_r6t(pose: DMat4, r6t: &DMat3) -> DMat4 {
-    let r = DMat3::from_cols(pose.x_axis.truncate(), pose.y_axis.truncate(), pose.z_axis.truncate())
-        * *r6t;
+    let r = DMat3::from_cols(
+        pose.x_axis.truncate(),
+        pose.y_axis.truncate(),
+        pose.z_axis.truncate(),
+    ) * *r6t;
     let mut out = DMat4::from_mat3(r);
     out.w_axis = pose.w_axis;
     out
@@ -75,7 +74,11 @@ pub fn apply_r6t(pose: DMat4, r6t: &DMat3) -> DMat4 {
 
 /// `T⁻¹` for a homogeneous transform (rotation transpose + back-translate).
 pub fn inverse_homogeneous(t: &DMat4) -> DMat4 {
-    let r = DMat3::from_cols(t.x_axis.truncate(), t.y_axis.truncate(), t.z_axis.truncate());
+    let r = DMat3::from_cols(
+        t.x_axis.truncate(),
+        t.y_axis.truncate(),
+        t.z_axis.truncate(),
+    );
     let p = DVec3::new(t.w_axis.x, t.w_axis.y, t.w_axis.z);
     let rt = r.transpose();
     let p_new = -(rt * p);
@@ -120,7 +123,7 @@ pub fn partial_joint_parametrization(
     let mut r6t_new = *r6t;
 
     let mut sorted: Vec<FixedAxis> = fixed_axes.to_vec();
-    sorted.sort_by(|a, b| b.joint.cmp(&a.joint));
+    sorted.sort_by_key(|fa| std::cmp::Reverse(fa.joint));
 
     for fa in sorted {
         let axis_idx = fa.joint;

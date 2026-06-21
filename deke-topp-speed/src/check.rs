@@ -11,6 +11,8 @@
 //! boolean (`check_pf`). Here those template parameters are accepted as
 //! runtime arguments so the call sites can dispatch dynamically.
 
+use core::cmp::Ordering;
+
 use num_traits::Float;
 
 use crate::kin_state::{
@@ -106,10 +108,16 @@ pub mod first_order_pose {
         limits: &LimitsFirstPose<F>,
     ) -> bool {
         let (eps12, _, _) = tolerances::<F>();
-        if !(limits.min_vel - eps12 < cruise_velocity) {
+        if !matches!(
+            (limits.min_vel - eps12).partial_cmp(&cruise_velocity),
+            Some(Ordering::Less)
+        ) {
             return false;
         }
-        if !(cruise_velocity < limits.max_vel + eps12) {
+        if !matches!(
+            cruise_velocity.partial_cmp(&(limits.max_vel + eps12)),
+            Some(Ordering::Less)
+        ) {
             return false;
         }
         check_profile(profile, signs, touched, cruise_velocity)
@@ -264,16 +272,28 @@ pub mod second_order_pose {
         limits: &LimitsSecondPose<F>,
     ) -> bool {
         let (eps12, _, _) = tolerances::<F>();
-        if !(limits.min_accel - eps12 < accel0) {
+        if !matches!(
+            (limits.min_accel - eps12).partial_cmp(&accel0),
+            Some(Ordering::Less)
+        ) {
             return false;
         }
-        if !(accel0 < limits.max_accel + eps12) {
+        if !matches!(
+            accel0.partial_cmp(&(limits.max_accel + eps12)),
+            Some(Ordering::Less)
+        ) {
             return false;
         }
-        if !(limits.min_accel - eps12 < accel1) {
+        if !matches!(
+            (limits.min_accel - eps12).partial_cmp(&accel1),
+            Some(Ordering::Less)
+        ) {
             return false;
         }
-        if !(accel1 < limits.max_accel + eps12) {
+        if !matches!(
+            accel1.partial_cmp(&(limits.max_accel + eps12)),
+            Some(Ordering::Less)
+        ) {
             return false;
         }
         check_profile(profile, signs, touched, accel0, accel1, limits)
@@ -537,7 +557,10 @@ pub mod third_order_pose {
         limits: &LimitsThirdPose<F>,
     ) -> bool {
         let (eps12, _, _) = tolerances::<F>();
-        if !(jerk_used.abs() < limits.jerk.abs() + eps12) {
+        if !matches!(
+            jerk_used.abs().partial_cmp(&(limits.jerk.abs() + eps12)),
+            Some(Ordering::Less)
+        ) {
             return false;
         }
         check_profile_jerk(profile, signs, touched, check_pf, jerk_used, limits)
@@ -606,10 +629,16 @@ pub mod second_order_vel {
         limits: &LimitsSecondVel<F>,
     ) -> bool {
         let (eps12, _, _) = tolerances::<F>();
-        if !(limits.min_accel - eps12 < a_avg) {
+        if !matches!(
+            (limits.min_accel - eps12).partial_cmp(&a_avg),
+            Some(Ordering::Less)
+        ) {
             return false;
         }
-        if !(a_avg < limits.max_accel + eps12) {
+        if !matches!(
+            a_avg.partial_cmp(&(limits.max_accel + eps12)),
+            Some(Ordering::Less)
+        ) {
             return false;
         }
         check_profile(profile, signs, touched, a_avg)
@@ -749,7 +778,10 @@ pub mod third_order_vel {
         limits: &LimitsThirdVel<F>,
     ) -> bool {
         let (eps12, _, _) = tolerances::<F>();
-        if !(next_jerk.abs() < limits.jerk.abs() + eps12) {
+        if !matches!(
+            next_jerk.abs().partial_cmp(&(limits.jerk.abs() + eps12)),
+            Some(Ordering::Less)
+        ) {
             return false;
         }
         check_profile(profile, signs, touched, next_jerk, limits)

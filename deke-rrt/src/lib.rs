@@ -22,8 +22,10 @@ pub use scurve::{JointKinLimits, KinematicLimits, direction_cosine};
 /// from "we ran out of budget" without re-parsing the [`DekeError`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
+#[derive(Default)]
 pub enum RrtTermination {
     /// Default for an unfinished diagnostic.
+    #[default]
     NotStarted,
     /// `start ≈ goal`; a trivial single-waypoint path was returned.
     DegenerateStartGoal,
@@ -43,12 +45,6 @@ pub enum RrtTermination {
     InputInvalid,
     /// AORRTC's initial RRTC phase failed to find any path.
     NoInitialPath,
-}
-
-impl Default for RrtTermination {
-    fn default() -> Self {
-        Self::NotStarted
-    }
 }
 
 impl fmt::Display for RrtTermination {
@@ -283,7 +279,14 @@ impl<const N: usize> Planner<N, f64> for RrtcPlanner<N> {
         ctx: &V::Context<'_>,
     ) -> (DekeResult<SRobotPath<N, f64>>, Self::Diagnostic) {
         let mut rng = DekeRand::<N>::new(config.randomizer, config.seed);
-        rrtc::solve(&waypoints.start, &waypoints.end, validator, ctx, config, &mut rng)
+        rrtc::solve(
+            &waypoints.start,
+            &waypoints.end,
+            validator,
+            ctx,
+            config,
+            &mut rng,
+        )
     }
 }
 
@@ -344,6 +347,13 @@ impl<const N: usize> Planner<N, f64> for KrrtcPlanner<N> {
         ctx: &V::Context<'_>,
     ) -> (DekeResult<SRobotPath<N, f64>>, Self::Diagnostic) {
         let mut rng = DekeRand::<N>::new(config.randomizer, config.seed);
-        krrtc::solve(&waypoints.start, &waypoints.end, validator, ctx, config, &mut rng)
+        krrtc::solve(
+            &waypoints.start,
+            &waypoints.end,
+            validator,
+            ctx,
+            config,
+            &mut rng,
+        )
     }
 }

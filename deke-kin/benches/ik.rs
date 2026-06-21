@@ -4,9 +4,9 @@
 //! path.
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use deke_kin::{DHJoint, JointLimits, Kinematics};
 use deke_kin::deke_types::SRobotQ;
 use deke_kin::deke_types::{FKChain, IkSolver};
+use deke_kin::{DHJoint, JointLimits, Kinematics};
 use std::hint::black_box;
 
 fn puma() -> Kinematics<6, f64> {
@@ -15,7 +15,12 @@ fn puma() -> Kinematics<6, f64> {
     let a = [0.0, 0.43180, -0.02032, 0.0, 0.0, 0.0];
     let d = [0.67183, 0.13970, 0.0, 0.43180, 0.0, 0.0565];
     Kinematics::from_dh(
-        std::array::from_fn(|i| DHJoint { a: a[i], alpha: alpha[i], d: d[i], theta_offset: 0.0 }),
+        std::array::from_fn(|i| DHJoint {
+            a: a[i],
+            alpha: alpha[i],
+            d: d[i],
+            theta_offset: 0.0,
+        }),
         JointLimits::symmetric(100.0),
         &[],
     )

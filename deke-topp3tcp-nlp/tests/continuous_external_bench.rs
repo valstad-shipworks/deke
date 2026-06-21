@@ -14,6 +14,8 @@
 //! comparable across versions. Bumping the seed (`SEED` const at the top) gives a
 //! different draw of trajectories from the same shape distribution.
 
+#![allow(clippy::approx_constant)] // URDF fixture RPY data, not the math constant
+
 use std::time::{Duration, Instant};
 
 use deke_kin::{JointLimits as KinLimits, Kinematics, URDFJoint};
@@ -77,9 +79,7 @@ fn external_cfg() -> Topp3Tcp6Constraints<6> {
     cfg.joint = JointLimits {
         q_min: SRobotQ::from_array([f64::NEG_INFINITY; 6]),
         q_max: SRobotQ::from_array([f64::INFINITY; 6]),
-        v_max: SRobotQ::from_array([
-            2.748894, 2.748894, 3.468842, 5.497787, 5.890486, 9.424778,
-        ]),
+        v_max: SRobotQ::from_array([2.748894, 2.748894, 3.468842, 5.497787, 5.890486, 9.424778]),
         a_max: SRobotQ::from_array([
             6.170564, 6.170564, 7.786665, 12.341129, 13.222637, 21.156220,
         ]),
@@ -107,6 +107,7 @@ fn validator() -> JointValidator<6, f64> {
 // Deterministic trajectory generator (small LCG; we don't pull in the rand crate
 // just for repeatable benchmark inputs).
 
+#[allow(clippy::unusual_byte_groupings)]
 const SEED: u64 = 0xC0FFEE_DECAF_F00D;
 
 struct Lcg(u64);
@@ -250,9 +251,9 @@ fn run_one(
             };
         }
     };
-    let mut v = validator();
+    let v = validator();
     let t0 = Instant::now();
-    let (_result, diag) = Topp3Tcp6::new(fk).retime(cfg, &path, &mut v, &());
+    let (_result, diag) = Topp3Tcp6::new(fk).retime(cfg, &path, &v, &());
     let wall = t0.elapsed();
     RunResult {
         iterations: diag.iterations,
@@ -338,11 +339,15 @@ fn max_i32(xs: &[i32]) -> i32 {
 
 fn print_table(summaries: &[CategorySummary]) {
     eprintln!();
-    eprintln!("┌──────────────────────────────────┬──────┬─────────┬───────────┬───────────┬───────────┬───────────┬──────────┐");
+    eprintln!(
+        "┌──────────────────────────────────┬──────┬─────────┬───────────┬───────────┬───────────┬───────────┬──────────┐"
+    );
     eprintln!(
         "│ Category                         │ Runs │ Success │ Iter mean │ Iter med  │ Iter max  │ Solve mean│ Solve max│"
     );
-    eprintln!("├──────────────────────────────────┼──────┼─────────┼───────────┼───────────┼───────────┼───────────┼──────────┤");
+    eprintln!(
+        "├──────────────────────────────────┼──────┼─────────┼───────────┼───────────┼───────────┼───────────┼──────────┤"
+    );
     for s in summaries {
         let pct = 100.0 * s.successes as f64 / s.n_runs.max(1) as f64;
         eprintln!(
@@ -357,7 +362,9 @@ fn print_table(summaries: &[CategorySummary]) {
             max_f64(&s.solve_secs),
         );
     }
-    eprintln!("└──────────────────────────────────┴──────┴─────────┴───────────┴───────────┴───────────┴───────────┴──────────┘");
+    eprintln!(
+        "└──────────────────────────────────┴──────┴─────────┴───────────┴───────────┴───────────┴───────────┴──────────┘"
+    );
     eprintln!();
 
     let total_runs: usize = summaries.iter().map(|s| s.n_runs).sum();
@@ -448,19 +455,64 @@ fn benchmark_typical_trajectories() {
     let cfg = external_cfg();
 
     // (name, runs_per_category, generator)
-    let categories: Vec<(&'static str, usize, Box<dyn Fn(&mut Lcg) -> Vec<SRobotQ<6, f64>>>)> = vec![
-        ("p2p tiny (Δ≈0.05 rad)", 8, Box::new(|r| gen_two_wp(r, 0.05))),
+    type Category = (
+        &'static str,
+        usize,
+        Box<dyn Fn(&mut Lcg) -> Vec<SRobotQ<6, f64>>>,
+    );
+    let categories: Vec<Category> = vec![
+        (
+            "p2p tiny (Δ≈0.05 rad)",
+            8,
+            Box::new(|r| gen_two_wp(r, 0.05)),
+        ),
         ("p2p small (Δ≈0.2 rad)", 8, Box::new(|r| gen_two_wp(r, 0.2))),
-        ("p2p medium (Δ≈0.6 rad)", 8, Box::new(|r| gen_two_wp(r, 0.6))),
+        (
+            "p2p medium (Δ≈0.6 rad)",
+            8,
+            Box::new(|r| gen_two_wp(r, 0.6)),
+        ),
         ("p2p large (Δ≈1.5 rad)", 8, Box::new(|r| gen_two_wp(r, 1.5))),
-        ("wrist-only (Δ≈0.5 rad)", 6, Box::new(|r| gen_wrist_only(r, 0.5))),
-        ("base-only (Δ≈0.5 rad)", 6, Box::new(|r| gen_base_only(r, 0.5))),
-        ("multi-seg 5wp (Δ≈0.3)", 6, Box::new(|r| gen_multi_segment(r, 5, 0.3))),
-        ("multi-seg 10wp (Δ≈0.3)", 6, Box::new(|r| gen_multi_segment(r, 10, 0.3))),
-        ("multi-seg 25wp (Δ≈0.15)", 4, Box::new(|r| gen_multi_segment(r, 25, 0.15))),
-        ("multi-seg 50wp (Δ≈0.10)", 4, Box::new(|r| gen_multi_segment(r, 50, 0.10))),
-        ("sinusoidal 10wp (A≈0.5)", 4, Box::new(|r| gen_sinusoidal(r, 10, 0.5))),
-        ("sinusoidal 20wp (A≈0.5)", 4, Box::new(|r| gen_sinusoidal(r, 20, 0.5))),
+        (
+            "wrist-only (Δ≈0.5 rad)",
+            6,
+            Box::new(|r| gen_wrist_only(r, 0.5)),
+        ),
+        (
+            "base-only (Δ≈0.5 rad)",
+            6,
+            Box::new(|r| gen_base_only(r, 0.5)),
+        ),
+        (
+            "multi-seg 5wp (Δ≈0.3)",
+            6,
+            Box::new(|r| gen_multi_segment(r, 5, 0.3)),
+        ),
+        (
+            "multi-seg 10wp (Δ≈0.3)",
+            6,
+            Box::new(|r| gen_multi_segment(r, 10, 0.3)),
+        ),
+        (
+            "multi-seg 25wp (Δ≈0.15)",
+            4,
+            Box::new(|r| gen_multi_segment(r, 25, 0.15)),
+        ),
+        (
+            "multi-seg 50wp (Δ≈0.10)",
+            4,
+            Box::new(|r| gen_multi_segment(r, 50, 0.10)),
+        ),
+        (
+            "sinusoidal 10wp (A≈0.5)",
+            4,
+            Box::new(|r| gen_sinusoidal(r, 10, 0.5)),
+        ),
+        (
+            "sinusoidal 20wp (A≈0.5)",
+            4,
+            Box::new(|r| gen_sinusoidal(r, 20, 0.5)),
+        ),
     ];
 
     let mut summaries: Vec<CategorySummary> = Vec::with_capacity(categories.len());

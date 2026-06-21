@@ -16,8 +16,8 @@ use glam_traits_ext::{FloatAffine, FloatMat, FloatVec, TAffine3, TMat3, TVec3};
 
 use super::scalar_from_f64;
 use super::{
-    AAffine3, AMat3, AVec3, DHJoint, FKChain, KinScalar, HPJoint, JointSpec, KinSpec, ContinuousFKChain,
-    URDFBuildError, URDFJoint, URDFJointType, check_finite,
+    AAffine3, AMat3, AVec3, ContinuousFKChain, DHJoint, FKChain, HPJoint, JointSpec, KinScalar,
+    KinSpec, URDFBuildError, URDFJoint, URDFJointType, check_finite,
 };
 use crate::IkRules;
 
@@ -92,18 +92,40 @@ impl<const N: usize, F: KinScalar> Kinematics<N, F> {
     ///
     /// `limits` are the per-joint `(lower, upper)` ranges (required), and `rules`
     /// constrain over-actuated chains so IK is solvable (see [`IkRules`]).
-    pub fn from_dh(joints: [DHJoint<F>; N], limits: JointLimits<N, F>, rules: &[IkRules<f64>]) -> Self {
+    pub fn from_dh(
+        joints: [DHJoint<F>; N],
+        limits: JointLimits<N, F>,
+        rules: &[IkRules<f64>],
+    ) -> Self {
         let (core, intrinsic_ee) =
             factor_offsets(&joints, |j| (dh_offset(j.a, j.alpha, j.d), j.theta_offset));
-        Self::assemble(core, AAffine3::<F>::IDENTITY, AAffine3::<F>::IDENTITY, intrinsic_ee, limits, rules)
+        Self::assemble(
+            core,
+            AAffine3::<F>::IDENTITY,
+            AAffine3::<F>::IDENTITY,
+            intrinsic_ee,
+            limits,
+            rules,
+        )
     }
 
     /// Build from Hayati-Paul joints.
-    pub fn from_hp(joints: [HPJoint<F>; N], limits: JointLimits<N, F>, rules: &[IkRules<f64>]) -> Self {
+    pub fn from_hp(
+        joints: [HPJoint<F>; N],
+        limits: JointLimits<N, F>,
+        rules: &[IkRules<f64>],
+    ) -> Self {
         let (core, intrinsic_ee) = factor_offsets(&joints, |j| {
             (hp_offset(j.a, j.alpha, j.beta, j.d), j.theta_offset)
         });
-        Self::assemble(core, AAffine3::<F>::IDENTITY, AAffine3::<F>::IDENTITY, intrinsic_ee, limits, rules)
+        Self::assemble(
+            core,
+            AAffine3::<F>::IDENTITY,
+            AAffine3::<F>::IDENTITY,
+            intrinsic_ee,
+            limits,
+            rules,
+        )
     }
 
     /// Build from a flat URDF joint list (parent→child order, any mix of
@@ -127,7 +149,7 @@ impl<const N: usize, F: KinScalar> Kinematics<N, F> {
         for j in joints {
             let spec = match j.r#type {
                 URDFJointType::Fixed => {
-                    pending = pending * urdf_origin::<F>(j.xyz, j.rpy);
+                    pending *= urdf_origin::<F>(j.xyz, j.rpy);
                     continue;
                 }
                 URDFJointType::Revolute { axis } => JointSpec::Revolute {
@@ -161,11 +183,22 @@ impl<const N: usize, F: KinScalar> Kinematics<N, F> {
             Err(_) => unreachable!("length checked above"),
         };
         // trailing fixed joints (`pending`) become the tool transform.
-        Ok(Self::assemble(joints, base, pending, AAffine3::<F>::IDENTITY, limits, rules))
+        Ok(Self::assemble(
+            joints,
+            base,
+            pending,
+            AAffine3::<F>::IDENTITY,
+            limits,
+            rules,
+        ))
     }
 
     /// Build directly from a [`KinSpec`].
-    pub fn from_kinspec(spec: KinSpec<F, N>, limits: JointLimits<N, F>, rules: &[IkRules<f64>]) -> Self {
+    pub fn from_kinspec(
+        spec: KinSpec<F, N>,
+        limits: JointLimits<N, F>,
+        rules: &[IkRules<f64>],
+    ) -> Self {
         Self::assemble(
             spec.joints,
             spec.base_to_first,
@@ -234,7 +267,11 @@ impl<const N: usize, F: KinScalar> Kinematics<N, F> {
         } else {
             intrinsic_ee * ee_tf
         };
-        let spec = KinSpec { base_to_first: base_tf, joints, end_to_ee };
+        let spec = KinSpec {
+            base_to_first: base_tf,
+            joints,
+            end_to_ee,
+        };
         let lim = crate::ik::Limits {
             lower: std::array::from_fn(|i| scalar_to_f64::<F>(limits.lower.0[i])),
             upper: std::array::from_fn(|i| scalar_to_f64::<F>(limits.upper.0[i])),
@@ -353,9 +390,9 @@ impl<const N: usize, F: KinScalar> Kinematics<N, F> {
         let mut c1 = AVec3::<F>::Y;
         let mut c2 = AVec3::<F>::Z;
         let mut t = AVec3::<F>::ZERO;
-        for i in 0..N {
+        for (i, slot) in out.iter_mut().enumerate() {
             self.step(i, q.0[i], &mut c0, &mut c1, &mut c2, &mut t);
-            out[i] = AAffine3::<F>::from_mat3_translation(AMat3::<F>::from_cols(c0, c1, c2), t);
+            *slot = AAffine3::<F>::from_mat3_translation(AMat3::<F>::from_cols(c0, c1, c2), t);
         }
         Ok(out)
     }
@@ -406,7 +443,7 @@ impl<const N: usize, F: KinScalar> FKChain<N, F> for Kinematics<N, F> {
             end = self.base_tf * end;
         }
         if !self.ee_id {
-            end = end * self.ee_tf;
+            end *= self.ee_tf;
         }
         Ok(end)
     }
@@ -478,12 +515,17 @@ fn classify<F: KinScalar>(js: &JointSpec<F>) -> JointKind<F> {
 /// A chain `∏ Rz(θ_i + off_i)·M_i` is rewritten as `origin_0 = Rz(off_0)`,
 /// `origin_i = M_{i-1}·Rz(off_i)`, with the final `M_{N-1}` becoming the
 /// intrinsic end-effector offset. `decode` returns each joint's `(M_i, off_i)`.
+type CoreChain<const N: usize, F> = ([(AAffine3<F>, JointSpec<F>); N], AAffine3<F>);
+
 fn factor_offsets<const N: usize, F: KinScalar, J: Copy>(
     joints: &[J; N],
     decode: impl Fn(J) -> (AAffine3<F>, F),
-) -> ([(AAffine3<F>, JointSpec<F>); N], AAffine3<F>) {
+) -> CoreChain<N, F> {
     let z = AVec3::<F>::Z;
-    let mut core = [(AAffine3::<F>::IDENTITY, JointSpec::Revolute { axis_local: z }); N];
+    let mut core = [(
+        AAffine3::<F>::IDENTITY,
+        JointSpec::Revolute { axis_local: z },
+    ); N];
     let mut prev_m = AAffine3::<F>::IDENTITY;
     let mut intrinsic_ee = AAffine3::<F>::IDENTITY;
 
@@ -522,8 +564,16 @@ fn urdf_origin<F: KinScalar>(xyz: (f64, f64, f64), rpy: (f64, f64, f64)) -> AAff
     let (sp, cp) = (pitch.sin(), pitch.cos());
     let (sy, cy) = (yaw.sin(), yaw.cos());
     let c0 = AVec3::<F>::new(s(cy * cp), s(sy * cp), s(-sp));
-    let c1 = AVec3::<F>::new(s(cy * sp * sr - sy * cr), s(sy * sp * sr + cy * cr), s(cp * sr));
-    let c2 = AVec3::<F>::new(s(cy * sp * cr + sy * sr), s(sy * sp * cr - cy * sr), s(cp * cr));
+    let c1 = AVec3::<F>::new(
+        s(cy * sp * sr - sy * cr),
+        s(sy * sp * sr + cy * cr),
+        s(cp * sr),
+    );
+    let c2 = AVec3::<F>::new(
+        s(cy * sp * cr + sy * sr),
+        s(sy * sp * cr - cy * sr),
+        s(cp * cr),
+    );
     let t = AVec3::<F>::new(s(ox), s(oy), s(oz));
     AAffine3::<F>::from_mat3_translation(AMat3::<F>::from_cols(c0, c1, c2), t)
 }
@@ -622,7 +672,12 @@ mod tests {
             let g = got.to_cols_array();
             let w = want.to_cols_array();
             for k in 0..12 {
-                assert!((g[k] - w[k]).abs() < 1e-9, "cfg {cfg:?} elem {k}: {} vs {}", g[k], w[k]);
+                assert!(
+                    (g[k] - w[k]).abs() < 1e-9,
+                    "cfg {cfg:?} elem {k}: {} vs {}",
+                    g[k],
+                    w[k]
+                );
             }
         }
     }
@@ -650,13 +705,70 @@ mod tests {
         }
     }
 
+    /// Yoshikawa manipulability must equal `|det(J)|` for a square (6-DOF)
+    /// Jacobian, since `det(J Jᵀ) = det(J)²`. The implementation forms `J Jᵀ`
+    /// and takes a root, so checking it against the determinant of the raw
+    /// Jacobian exercises a genuinely independent path.
+    #[test]
+    fn manipulability_matches_jacobian_determinant() {
+        let chain = puma();
+        for cfg in [
+            [0.2, -0.4, 0.7, 0.3, -0.6, 0.5],
+            [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
+        ] {
+            let w = chain.manipulability(&q6(cfg)).unwrap();
+            let det = det6(chain.jacobian(&q6(cfg)).unwrap());
+            assert!(
+                w > 0.0,
+                "cfg {cfg:?}: expected positive manipulability, got {w}"
+            );
+            assert!(
+                (w - det.abs()).abs() < 1e-6,
+                "cfg {cfg:?}: manip {w} vs |det J| {}",
+                det.abs()
+            );
+        }
+    }
+
+    fn det6(j: [[f64; 6]; 6]) -> f64 {
+        let mut m = j;
+        let mut det = 1.0;
+        for col in 0..6 {
+            let mut piv = col;
+            for (r, row) in m.iter().enumerate().skip(col + 1) {
+                if row[col].abs() > m[piv][col].abs() {
+                    piv = r;
+                }
+            }
+            if m[piv][col].abs() < 1e-12 {
+                return 0.0;
+            }
+            if piv != col {
+                m.swap(piv, col);
+                det = -det;
+            }
+            let pivot_row = m[col];
+            det *= pivot_row[col];
+            for row in m.iter_mut().skip(col + 1) {
+                let f = row[col] / pivot_row[col];
+                for (c, &pv) in pivot_row.iter().enumerate().skip(col) {
+                    row[c] -= f * pv;
+                }
+            }
+        }
+        det
+    }
+
     /// Routing the same robot through `from_kinspec(structure())` must preserve
     /// the end-effector pose exactly.
     #[test]
     fn kinspec_roundtrip() {
         let chain = puma();
         let rebuilt = Kinematics::from_kinspec(chain.structure(), wide(), &[]);
-        for cfg in [[0.1, 0.2, 0.3, 0.4, 0.5, 0.6], [0.4, -0.5, 0.6, 0.2, -0.3, 0.4]] {
+        for cfg in [
+            [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
+            [0.4, -0.5, 0.6, 0.2, -0.3, 0.4],
+        ] {
             let a = chain.fk_end(&q6(cfg)).unwrap().to_cols_array();
             let b = rebuilt.fk_end(&q6(cfg)).unwrap().to_cols_array();
             for k in 0..12 {
@@ -724,13 +836,17 @@ mod tests {
     /// `Kinematics::ik` round-trips through the unified API.
     #[test]
     fn ik_analytic_strategy_and_roundtrip() {
-        use deke_types::IkSolver;
         use crate::IkStrategy;
+        use deke_types::IkSolver;
 
         let chain = puma();
         let diag = chain.ik_diagnostic();
         assert!(diag.viable);
-        assert!(matches!(diag.strategy, IkStrategy::Analytic { .. }), "got {:?}", diag.strategy);
+        assert!(
+            matches!(diag.strategy, IkStrategy::Analytic { .. }),
+            "got {:?}",
+            diag.strategy
+        );
         assert_eq!(diag.effective_dof, 6);
         assert!(diag.family().unwrap().contains("6R"));
 
@@ -741,7 +857,9 @@ mod tests {
         let want = target.to_cols_array();
         let matched = sols.iter().any(|s| {
             let got = chain.fk_end(s).unwrap().to_cols_array();
-            want.iter().zip(got.iter()).all(|(a, b)| (a - b).abs() < 1e-6)
+            want.iter()
+                .zip(got.iter())
+                .all(|(a, b)| (a - b).abs() < 1e-6)
         });
         assert!(matched, "no analytic IK solution reproduced the pose");
     }
@@ -750,8 +868,8 @@ mod tests {
     /// and still inverts through `Kinematics::ik`.
     #[test]
     fn ik_generic_fallback_strategy_and_roundtrip() {
-        use deke_types::IkSolver;
         use crate::IkStrategy;
+        use deke_types::IkSolver;
 
         // Arbitrary non-DH, non-Z axes → no recognised analytic class.
         let axes = [
@@ -779,7 +897,12 @@ mod tests {
         });
         let chain: Kinematics<6, f64> = Kinematics::from_urdf(&joints, wide(), &[]).unwrap();
         let diag = chain.ik_diagnostic();
-        assert_eq!(diag.strategy, IkStrategy::Generic6R, "got {:?}", diag.strategy);
+        assert_eq!(
+            diag.strategy,
+            IkStrategy::Generic6R,
+            "got {:?}",
+            diag.strategy
+        );
         assert!(diag.viable);
 
         let q = q6([0.4, -0.8, 1.0, -0.5, 0.9, -0.3]);
@@ -789,7 +912,9 @@ mod tests {
         let want = target.to_cols_array();
         let matched = sols.iter().any(|s| {
             let got = chain.fk_end(s).unwrap().to_cols_array();
-            want.iter().zip(got.iter()).all(|(a, b)| (a - b).abs() < 1e-6)
+            want.iter()
+                .zip(got.iter())
+                .all(|(a, b)| (a - b).abs() < 1e-6)
         });
         assert!(matched, "no generic IK solution reproduced the pose");
     }
@@ -798,9 +923,9 @@ mod tests {
     /// diagnostic flags it and every `ik` call returns `Err(IkNotViable)`.
     #[test]
     fn ik_not_viable_for_prismatic_chain() {
-        use deke_types::IkSolver;
-        use deke_types::DekeError;
         use crate::IkStrategy;
+        use deke_types::DekeError;
+        use deke_types::IkSolver;
 
         let joints = [
             URDFJoint::revolute((0.0, 0.0, 0.1), (0.0, 0.0, 0.0), (0.0, 0.0, 1.0)),
@@ -812,7 +937,9 @@ mod tests {
         assert_eq!(diag.strategy, IkStrategy::None);
 
         // FK still works on a non-IK-viable chain.
-        let _ = chain.fk_end(&SRobotQ::<2, f64>::from_array([0.1, 0.2])).unwrap();
+        let _ = chain
+            .fk_end(&SRobotQ::<2, f64>::from_array([0.1, 0.2]))
+            .unwrap();
 
         let target = AAffine3::<f64>::IDENTITY;
         match chain.ik(target) {
@@ -824,23 +951,38 @@ mod tests {
 
     fn panda7() -> [DHJoint<f64>; 7] {
         let pi = std::f64::consts::PI;
-        let alpha = [pi / 2.0, -pi / 2.0, -pi / 2.0, pi / 2.0, -pi / 2.0, pi / 2.0, 0.0];
+        let alpha = [
+            pi / 2.0,
+            -pi / 2.0,
+            -pi / 2.0,
+            pi / 2.0,
+            -pi / 2.0,
+            pi / 2.0,
+            0.0,
+        ];
         let a = [0.0, 0.0, 0.0, 0.0825, -0.0825, 0.0, 0.088];
         let d = [0.333, 0.0, 0.316, 0.0, 0.384, 0.0, 0.107];
-        std::array::from_fn(|i| DHJoint { a: a[i], alpha: alpha[i], d: d[i], theta_offset: 0.0 })
+        std::array::from_fn(|i| DHJoint {
+            a: a[i],
+            alpha: alpha[i],
+            d: d[i],
+            theta_offset: 0.0,
+        })
     }
 
     /// A 7-DOF chain is not IK-viable on its own (7 free revolute joints > 6),
     /// but a single FixedAxis rule on joint 6 reduces it to a solvable 6R.
     #[test]
     fn fixed_axis_makes_7dof_viable() {
-        use deke_types::IkSolver;
         use crate::IkRules;
+        use deke_types::IkSolver;
 
         // No rules: 7 free DOF → not viable, but still constructs (FK works).
         let bare: Kinematics<7, f64> = Kinematics::from_dh(panda7(), wide(), &[]);
         assert!(!bare.ik_diagnostic().viable);
-        let _ = bare.fk_end(&SRobotQ::<7, f64>::from_array([0.0; 7])).unwrap();
+        let _ = bare
+            .fk_end(&SRobotQ::<7, f64>::from_array([0.0; 7]))
+            .unwrap();
 
         // FixedAxis on joint 6 → 6 free DOF, viable.
         let rules = [IkRules::FixedAxis { idx: 6, pos: 0.0 }];
@@ -852,14 +994,19 @@ mod tests {
         let q = SRobotQ::<7, f64>::from_array([0.1, 0.2, 0.3, -0.4, 0.5, 0.6, 0.0]);
         let target = chain.fk_end(&q).unwrap();
         let sols = chain.ik(target).unwrap().unwrap();
-        assert!(!sols.is_empty(), "FixedAxis-reduced chain found no solutions");
+        assert!(
+            !sols.is_empty(),
+            "FixedAxis-reduced chain found no solutions"
+        );
         for s in &sols {
             // The fixed joint holds its value, and FK reproduces the pose.
             assert!((s.0[6] - 0.0).abs() < 1e-9, "joint 6 not held: {}", s.0[6]);
             let got = chain.fk_end(s).unwrap().to_cols_array();
             let want = target.to_cols_array();
             assert!(
-                want.iter().zip(got.iter()).all(|(a, b)| (a - b).abs() < 1e-6),
+                want.iter()
+                    .zip(got.iter())
+                    .all(|(a, b)| (a - b).abs() < 1e-6),
                 "solution does not reproduce pose"
             );
         }
@@ -870,8 +1017,8 @@ mod tests {
     /// at each sample, leaving a 6R solve.
     #[test]
     fn discrete_linear_axis_rail_plus_arm() {
-        use deke_types::IkSolver;
         use crate::{IkRules, IkStrategy};
+        use deke_types::IkSolver;
 
         // Build a correct Puma 6R as a KinSpec, then prepend a prismatic rail
         // (joint 0, along +X) to form a 7-DOF rail+arm KinSpec.
@@ -880,14 +1027,24 @@ mod tests {
         let a = [0.0, 0.4318, -0.0203, 0.0, 0.0, 0.0];
         let d = [0.6718, 0.1397, 0.0, 0.4318, 0.0, 0.0565];
         let puma: Kinematics<6, f64> = Kinematics::from_dh(
-            std::array::from_fn(|i| DHJoint { a: a[i], alpha: alpha[i], d: d[i], theta_offset: 0.0 }),
+            std::array::from_fn(|i| DHJoint {
+                a: a[i],
+                alpha: alpha[i],
+                d: d[i],
+                theta_offset: 0.0,
+            }),
             wide(),
             &[],
         );
         let pspec = puma.structure();
         let joints: [(DAffine3, JointSpec<f64>); 7] = std::array::from_fn(|i| {
             if i == 0 {
-                (DAffine3::IDENTITY, JointSpec::Prismatic { axis_local: DVec3::X })
+                (
+                    DAffine3::IDENTITY,
+                    JointSpec::Prismatic {
+                        axis_local: DVec3::X,
+                    },
+                )
             } else {
                 pspec.joints[i - 1]
             }
@@ -897,12 +1054,19 @@ mod tests {
         let lower = SRobotQ::<7, f64>::from_array([0.0, -pi, -pi, -pi, -pi, -pi, -pi]);
         let upper = SRobotQ::<7, f64>::from_array([0.5, pi, pi, pi, pi, pi, pi]);
         let limits = JointLimits::new(lower, upper);
-        let rules = [IkRules::DiscreteAxis { idx: 0, step_size: 0.1 }];
+        let rules = [IkRules::DiscreteAxis {
+            idx: 0,
+            step_size: 0.1,
+        }];
         let chain: Kinematics<7, f64> = Kinematics::from_kinspec(spec, limits, &rules);
 
         let diag = chain.ik_diagnostic();
         assert!(diag.viable, "reason: {}", diag.reason);
-        assert!(matches!(diag.strategy, IkStrategy::Ruled { discrete: 1, .. }), "got {:?}", diag.strategy);
+        assert!(
+            matches!(diag.strategy, IkStrategy::Ruled { discrete: 1, .. }),
+            "got {:?}",
+            diag.strategy
+        );
 
         // Plant a config with the rail at a grid value (0.2) so a sample hits it.
         let q = SRobotQ::<7, f64>::from_array([0.2, 0.1, -0.5, 0.6, 0.2, -0.3, 0.4]);
@@ -911,21 +1075,32 @@ mod tests {
         assert!(!sols.is_empty(), "rail+arm found no solutions");
         // Every solution must be within limits and reproduce the pose.
         for s in &sols {
-            assert!(s.0[0] >= -1e-9 && s.0[0] <= 0.5 + 1e-9, "rail out of limits: {}", s.0[0]);
+            assert!(
+                s.0[0] >= -1e-9 && s.0[0] <= 0.5 + 1e-9,
+                "rail out of limits: {}",
+                s.0[0]
+            );
             let got = chain.fk_end(s).unwrap().to_cols_array();
             let want = target.to_cols_array();
-            assert!(want.iter().zip(got.iter()).all(|(a, b)| (a - b).abs() < 1e-6));
+            assert!(
+                want.iter()
+                    .zip(got.iter())
+                    .all(|(a, b)| (a - b).abs() < 1e-6)
+            );
         }
         // The planted rail value should be recovered by some solution.
-        assert!(sols.iter().any(|s| (s.0[0] - 0.2).abs() < 1e-6), "planted rail value not found");
+        assert!(
+            sols.iter().any(|s| (s.0[0] - 0.2).abs() < 1e-6),
+            "planted rail value not found"
+        );
     }
 
     /// IncludeWrapped emits an extra solution with the joint wrapped ±2π when the
     /// wrapped value stays within limits.
     #[test]
     fn include_wrapped_emits_extra_solution() {
-        use deke_types::IkSolver;
         use crate::IkRules;
+        use deke_types::IkSolver;
 
         // Joint 6 (FixedAxis-reduced Panda) with wide limits so ±2π stays inside.
         let rules = [
@@ -950,7 +1125,11 @@ mod tests {
         for s in &sols {
             let got = chain.fk_end(s).unwrap().to_cols_array();
             let want = target.to_cols_array();
-            assert!(want.iter().zip(got.iter()).all(|(a, b)| (a - b).abs() < 1e-6));
+            assert!(
+                want.iter()
+                    .zip(got.iter())
+                    .all(|(a, b)| (a - b).abs() < 1e-6)
+            );
         }
     }
 
@@ -968,7 +1147,12 @@ mod tests {
             let a = [0.0, 0.4318, -0.0203, 0.0, 0.0, 0.0];
             let d = [0.6718, 0.1397, 0.0, 0.4318, 0.0, 0.0565];
             Kinematics::<6, f64>::from_dh(
-                std::array::from_fn(|i| DHJoint { a: a[i], alpha: alpha[i], d: d[i], theta_offset: 0.0 }),
+                std::array::from_fn(|i| DHJoint {
+                    a: a[i],
+                    alpha: alpha[i],
+                    d: d[i],
+                    theta_offset: 0.0,
+                }),
                 JointLimits::new(lower, upper),
                 &[],
             )
@@ -983,7 +1167,9 @@ mod tests {
                 assert!(
                     s.0[k] >= lower.0[k] - 1e-9 && s.0[k] <= upper.0[k] + 1e-9,
                     "joint {k} = {} out of [{}, {}]",
-                    s.0[k], lower.0[k], upper.0[k]
+                    s.0[k],
+                    lower.0[k],
+                    upper.0[k]
                 );
             }
         }

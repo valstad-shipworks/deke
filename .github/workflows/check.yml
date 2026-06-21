@@ -1,0 +1,51 @@
+name: Check
+
+# The eight pure-Rust members get cargo check / clippy / test on a native runner
+# per target, so tests actually execute on each platform. deke-topp3tcp-nlp and
+# deke-bench-retimers (which depends on it) are excluded: they pull sleipnir, which
+# needs CMake and a C++23 toolchain (GCC 14+ / MSVC 19.37+) and won't build across
+# the musl/Windows runners, so they get no CI coverage here.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { os: macos-latest, target: aarch64-apple-darwin }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl }
+
+    runs-on: ${{ matrix.platform.os }}
+    name: ${{ matrix.platform.target }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform.target }}
+          components: clippy
+
+      - name: Install musl tools
+        if: endsWith(matrix.platform.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.platform.target }}
+
+      - name: Cargo check
+        run: cargo check --workspace --exclude deke-topp3tcp-nlp --exclude deke-bench-retimers --target ${{ matrix.platform.target }}
+
+      - name: Clippy
+        run: cargo clippy --workspace --exclude deke-topp3tcp-nlp --exclude deke-bench-retimers --target ${{ matrix.platform.target }} -- -D warnings
+
+      - name: Tests
+        run: cargo test --workspace --exclude deke-topp3tcp-nlp --exclude deke-bench-retimers --target ${{ matrix.platform.target }}

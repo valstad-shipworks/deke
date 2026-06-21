@@ -3,8 +3,9 @@
 use std::fmt;
 use std::time::Duration;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SolveStatus {
+    #[default]
     NotAttempted,
     Success,
     SearchExhausted,
@@ -17,12 +18,6 @@ impl fmt::Display for SolveStatus {
             SolveStatus::Success => f.write_str("Success"),
             SolveStatus::SearchExhausted => f.write_str("SearchExhausted"),
         }
-    }
-}
-
-impl Default for SolveStatus {
-    fn default() -> Self {
-        SolveStatus::NotAttempted
     }
 }
 

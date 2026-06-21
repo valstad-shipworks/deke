@@ -127,7 +127,12 @@ impl Mat3x4 {
     /// `self.T * v` (4×3 · 3 = 4).
     #[inline]
     pub fn transpose_mul_vec3(&self, v: DVec3) -> DVec4 {
-        DVec4::new(self.c0.dot(v), self.c1.dot(v), self.c2.dot(v), self.c3.dot(v))
+        DVec4::new(
+            self.c0.dot(v),
+            self.c1.dot(v),
+            self.c2.dot(v),
+            self.c3.dot(v),
+        )
     }
 }
 
@@ -155,7 +160,12 @@ impl Mat2x4 {
     /// `self.T * v` (4×2 · 2 = 4).
     #[inline]
     pub fn transpose_mul_vec2(&self, v: DVec2) -> DVec4 {
-        DVec4::new(self.c0.dot(v), self.c1.dot(v), self.c2.dot(v), self.c3.dot(v))
+        DVec4::new(
+            self.c0.dot(v),
+            self.c1.dot(v),
+            self.c2.dot(v),
+            self.c3.dot(v),
+        )
     }
 
     #[inline]

@@ -18,9 +18,9 @@ fn time_optimal_solution_saturates_some_limit_on_average() {
     let path = SRobotPath::<6, f64>::try_new(waypoints).unwrap();
 
     let cfg = Topp3Tcp6Constraints::<6>::symmetric(1.5, 4.0, 200.0);
-    let mut validator = common::wide_validator::<6>();
+    let validator = common::wide_validator::<6>();
 
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("{}", diag);
     result.expect("retime failed");
     assert_eq!(diag.status, SolveStatus::Success);
@@ -47,16 +47,14 @@ fn time_optimal_solution_saturates_some_limit_on_average() {
 #[test]
 fn single_joint_rest_to_rest_utilization_is_high() {
     let fk = common::dh_1dof();
-    let path = SRobotPath::<1, f64>::try_new(vec![
-        SRobotQ::from_array([0.0]),
-        SRobotQ::from_array([1.0]),
-    ])
-    .unwrap();
+    let path =
+        SRobotPath::<1, f64>::try_new(vec![SRobotQ::from_array([0.0]), SRobotQ::from_array([1.0])])
+            .unwrap();
 
     let cfg = Topp3Tcp6Constraints::<1>::symmetric(1.0, 2.0, 200.0);
-    let mut validator = common::wide_validator::<1>();
+    let validator = common::wide_validator::<1>();
 
-    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &mut validator, &());
+    let (result, diag) = Topp3Tcp6::new(&fk).retime(&cfg, &path, &validator, &());
     eprintln!("{}", diag);
     result.expect("retime failed");
 

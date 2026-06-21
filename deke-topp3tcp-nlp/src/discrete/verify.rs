@@ -33,9 +33,9 @@ pub fn verify_output_fd<const N: usize, FK: FKChain<N, f64>>(
     let dt3 = dt2 * dt;
     let lock = constraints.locked_prefix.min(N);
 
-    let tcp_active = constraints.tcp.is_some_and(|t| {
-        t.v_max.is_finite() || t.a_max.is_finite() || t.j_max.is_finite()
-    });
+    let tcp_active = constraints
+        .tcp
+        .is_some_and(|t| t.v_max.is_finite() || t.a_max.is_finite() || t.j_max.is_finite());
     let tcp_positions: Option<Vec<[f64; 3]>> = if tcp_active {
         let mut v = Vec::with_capacity(samples.len());
         for q in samples {
@@ -132,16 +132,15 @@ fn first_violation<const N: usize>(
     // 5% relative slack on the TCP side and the strict IPM tolerance on
     // the joint side.
     let tcp_tol = tol.max(5e-2);
-    let report =
-        |key: &'static str, residual: f64, limit: f64, dof: u8| -> DekeResult<()> {
-            Err(DekeError::ExceedsDynamicsLimits {
-                dt_in,
-                limit_type: key,
-                dof,
-                limit_value: limit,
-                observed_value: limit * (1.0 + residual),
-            })
-        };
+    let report = |key: &'static str, residual: f64, limit: f64, dof: u8| -> DekeResult<()> {
+        Err(DekeError::ExceedsDynamicsLimits {
+            dt_in,
+            limit_type: key,
+            dof,
+            limit_value: limit,
+            observed_value: limit * (1.0 + residual),
+        })
+    };
 
     if res.joint_v > tol {
         let v_max = max_finite(&constraints.joint.v_max.0);

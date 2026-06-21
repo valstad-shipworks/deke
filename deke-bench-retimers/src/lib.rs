@@ -17,14 +17,14 @@
 //! single binary test ([`tests::comparative`]) that runs the full sweep and
 //! prints a comparison table.
 
+#![allow(clippy::approx_constant)] // URDF fixture RPY data, not the math constant
+
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use deke_kin::{JointLimits as KinLimits, Kinematics, URDFJoint};
 use deke_types::ContinuousFKChain;
-use deke_types::{
-    DekeResult, JointValidator, Retimer, SRobotPath, SRobotQ, SRobotTraj,
-};
+use deke_types::{DekeResult, JointValidator, Retimer, SRobotPath, SRobotQ, SRobotTraj};
 
 // Production 6-DOF URDF chain + canonical limits
 //
@@ -47,7 +47,11 @@ const URDF_JOINTS: [URDFJoint; 6] = [
     ),
     URDFJoint::revolute(
         (-0.00000000000000625888f64, -0.84f64, 0.04028f64),
-        (-3.14159f64, -0.0000000000000000252315f64, -0.00000000000000423966f64),
+        (
+            -3.14159f64,
+            -0.0000000000000000252315f64,
+            -0.00000000000000423966f64,
+        ),
         (0f64, 0f64, 1f64),
     ),
     URDFJoint::revolute(
@@ -397,7 +401,7 @@ pub fn max_path_deviation<const N: usize>(
     traj: &SRobotTraj<N, f64>,
     waypoints: &[SRobotQ<N, f64>],
 ) -> f64 {
-    if waypoints.len() < 2 || traj.len() == 0 {
+    if waypoints.len() < 2 || traj.is_empty() {
         return 0.0;
     }
     let mut max_d = 0.0_f64;
@@ -521,11 +525,8 @@ pub fn average_utilization<const N: usize, FK: ContinuousFKChain<N, f64>>(
 
     // Optional TCP velocity utilization per sample at index k (forward FD from
     // k-1 → k, defined for k in 1..n).
-    let tcp_limit = problem
-        .tcp_v_max
-        .filter(|l| l.is_finite() && *l > 0.0);
-    let tcp_u_per_sample: Option<Vec<f64>> = if tcp_limit.is_some() {
-        let limit = tcp_limit.unwrap();
+    let tcp_limit = problem.tcp_v_max.filter(|l| l.is_finite() && *l > 0.0);
+    let tcp_u_per_sample: Option<Vec<f64>> = if let Some(limit) = tcp_limit {
         let mut positions = Vec::with_capacity(n);
         for q in traj.iter() {
             let pose = fk.fk_end(q)?;
@@ -603,9 +604,21 @@ pub fn average_utilization<const N: usize, FK: ContinuousFKChain<N, f64>>(
     }
 
     Ok(Utilization {
-        joint_v: if cnt_jv > 0 { sum_jv / cnt_jv as f64 } else { 0.0 },
-        joint_a: if cnt_ja > 0 { sum_ja / cnt_ja as f64 } else { 0.0 },
-        joint_j: if cnt_jj > 0 { sum_jj / cnt_jj as f64 } else { 0.0 },
+        joint_v: if cnt_jv > 0 {
+            sum_jv / cnt_jv as f64
+        } else {
+            0.0
+        },
+        joint_a: if cnt_ja > 0 {
+            sum_ja / cnt_ja as f64
+        } else {
+            0.0
+        },
+        joint_j: if cnt_jj > 0 {
+            sum_jj / cnt_jj as f64
+        } else {
+            0.0
+        },
         tcp_v: tcp_v_avg,
         max_u: if cnt_max_u > 0 {
             sum_max_u / cnt_max_u as f64
@@ -693,7 +706,10 @@ fn timeout_result<const N: usize>(name: &'static str) -> BenchResult<N> {
         tcp_fd: None,
         utilization: None,
         max_path_deviation: None,
-        error: Some(format!("exceeded {:?} wall-clock budget", PER_RETIMER_TIMEOUT)),
+        error: Some(format!(
+            "exceeded {:?} wall-clock budget",
+            PER_RETIMER_TIMEOUT
+        )),
     }
 }
 
@@ -712,8 +728,8 @@ fn run_topp3tcp6_inner<const N: usize, FK: ContinuousFKChain<N, f64>>(
     fk: &FK,
 ) -> BenchResult<N> {
     use deke_topp3tcp_nlp::continuous::{
-        BoundaryConditions, DensificationOptions, JointLimits, SolverOptions, TcpLimits,
-        Topp3Tcp6, Topp3Tcp6Constraints,
+        BoundaryConditions, DensificationOptions, JointLimits, SolverOptions, TcpLimits, Topp3Tcp6,
+        Topp3Tcp6Constraints,
     };
 
     let path = match problem.path() {
@@ -917,13 +933,7 @@ fn run_topp3tcp_spline_inner<const N: usize, FK: ContinuousFKChain<N, f64>>(
             // good starting point (spike contribution scales as
             // `|qp| × Δsdddot`, and `|qp|` is bounded by 1 for the
             // unit-arclength spline path).
-            max_jerk_jump: Some(
-                problem
-                    .j_max
-                    .iter()
-                    .copied()
-                    .fold(0.0_f64, f64::max),
-            ),
+            max_jerk_jump: Some(problem.j_max.iter().copied().fold(0.0_f64, f64::max)),
             start_sdot: 0.0,
             end_sdot: 0.0,
             max_sdot: 10.0,

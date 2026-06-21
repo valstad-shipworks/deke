@@ -39,8 +39,8 @@ impl<const N: usize, F: Float> SRobotQ<N, F> {
         } else {
             let slice = q.as_slice().unwrap_or(&[]);
             let mut arr = [F::zero(); N];
-            for i in 0..N {
-                arr[i] = slice.get(i).copied().unwrap_or_else(F::zero);
+            for (i, slot) in arr.iter_mut().enumerate() {
+                *slot = slice.get(i).copied().unwrap_or_else(F::zero);
             }
             Self(arr)
         }
@@ -60,8 +60,8 @@ impl<const N: usize, F: Float> SRobotQ<N, F> {
 
     pub fn map(&self, f: impl Fn(F) -> F) -> Self {
         let mut out = [F::zero(); N];
-        for i in 0..N {
-            out[i] = f(self.0[i]);
+        for (o, &x) in out.iter_mut().zip(self.0.iter()) {
+            *o = f(x);
         }
         Self(out)
     }
@@ -80,8 +80,8 @@ impl<const N: usize, F: Float> SRobotQ<N, F> {
 
     pub fn from_fn(f: impl Fn(usize) -> F) -> Self {
         let mut out = [F::zero(); N];
-        for i in 0..N {
-            out[i] = f(i);
+        for (i, o) in out.iter_mut().enumerate() {
+            *o = f(i);
         }
         Self(out)
     }
@@ -110,6 +110,7 @@ impl<const N: usize, F: Float> SRobotQ<N, F> {
 
     pub fn clamp(&self, min: &Self, max: &Self) -> Self {
         let mut out = [F::zero(); N];
+        #[allow(clippy::needless_range_loop)]
         for i in 0..N {
             if self.0[i] < min.0[i] {
                 out[i] = min.0[i];
@@ -154,24 +155,24 @@ impl<const N: usize, F: Float> SRobotQ<N, F> {
 
     pub fn elementwise_mul(&self, other: &Self) -> Self {
         let mut out = [F::zero(); N];
-        for i in 0..N {
-            out[i] = self.0[i] * other.0[i];
+        for (o, (&a, &b)) in out.iter_mut().zip(self.0.iter().zip(other.0.iter())) {
+            *o = a * b;
         }
         Self(out)
     }
 
     pub fn elementwise_div(&self, other: &Self) -> Self {
         let mut out = [F::zero(); N];
-        for i in 0..N {
-            out[i] = self.0[i] / other.0[i];
+        for (o, (&a, &b)) in out.iter_mut().zip(self.0.iter().zip(other.0.iter())) {
+            *o = a / b;
         }
         Self(out)
     }
 
     pub fn zip_map(&self, other: &Self, f: impl Fn(F, F) -> F) -> Self {
         let mut out = [F::zero(); N];
-        for i in 0..N {
-            out[i] = f(self.0[i], other.0[i]);
+        for (o, (&a, &b)) in out.iter_mut().zip(self.0.iter().zip(other.0.iter())) {
+            *o = f(a, b);
         }
         Self(out)
     }
@@ -182,6 +183,7 @@ impl<const N: usize, F: Float> SRobotQ<N, F> {
 
     pub fn mul_add(&self, mul: &Self, add: &Self) -> Self {
         let mut out = [F::zero(); N];
+        #[allow(clippy::needless_range_loop)]
         for i in 0..N {
             out[i] = self.0[i].mul_add(mul.0[i], add.0[i]);
         }
@@ -241,8 +243,8 @@ impl<const N: usize, F: Float> std::ops::Add for SRobotQ<N, F> {
     #[inline]
     fn add(self, rhs: Self) -> Self {
         let mut out = [F::zero(); N];
-        for i in 0..N {
-            out[i] = self.0[i] + rhs.0[i];
+        for (o, (&a, &b)) in out.iter_mut().zip(self.0.iter().zip(rhs.0.iter())) {
+            *o = a + b;
         }
         Self(out)
     }
@@ -253,8 +255,8 @@ impl<const N: usize, F: Float> std::ops::Sub for SRobotQ<N, F> {
     #[inline]
     fn sub(self, rhs: Self) -> Self {
         let mut out = [F::zero(); N];
-        for i in 0..N {
-            out[i] = self.0[i] - rhs.0[i];
+        for (o, (&a, &b)) in out.iter_mut().zip(self.0.iter().zip(rhs.0.iter())) {
+            *o = a - b;
         }
         Self(out)
     }
@@ -265,8 +267,8 @@ impl<const N: usize, F: Float> std::ops::Neg for SRobotQ<N, F> {
     #[inline]
     fn neg(self) -> Self {
         let mut out = [F::zero(); N];
-        for i in 0..N {
-            out[i] = F::zero() - self.0[i];
+        for (o, &x) in out.iter_mut().zip(self.0.iter()) {
+            *o = F::zero() - x;
         }
         Self(out)
     }
@@ -277,8 +279,8 @@ impl<const N: usize, F: Float> std::ops::Mul<F> for SRobotQ<N, F> {
     #[inline]
     fn mul(self, rhs: F) -> Self {
         let mut out = [F::zero(); N];
-        for i in 0..N {
-            out[i] = self.0[i] * rhs;
+        for (o, &x) in out.iter_mut().zip(self.0.iter()) {
+            *o = x * rhs;
         }
         Self(out)
     }
@@ -305,8 +307,8 @@ impl<const N: usize, F: Float> std::ops::Div<F> for SRobotQ<N, F> {
     #[inline]
     fn div(self, rhs: F) -> Self {
         let mut out = [F::zero(); N];
-        for i in 0..N {
-            out[i] = self.0[i] / rhs;
+        for (o, &x) in out.iter_mut().zip(self.0.iter()) {
+            *o = x / rhs;
         }
         Self(out)
     }
@@ -563,8 +565,8 @@ impl<const N: usize> From<SRobotQ<N, f32>> for [f64; N] {
     #[inline]
     fn from(q: SRobotQ<N, f32>) -> [f64; N] {
         let mut out = [0.0f64; N];
-        for i in 0..N {
-            out[i] = q.0[i] as f64;
+        for (o, &x) in out.iter_mut().zip(q.0.iter()) {
+            *o = x as f64;
         }
         out
     }
@@ -574,8 +576,8 @@ impl<const N: usize> From<SRobotQ<N, f64>> for [f32; N] {
     #[inline]
     fn from(q: SRobotQ<N, f64>) -> [f32; N] {
         let mut out = [0.0f32; N];
-        for i in 0..N {
-            out[i] = q.0[i] as f32;
+        for (o, &x) in out.iter_mut().zip(q.0.iter()) {
+            *o = x as f32;
         }
         out
     }
@@ -758,9 +760,7 @@ impl<const N: usize, F: Float + AbsDiffEq<Epsilon = F>> AbsDiffEq for SRobotQ<N,
     }
 }
 
-impl<const N: usize, F: Float + RelativeEq + AbsDiffEq<Epsilon = F>> RelativeEq
-    for SRobotQ<N, F>
-{
+impl<const N: usize, F: Float + RelativeEq + AbsDiffEq<Epsilon = F>> RelativeEq for SRobotQ<N, F> {
     fn default_max_relative() -> F {
         F::default_max_relative()
     }
@@ -901,8 +901,8 @@ impl<const N: usize> From<SRobotQ<N, f32>> for SRobotQ<N, f64> {
     #[inline]
     fn from(q: SRobotQ<N, f32>) -> Self {
         let mut out = [0.0f64; N];
-        for i in 0..N {
-            out[i] = q.0[i] as f64;
+        for (o, &x) in out.iter_mut().zip(q.0.iter()) {
+            *o = x as f64;
         }
         Self(out)
     }
@@ -912,8 +912,8 @@ impl<const N: usize> From<SRobotQ<N, f64>> for SRobotQ<N, f32> {
     #[inline]
     fn from(q: SRobotQ<N, f64>) -> Self {
         let mut out = [0.0f32; N];
-        for i in 0..N {
-            out[i] = q.0[i] as f32;
+        for (o, &x) in out.iter_mut().zip(q.0.iter()) {
+            *o = x as f32;
         }
         Self(out)
     }
@@ -921,11 +921,14 @@ impl<const N: usize> From<SRobotQ<N, f64>> for SRobotQ<N, f32> {
 
 pub fn robotq<F: Float, U: Float>(vals: impl IntoIterator<Item = F>) -> RobotQ<U> {
     use num_traits::NumCast;
-    vals.into_iter().map(|v| NumCast::from(v).unwrap_or(U::zero())).collect()
+    vals.into_iter()
+        .map(|v| NumCast::from(v).unwrap_or(U::zero()))
+        .collect()
 }
 
-
-pub trait SRobotQLike<const N: usize, E: Into<DekeError>, F: Float = f32>: TryInto<SRobotQ<N, F>, Error = E> {
+pub trait SRobotQLike<const N: usize, E: Into<DekeError>, F: Float = f32>:
+    TryInto<SRobotQ<N, F>, Error = E>
+{
     fn to_srobotq(self) -> Result<SRobotQ<N, F>, E>;
 }
 
@@ -941,7 +944,13 @@ where
 
 #[allow(dead_code)]
 const _: () = {
-    fn assert_srobotq_like<const N: usize, E: Into<DekeError>, F: Float, T: SRobotQLike<N, E, F>>() {}
+    fn assert_srobotq_like<
+        const N: usize,
+        E: Into<DekeError>,
+        F: Float,
+        T: SRobotQLike<N, E, F>,
+    >() {
+    }
 
     fn assert_all<const N: usize>() {
         assert_srobotq_like::<N, Infallible, f32, SRobotQ<N, f32>>();

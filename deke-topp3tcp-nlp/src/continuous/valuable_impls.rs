@@ -5,11 +5,10 @@
 use std::time::Duration;
 
 use ::valuable::{
-    EnumDef, Enumerable, Fields, NamedField, NamedValues, StructDef, Structable, Valuable,
-    Value, Variant, VariantDef, Visit,
+    EnumDef, Enumerable, Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value,
+    Variant, VariantDef, Visit,
 };
 
-use crate::common::boundary::ProjectedBoundary;
 use super::constraints::{
     BoundaryConditions, DensificationOptions, JointLimits, SolverOptions, TcpLimits,
     Topp3Tcp6Constraints,
@@ -18,6 +17,7 @@ use super::diagnostic::{
     BoundarySlackUsage, ConstraintCounts, DerivativeStats, InitialGuessStats, LimitingGroup,
     PathStats, PeakLocation, PhaseTiming, SolveStatus, TcpStats, Topp3Tcp6Diagnostic,
 };
+use crate::common::boundary::ProjectedBoundary;
 
 /// Renders a `Duration` as its `f64` second count for inspection purposes.
 fn duration_secs(d: Duration) -> f64 {
@@ -516,7 +516,11 @@ impl Valuable for TcpLimits {
         Value::Structable(self)
     }
     fn visit(&self, visit: &mut dyn Visit) {
-        let values = [self.v_max.as_value(), self.a_max.as_value(), self.j_max.as_value()];
+        let values = [
+            self.v_max.as_value(),
+            self.a_max.as_value(),
+            self.j_max.as_value(),
+        ];
         visit.visit_named_fields(&NamedValues::new(TCP_LIMITS_FIELDS, &values));
     }
 }
@@ -574,7 +578,11 @@ impl Valuable for DensificationOptions {
             Some(v) => Value::F64(v),
             None => Value::Unit,
         };
-        let values = [max_step, self.max_samples.as_value(), self.min_samples.as_value()];
+        let values = [
+            max_step,
+            self.max_samples.as_value(),
+            self.min_samples.as_value(),
+        ];
         visit.visit_named_fields(&NamedValues::new(DENSIFICATION_FIELDS, &values));
     }
 }

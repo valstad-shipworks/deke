@@ -1,5 +1,5 @@
 //! Benchmark the complete general-6R solver (`rr_ik`, Raghavan–Roth elimination
-//! + Manocha–Canny eigenvalues) on a *generic* chain — one with no spherical
+//! and Manocha–Canny eigenvalues) on a *generic* chain — one with no spherical
 //! wrist and no parallel/intersecting axes, i.e. the case the analytical path
 //! cannot solve. Two measurements:
 //!
@@ -7,8 +7,8 @@
 //! - `rr_solve_kinspec` — the KinSpec API (includes screw extraction).
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use deke_kin::rr_ik::{DhJoint, RrConfig, fk_dh, solve_dh, solve_kinspec};
 use deke_kin::deke_types::{JointSpec, KinSpec};
+use deke_kin::rr_ik::{DhJoint, RrConfig, fk_dh, solve_dh, solve_kinspec};
 use glam::{DAffine3, DMat3, DMat4, DVec3, DVec4};
 use std::hint::black_box;
 
@@ -16,12 +16,36 @@ use std::hint::black_box;
 /// would make a wrist spherical or axes parallel.
 fn generic_dh() -> [DhJoint; 6] {
     [
-        DhJoint { a: 0.32, alpha: 0.70, d: 0.18 },
-        DhJoint { a: 0.25, alpha: -0.90, d: 0.21 },
-        DhJoint { a: 0.29, alpha: 0.80, d: 0.14 },
-        DhJoint { a: 0.22, alpha: -1.10, d: 0.19 },
-        DhJoint { a: 0.18, alpha: 0.60, d: 0.11 },
-        DhJoint { a: 0.15, alpha: -0.70, d: 0.17 },
+        DhJoint {
+            a: 0.32,
+            alpha: 0.70,
+            d: 0.18,
+        },
+        DhJoint {
+            a: 0.25,
+            alpha: -0.90,
+            d: 0.21,
+        },
+        DhJoint {
+            a: 0.29,
+            alpha: 0.80,
+            d: 0.14,
+        },
+        DhJoint {
+            a: 0.22,
+            alpha: -1.10,
+            d: 0.19,
+        },
+        DhJoint {
+            a: 0.18,
+            alpha: 0.60,
+            d: 0.11,
+        },
+        DhJoint {
+            a: 0.15,
+            alpha: -0.70,
+            d: 0.17,
+        },
     ]
 }
 
@@ -80,7 +104,12 @@ fn generic_kinspec(dh: &[DhJoint; 6]) -> KinSpec<f64, 6> {
         } else {
             dh_const_block(&dh[i - 1])
         };
-        (g, JointSpec::Revolute { axis_local: DVec3::Z })
+        (
+            g,
+            JointSpec::Revolute {
+                axis_local: DVec3::Z,
+            },
+        )
     });
     KinSpec::new(DAffine3::IDENTITY, joints, dh_const_block(&dh[5]))
 }

@@ -12,12 +12,42 @@ use deke_types::{Retimer, SRobotPath, SRobotQ};
 #[test]
 fn f32_built_chain_drives_f64_discrete_retimer() {
     let dh = [
-        deke_kin::DHJoint::<f32> { a: 0.0, alpha: std::f32::consts::FRAC_PI_2, d: 0.089, theta_offset: 0.0 },
-        deke_kin::DHJoint::<f32> { a: -0.425, alpha: 0.0, d: 0.0, theta_offset: 0.0 },
-        deke_kin::DHJoint::<f32> { a: -0.392, alpha: 0.0, d: 0.0, theta_offset: 0.0 },
-        deke_kin::DHJoint::<f32> { a: 0.0, alpha: std::f32::consts::FRAC_PI_2, d: 0.109, theta_offset: 0.0 },
-        deke_kin::DHJoint::<f32> { a: 0.0, alpha: -std::f32::consts::FRAC_PI_2, d: 0.094, theta_offset: 0.0 },
-        deke_kin::DHJoint::<f32> { a: 0.0, alpha: 0.0, d: 0.082, theta_offset: 0.0 },
+        deke_kin::DHJoint::<f32> {
+            a: 0.0,
+            alpha: std::f32::consts::FRAC_PI_2,
+            d: 0.089,
+            theta_offset: 0.0,
+        },
+        deke_kin::DHJoint::<f32> {
+            a: -0.425,
+            alpha: 0.0,
+            d: 0.0,
+            theta_offset: 0.0,
+        },
+        deke_kin::DHJoint::<f32> {
+            a: -0.392,
+            alpha: 0.0,
+            d: 0.0,
+            theta_offset: 0.0,
+        },
+        deke_kin::DHJoint::<f32> {
+            a: 0.0,
+            alpha: std::f32::consts::FRAC_PI_2,
+            d: 0.109,
+            theta_offset: 0.0,
+        },
+        deke_kin::DHJoint::<f32> {
+            a: 0.0,
+            alpha: -std::f32::consts::FRAC_PI_2,
+            d: 0.094,
+            theta_offset: 0.0,
+        },
+        deke_kin::DHJoint::<f32> {
+            a: 0.0,
+            alpha: 0.0,
+            d: 0.082,
+            theta_offset: 0.0,
+        },
     ];
     let chain_f32: Kinematics<6, f32> = Kinematics::from_dh(dh, JointLimits::symmetric(10.0), &[]);
     let chain_f64: Kinematics<6, f64> = chain_f32.to_f64();
@@ -34,8 +64,8 @@ fn f32_built_chain_drives_f64_discrete_retimer() {
 
     let cfg = Topp3Tcp6DiscreteConstraints::<6>::symmetric(1.5, 4.0, 200.0);
 
-    let mut validator = common::wide_validator::<6>();
-    let (result, diag) = Topp3Tcp6Discrete::new(&chain_f64).retime(&cfg, &path, &mut validator, &());
+    let validator = common::wide_validator::<6>();
+    let (result, diag) = Topp3Tcp6Discrete::new(&chain_f64).retime(&cfg, &path, &validator, &());
     eprintln!("{}", diag);
     assert!(result.is_ok(), "retime failed: {}", diag);
     assert_eq!(diag.status, SolveStatus::Success);

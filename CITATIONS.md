@@ -94,6 +94,24 @@ eigenproblem. Solved with faer 0.24.0 `Mat::generalized_eigen`.
 }
 ```
 
+### Manipulability (`src/kinematics/fk_chain.rs`)
+
+`FkChain::manipulability` returns the Yoshikawa manipulability measure
+`√det(J·Jᵀ)` (for a square 6-DOF arm, `|det J|`):
+
+```bibtex
+@article{yoshikawa1985manipulability,
+  author  = {Yoshikawa, Tsuneo},
+  title   = {Manipulability of Robotic Mechanisms},
+  journal = {The International Journal of Robotics Research},
+  volume  = {4},
+  number  = {2},
+  pages   = {3--9},
+  year    = {1985},
+  doi     = {10.1177/027836498500400201}
+}
+```
+
 ## deke-topp3tcp-nlp, deke-topp3tcp-spline
 
 Time-optimal path tracking as a convex optimization over a reparameterized fixed path:
@@ -208,5 +226,174 @@ AORRTC — Almost-Surely Asymptotically Optimal Planning with RRT-Connect
   url = {https://arxiv.org/abs/2505.10542},
   year = {2025},
   note = {Under Review}
+}
+```
+
+## deke-multipath
+
+Ordering required paths is an asymmetric generalized TSP (one option per
+cluster, choosing direction/variant) — the robotic task sequencing problem with
+sampled configurations.
+
+Exact solver: the bitmask dynamic program keyed on `(visited set, last vertex)`
+is the Held–Karp sequencing DP, applied per cluster.
+
+```bibtex
+@article{held1962dynamic,
+  author  = {Held, Michael and Karp, Richard M.},
+  title   = {A Dynamic Programming Approach to Sequencing Problems},
+  journal = {Journal of the Society for Industrial and Applied Mathematics},
+  volume  = {10},
+  number  = {1},
+  pages   = {196--210},
+  year    = {1962},
+  doi     = {10.1137/0110015}
+}
+```
+
+Heuristic construction — decouple task-space ordering from configuration
+selection (`src/agtsp.rs::solve_heuristic` orders clusters with a cheap
+surrogate, then picks options):
+
+```bibtex
+@inproceedings{suarezruiz2018robotsp,
+  author    = {Su{\'a}rez-Ruiz, Francisco and Lembono, Teguh Santoso and Pham, Quang-Cuong},
+  title     = {RoboTSP -- A Fast Solution to the Robotic Task Sequencing Problem},
+  booktitle = {IEEE International Conference on Robotics and Automation (ICRA)},
+  year      = {2018},
+  note      = {arXiv:1709.09343},
+  url       = {https://arxiv.org/abs/1709.09343}
+}
+```
+
+Cluster optimization — given a fixed cluster order, the optimal one-vertex-per
+-cluster selection is a layered-DAG shortest path
+(`src/agtsp.rs::cluster_optimize`):
+
+```bibtex
+@article{karapetyan2011lk,
+  author  = {Karapetyan, Daniel and Gutin, Gregory},
+  title   = {Lin--Kernighan Heuristic Adaptations for the Generalized Traveling Salesman Problem},
+  journal = {European Journal of Operational Research},
+  volume  = {208},
+  number  = {3},
+  pages   = {221--232},
+  year    = {2011},
+  note    = {arXiv:1003.5330},
+  url     = {https://arxiv.org/abs/1003.5330}
+}
+```
+
+Related GTSP solvers consulted for the design (heavy-instance paths not yet
+implemented — Noon–Bean reduction to ATSP, GLKH, and the GLNS large-neighbourhood
+search):
+
+```bibtex
+@article{noon1993transformation,
+  author  = {Noon, Charles E. and Bean, James C.},
+  title   = {An Efficient Transformation of the Generalized Traveling Salesman Problem},
+  journal = {INFOR: Information Systems and Operational Research},
+  volume  = {31},
+  number  = {1},
+  pages   = {39--44},
+  year    = {1993},
+  doi     = {10.1080/03155986.1993.11732212}
+}
+
+@article{helsgaun2015gtsp,
+  author  = {Helsgaun, Keld},
+  title   = {Solving the Equality Generalized Traveling Salesman Problem Using the Lin--Kernighan--Helsgaun Algorithm},
+  journal = {Mathematical Programming Computation},
+  volume  = {7},
+  pages   = {269--287},
+  year    = {2015},
+  doi     = {10.1007/s12532-015-0080-8}
+}
+
+@article{smith2017glns,
+  author  = {Smith, Stephen L. and Imeson, Frank},
+  title   = {GLNS: An Effective Large Neighborhood Search Heuristic for the Generalized Traveling Salesman Problem},
+  journal = {Computers \& Operations Research},
+  volume  = {87},
+  pages   = {1--19},
+  year    = {2017},
+  doi     = {10.1016/j.cor.2017.05.010}
+}
+```
+
+## deke-linear
+
+Constant-TCP-speed Cartesian polyline following. The planner discretizes the
+Cartesian path, inverts every sample, and routes a continuous, validator-checked
+joint track through the per-sample IK candidates with a dynamic program — the
+ladder-graph pattern of **ROS-Industrial Descartes**
+(<https://github.com/ros-industrial-consortium/descartes>, Apache-2.0; see also
+"Cartesian path planning for arc welding robots: Evaluation of the descartes
+algorithm", IEEE ETFA 2017, <https://ieeexplore.ieee.org/document/8247616>).
+
+The redundant planner extends that DP over the tool's free spin axis, resolving
+the kinematic redundancy of a path-constrained arm in one global pass:
+
+```bibtex
+@article{ferrentino2023dp,
+  author  = {Ferrentino, Enrico and Savino, Heitor J. and Franchi, Antonio and Chiacchio, Pasquale},
+  title   = {A Dynamic Programming Framework for Optimal Planning of Redundant Robots Along Prescribed Paths With Kineto-Dynamic Constraints},
+  journal = {IEEE Transactions on Automation Science and Engineering},
+  year    = {2023},
+  note    = {arXiv:2207.05622},
+  url     = {https://arxiv.org/abs/2207.05622}
+}
+```
+
+Treating the welding torch's rotation about its own axis as a free DOF (functional
+redundancy of the symmetric tool) follows the twist-decomposition welding work:
+
+```bibtex
+@article{huo2008jointlimits,
+  author  = {Huo, Liguo and Baron, Luc},
+  title   = {The joint-limits and singularity avoidance in robotic welding},
+  journal = {Industrial Robot: An International Journal},
+  volume  = {35},
+  number  = {5},
+  pages   = {456--464},
+  year    = {2008},
+  doi     = {10.1108/01439910810893626}
+}
+```
+
+The DP node cost is the Yoshikawa manipulability measure (`√det(J·Jᵀ)`, computed
+by `deke-kin`'s `FkChain::manipulability` — cited under [deke-kin](#deke-kin)).
+
+The constant-feedrate retimer reuses the phase-plane time-optimal machinery — the
+maximum-velocity curve `min_j v_max,j / |q'_j(s)|` and a backward/forward
+acceleration-bounded pass (`v² ± 2 a Δs`) — but clamps the feedrate to the
+commanded speed instead of maximizing it:
+
+```bibtex
+@article{bobrow1985timeoptimal,
+  author  = {Bobrow, J. E. and Dubowsky, S. and Gibson, J. S.},
+  title   = {Time-Optimal Control of Robotic Manipulators Along Specified Paths},
+  journal = {The International Journal of Robotics Research},
+  volume  = {4},
+  number  = {3},
+  pages   = {3--17},
+  year    = {1985},
+  doi     = {10.1177/027836498500400301}
+}
+```
+
+Cartesian path conditioning (corner smoothing, arc-length parameterization) is
+built on the first-party `squiggle` geometry crate, whose interpolating curve is the
+Catmull–Rom spline:
+
+```bibtex
+@incollection{catmull1974splines,
+  author    = {Catmull, Edwin and Rom, Raphael},
+  title     = {A Class of Local Interpolating Splines},
+  booktitle = {Computer Aided Geometric Design},
+  publisher = {Academic Press},
+  pages     = {317--326},
+  year      = {1974},
+  doi       = {10.1016/B978-0-12-079050-0.50020-5}
 }
 ```

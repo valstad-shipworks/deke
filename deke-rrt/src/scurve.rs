@@ -18,6 +18,7 @@ impl<const N: usize> KinematicLimits<N> {
     /// approximates the time-optimal cost (lower bound).
     pub fn velocity_coeffs(&self) -> [f64; N] {
         let mut c = [0.0; N];
+        #[allow(clippy::needless_range_loop)]
         for i in 0..N {
             let v = self.joints[i].v_max;
             c[i] = 1.0 / (v * v);
@@ -135,7 +136,7 @@ pub fn time_optimal_cost<const N: usize>(
 ) -> f64 {
     let mut max_time = 0.0f64;
     for i in 0..N {
-        let delta = (b.0[i] as f64 - a.0[i] as f64).abs();
+        let delta = (b.0[i] - a.0[i]).abs();
         let t = min_time_1d(delta, &limits.joints[i]);
         max_time = max_time.max(t);
     }
@@ -187,8 +188,8 @@ pub fn direction_cosine<const N: usize>(
     let mut norm_bc = 0.0f64;
     for i in 0..N {
         let s = 1.0 / limits.joints[i].v_max;
-        let ab = (b.0[i] as f64 - a.0[i] as f64) * s;
-        let bc = (c.0[i] as f64 - b.0[i] as f64) * s;
+        let ab = (b.0[i] - a.0[i]) * s;
+        let bc = (c.0[i] - b.0[i]) * s;
         dot += ab * bc;
         norm_ab += ab * ab;
         norm_bc += bc * bc;

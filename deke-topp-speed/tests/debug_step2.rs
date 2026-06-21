@@ -3,11 +3,11 @@
 
 use std::time::Duration;
 
+use deke_kin::{DHJoint, JointLimits, Kinematics};
 use deke_topp_speed::{
     ControlMode, Coordination, DurationGrid, GoalOutOfBounds, MotionSpec, Retimer, SRobotPath,
     SRobotQ, ToppSolver,
 };
-use deke_kin::{DHJoint, JointLimits, Kinematics};
 use deke_types::JointValidator;
 
 #[test]
