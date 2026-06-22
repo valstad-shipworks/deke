@@ -1,15 +1,13 @@
-use std::time::Duration;
-
 use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use deke_kin::{DHJoint, JointLimits as KinJointLimits, Kinematics};
 use deke_linear::{
-    CartesianLinearPlanner, CartesianRun, FollowConfig, JointLimits, PathConditioning,
-    PlannerOptions, RedundantLinearPlanner, RedundantOptions, condition,
+    CartesianLinearPlanner, CartesianRun, PathConditioning, PlannerOptions, RedundantConfig,
+    RedundantLinearPlanner, RedundantOptions, condition,
 };
 use deke_types::glam::{DAffine3, DVec3};
-use deke_types::{FKChain, IkSolver, SRobotQ};
+use deke_types::{DekeError, FKChain, IkSolver, Planner, SRobotQ};
 
 fn ur() -> Kinematics<6, f64> {
     use std::f64::consts::PI;
@@ -48,12 +46,16 @@ fn straight_run(robot: &Kinematics<6, f64>, len: f64) -> CartesianRun {
 }
 
 fn planner_opts() -> PlannerOptions<6> {
-    FollowConfig::weld(
-        35.0,
-        JointLimits::symmetric(2.0, 8.0, 80.0),
-        Duration::from_millis(8),
-    )
-    .planner
+    // weld preset at 35 IPM: fine sampling, velocity reconfig test on.
+    let tcp_speed = 35.0 * 0.0254 / 60.0;
+    PlannerOptions {
+        sample_ds: 5e-4,
+        manip_weight: 1.0,
+        max_branch_jump: 0.6,
+        max_velocity: tcp_speed,
+        joint_v_max: SRobotQ::splat(2.0),
+        reconfig_vel_fraction: 0.9,
+    }
 }
 
 fn bench(c: &mut Criterion) {
@@ -76,6 +78,9 @@ fn bench(c: &mut Criterion) {
         c.bench_function("jacobian_call", |b| {
             b.iter(|| black_box(robot.jacobian(black_box(&q))))
         });
+        c.bench_function("manipulability_call", |b| {
+            b.iter(|| black_box(robot.manipulability(black_box(&q))))
+        });
     }
 
     for &len in &[0.04, 0.10] {
@@ -83,12 +88,16 @@ fn bench(c: &mut Criterion) {
         let cm = (len * 100.0) as usize;
         c.bench_function(&format!("fixed_plan_{cm}cm"), |b| {
             b.iter(|| {
-                black_box(fixed.plan_run(black_box(&run), &opts, &noop, &(), None, 0)).is_ok()
+                black_box(fixed.plan::<DekeError, _>(&opts, black_box(&run), &noop, &()).0).is_ok()
             })
         });
+        let rcfg = RedundantConfig {
+            planner: opts.clone(),
+            redundant: ropts.clone(),
+        };
         c.bench_function(&format!("redundant_plan_{cm}cm"), |b| {
             b.iter(|| {
-                black_box(red.plan_run(black_box(&run), &opts, &ropts, &noop, &(), None, 0)).is_ok()
+                black_box(red.plan::<DekeError, _>(&rcfg, black_box(&run), &noop, &()).0).is_ok()
             })
         });
     }

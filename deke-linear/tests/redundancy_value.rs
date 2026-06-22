@@ -2,8 +2,9 @@ mod common;
 
 use std::time::Duration;
 
+use common::Cfg;
 use deke_kin::{DHJoint, JointLimits as KinJointLimits, Kinematics};
-use deke_linear::{FollowConfig, JointLimits, LinearFollower, RedundantAxis, RedundantOptions};
+use deke_linear::{JointLimits, RedundantAxis, RedundantOptions};
 use deke_types::glam::{DAffine3, DMat3, DVec3};
 use deke_types::{IkOutcome, IkSolver};
 
@@ -104,9 +105,8 @@ fn free_yaw_succeeds_where_fixed_orientation_fails() {
 
     let joint = JointLimits::symmetric(2.0, 8.0, 80.0);
     let dt = Duration::from_millis(8);
-    let follower = LinearFollower::new(&robot);
 
-    let fixed = FollowConfig::weld(30.0, joint.clone(), dt);
+    let fixed = Cfg::weld(30.0, joint.clone(), dt);
     let redundant = fixed.clone().with_redundancy(RedundantOptions {
         axis: RedundantAxis::PosZ,
         yaw_window: (-std::f64::consts::PI, std::f64::consts::PI),
@@ -114,15 +114,14 @@ fn free_yaw_succeeds_where_fixed_orientation_fails() {
         ..RedundantOptions::default()
     });
 
-    let fixed_res = follower.follow(&poses, &fixed, &common::noop(), &());
+    let fixed_res = common::follow(&robot, &poses, &fixed, &common::noop(), &());
     assert!(
         fixed_res.is_err(),
         "fixed-orientation planner should fail on an orientation-unreachable weld"
     );
     println!("  fixed planner: {:?}", fixed_res.unwrap_err());
 
-    let (traj, diag) = follower
-        .follow(&poses, &redundant, &common::noop(), &())
+    let (traj, diag) = common::follow(&robot, &poses, &redundant, &common::noop(), &())
         .expect("free-yaw planner should solve it");
     let rd = &diag.redundant[0];
     println!(

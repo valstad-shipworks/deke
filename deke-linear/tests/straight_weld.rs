@@ -1,6 +1,5 @@
 mod common;
 
-use deke_linear::LinearFollower;
 use deke_types::glam::DVec3;
 
 #[test]
@@ -18,9 +17,7 @@ fn straight_weld_holds_constant_speed_within_limits() {
     let poses = common::straight(&robot, DVec3::X, 0.12, 4);
     let cfg = common::config(0.05);
 
-    let follower = LinearFollower::new(&robot);
-    let (traj, diag) = follower
-        .follow(&poses, &cfg, &common::noop(), &())
+    let (traj, diag) = common::follow(&robot, &poses, &cfg, &common::noop(), &())
         .expect("follow failed");
 
     assert_eq!(diag.runs, 1, "a straight line is one run");
@@ -58,8 +55,7 @@ fn starts_and_ends_at_rest() {
     let robot = common::ur();
     let poses = common::straight(&robot, DVec3::X, 0.10, 3);
     let cfg = common::config(0.04);
-    let follower = LinearFollower::new(&robot);
-    let (traj, _) = follower.follow(&poses, &cfg, &common::noop(), &()).unwrap();
+    let (traj, _) = common::follow(&robot, &poses, &cfg, &common::noop(), &()).unwrap();
 
     let speeds = common::tcp_speeds(&robot, &traj);
     assert!(

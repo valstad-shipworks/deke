@@ -4,9 +4,122 @@
 use std::time::Duration;
 
 use deke_kin::{DHJoint, JointLimits as KinJointLimits, Kinematics};
-use deke_linear::{FollowConfig, JointLimits, LinearConstraints, PathConditioning, PlannerOptions};
+use deke_linear::{
+    CartesianLinearPlanner, ConstantSpeedRetimer, JointLimits, LinearConstraints,
+    LinearPlannerDiagnostic, LinearRetimerDiagnostic, PathConditioning, PlannerOptions,
+    RedundantConfig, RedundantDiagnostic, RedundantLinearPlanner, RedundantOptions, condition,
+};
 use deke_types::glam::{DAffine3, DMat3, DVec3};
-use deke_types::{FKChain, SRobotQ, SRobotTraj};
+use deke_types::{DekeError, FKChain, Planner, Retimer, SRobotPath, SRobotQ, SRobotTraj, Validator};
+
+/// Caller-owned bundle of the three stages' knobs. The library no longer ships
+/// an end-to-end config; orchestration (and the config it needs) lives here.
+#[derive(Clone)]
+pub struct Cfg {
+    pub conditioning: PathConditioning,
+    pub planner: PlannerOptions<6>,
+    pub redundant: Option<RedundantOptions>,
+    pub constraints: LinearConstraints<6>,
+}
+
+impl Cfg {
+    /// Arc-welding preset, quoted in inches per minute (typically 20–50 IPM):
+    /// fine geometric sampling with the velocity-based reconfiguration test on.
+    pub fn weld(ipm: f64, joint: JointLimits<6>, output_dt: Duration) -> Self {
+        let tcp_speed = ipm * 0.0254 / 60.0;
+        Self {
+            conditioning: PathConditioning {
+                sharp_corner_angle: 30.0_f64.to_radians(),
+            },
+            planner: PlannerOptions {
+                sample_ds: 5e-4,
+                manip_weight: 1.0,
+                max_branch_jump: 0.6,
+                max_velocity: tcp_speed,
+                joint_v_max: joint.v_max,
+                reconfig_vel_fraction: 0.9,
+            },
+            redundant: None,
+            constraints: LinearConstraints {
+                joint,
+                tcp_speed,
+                output_dt,
+                forbid_interior_dips: false,
+            },
+        }
+    }
+
+    pub fn with_redundancy(mut self, options: RedundantOptions) -> Self {
+        self.redundant = Some(options);
+        self
+    }
+}
+
+/// Per-run diagnostics from [`follow`].
+#[derive(Default, Debug)]
+pub struct FollowOut {
+    pub runs: usize,
+    pub planner: Vec<LinearPlannerDiagnostic>,
+    pub redundant: Vec<RedundantDiagnostic>,
+    pub retimer: Vec<LinearRetimerDiagnostic>,
+}
+
+/// Caller-side orchestration of the three stages purely through the public
+/// trait surface: condition the polyline into runs, then plan ([`Planner`]) and
+/// retime ([`Retimer`]) each run and concatenate the trajectories. Runs are
+/// planned independently — there is no cross-run seed stitching.
+pub fn follow<V: Validator<6, (), f64>>(
+    robot: &Kinematics<6, f64>,
+    poses: &[DAffine3],
+    cfg: &Cfg,
+    validator: &V,
+    ctx: &V::Context<'_>,
+) -> Result<(SRobotTraj<6, f64>, FollowOut), DekeError> {
+    let runs = condition(poses, &cfg.conditioning)?;
+    let planner = CartesianLinearPlanner::new(robot);
+    let retimer = ConstantSpeedRetimer::new(robot);
+    let redundant = cfg
+        .redundant
+        .as_ref()
+        .map(|_| RedundantLinearPlanner::new(robot));
+
+    let mut all: Vec<SRobotQ<6, f64>> = Vec::new();
+    let mut out = FollowOut {
+        runs: runs.len(),
+        ..Default::default()
+    };
+    for run in runs.iter() {
+        let jpath = match (&redundant, &cfg.redundant) {
+            (Some(rp), Some(ropts)) => {
+                let rcfg = RedundantConfig {
+                    planner: cfg.planner.clone(),
+                    redundant: ropts.clone(),
+                };
+                let (path, diag) = rp.plan::<DekeError, _>(&rcfg, run, validator, ctx);
+                out.redundant.push(diag);
+                path?
+            }
+            _ => {
+                let (path, diag) = planner.plan::<DekeError, _>(&cfg.planner, run, validator, ctx);
+                out.planner.push(diag);
+                path?
+            }
+        };
+        let (traj, diag) = retimer.retime(&cfg.constraints, &jpath, validator, ctx);
+        out.retimer.push(diag);
+        let traj = traj?;
+        let samples = traj.path().iter().copied();
+        if all.is_empty() {
+            all.extend(samples);
+        } else {
+            all.extend(samples.skip(1));
+        }
+    }
+
+    let dt = cfg.constraints.output_dt;
+    let path = SRobotPath::try_new(all)?;
+    Ok((SRobotTraj::new(dt, path), out))
+}
 
 /// UR10-ish 6R chain (spherical wrist → analytic IK), generous joint limits.
 pub fn ur() -> Kinematics<6, f64> {
@@ -36,12 +149,12 @@ pub fn noop() -> deke_linear::NoopValidator<6> {
     deke_linear::NoopValidator
 }
 
-pub fn config(tcp_speed: f64) -> FollowConfig<6> {
+pub fn config(tcp_speed: f64) -> Cfg {
     config_flag(tcp_speed, false)
 }
 
-pub fn config_flag(tcp_speed: f64, forbid_interior_dips: bool) -> FollowConfig<6> {
-    FollowConfig {
+pub fn config_flag(tcp_speed: f64, forbid_interior_dips: bool) -> Cfg {
+    Cfg {
         conditioning: PathConditioning::default(),
         planner: PlannerOptions::default(),
         redundant: None,

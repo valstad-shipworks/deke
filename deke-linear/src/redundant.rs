@@ -12,7 +12,10 @@
 //! branch nearest the previous step (predictor–corrector).
 
 use deke_types::glam::{DAffine3, DQuat, DVec3};
-use deke_types::{ContinuousFKChain, IkOutcome, IkSolver, SRobotPath, SRobotQ, Validator};
+use deke_types::{
+    ContinuousFKChain, DekeError, DekeResult, IkOutcome, IkSolver, Planner, SRobotPath, SRobotQ,
+    Validator,
+};
 
 use crate::constraints::PlannerOptions;
 use crate::diagnostic::RedundantDiagnostic;
@@ -81,6 +84,14 @@ impl Default for RedundantOptions {
     }
 }
 
+/// Bundles the branch-tracking knobs and the yaw-search knobs so the redundant
+/// planner can satisfy the single-config [`Planner`] trait.
+#[derive(Clone, Debug)]
+pub struct RedundantConfig<const N: usize> {
+    pub planner: PlannerOptions<N>,
+    pub redundant: RedundantOptions,
+}
+
 struct YawNode<const N: usize> {
     yaw: f64,
     q: SRobotQ<N, f64>,
@@ -102,7 +113,7 @@ where
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn plan_run<V: Validator<N, (), f64>>(
+    pub(crate) fn plan_run<V: Validator<N, (), f64>>(
         &self,
         run: &CartesianRun,
         planner: &PlannerOptions<N>,
@@ -287,6 +298,43 @@ where
                 yaw_range: (yaw_lo, yaw_hi),
             },
         ))
+    }
+}
+
+impl<'a, const N: usize, FK> Planner<N, f64> for RedundantLinearPlanner<'a, N, FK>
+where
+    FK: ContinuousFKChain<N, f64> + IkSolver<N, f64>,
+{
+    type Diagnostic = RedundantDiagnostic;
+    type Config = RedundantConfig<N>;
+    type Waypoints = CartesianRun;
+
+    fn plan<E: Into<DekeError>, V: Validator<N, (), f64>>(
+        &self,
+        config: &Self::Config,
+        waypoints: &Self::Waypoints,
+        validator: &V,
+        ctx: &V::Context<'_>,
+    ) -> (DekeResult<SRobotPath<N, f64>>, Self::Diagnostic) {
+        match self.plan_run(
+            waypoints,
+            &config.planner,
+            &config.redundant,
+            validator,
+            ctx,
+            None,
+            0,
+        ) {
+            Ok((path, diag)) => (Ok(path), diag),
+            Err(e) => (
+                Err(e.into()),
+                RedundantDiagnostic {
+                    samples: 0,
+                    min_manipulability: 0.0,
+                    yaw_range: (0.0, 0.0),
+                },
+            ),
+        }
     }
 }
 

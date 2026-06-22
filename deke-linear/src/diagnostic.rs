@@ -64,26 +64,3 @@ impl fmt::Display for RedundantDiagnostic {
         )
     }
 }
-
-/// Whole-path follow outcome (one entry per run).
-#[derive(Clone, Debug, Default)]
-pub struct LinearFollowDiagnostic {
-    pub runs: usize,
-    pub planner: Vec<LinearPlannerDiagnostic>,
-    pub redundant: Vec<RedundantDiagnostic>,
-    pub retimer: Vec<LinearRetimerDiagnostic>,
-    pub total_samples: usize,
-    pub total_duration: Duration,
-}
-
-impl fmt::Display for LinearFollowDiagnostic {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "follow: {} run(s), {} samples, {:.3}s total",
-            self.runs,
-            self.total_samples,
-            self.total_duration.as_secs_f64()
-        )
-    }
-}

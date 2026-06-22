@@ -198,29 +198,48 @@ pub trait ContinuousFKChain<const N: usize, F: KinScalar = f32>:
     /// of the Jacobian's singular values.
     fn manipulability(&self, q: &SRobotQ<N, F>) -> Result<F, Self::Error> {
         let j = self.jacobian(q)?;
+        // Square Jacobian (the common 6-DOF arm): `sqrt(det(J Jᵀ)) = |det(J)|`,
+        // so the determinant is taken on `J` directly and the `J Jᵀ` product is
+        // never formed.
+        if N == 6 {
+            let mut m = [[F::zero(); 6]; 6];
+            for (mr, jr) in m.iter_mut().zip(j.iter()) {
+                for (mv, &jv) in mr.iter_mut().zip(jr.iter()) {
+                    *mv = jv;
+                }
+            }
+            return Ok(gram_determinant::<F>(m, 6).abs());
+        }
         // Gram matrix of the shorter dimension: J Jᵀ (6×6) when the chain has
-        // ≥6 joints, else Jᵀ J (N×N). Either way it is k×k with k = min(6, N)
+        // >6 joints, else Jᵀ J (N×N). Either way it is k×k with k = min(6, N)
         // and positive semidefinite, so its determinant is the squared product
         // of the Jacobian's singular values.
         let k = if N >= 6 { 6 } else { N };
         let mut g = [[F::zero(); 6]; 6];
+        // The Gram matrix is symmetric, so only the lower triangle is computed
+        // and mirrored — half the dot products. Mirroring is exact: `g[r][c]`
+        // and `g[c][r]` are the same dot product (multiplication commutes).
         if N >= 6 {
             // J Jᵀ: g[r][c] = row r · row c of J.
-            for (r, grow) in g.iter_mut().enumerate() {
-                for (c, gval) in grow.iter_mut().enumerate() {
-                    *gval = j[r]
+            for r in 0..6 {
+                for c in 0..=r {
+                    let dot = j[r]
                         .iter()
                         .zip(j[c].iter())
                         .fold(F::zero(), |acc, (&a, &b)| acc + a * b);
+                    g[r][c] = dot;
+                    g[c][r] = dot;
                 }
             }
         } else {
             // Jᵀ J over the top-left N×N block: g[r][c] = column r · column c.
-            for (r, grow) in g.iter_mut().enumerate().take(N) {
-                for (c, gval) in grow.iter_mut().enumerate().take(N) {
-                    *gval = j
+            for r in 0..N {
+                for c in 0..=r {
+                    let dot = j
                         .iter()
                         .fold(F::zero(), |acc, jrow| acc + jrow[r] * jrow[c]);
+                    g[r][c] = dot;
+                    g[c][r] = dot;
                 }
             }
         }

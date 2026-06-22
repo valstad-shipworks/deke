@@ -7,11 +7,18 @@
 //! returns the full stitched motion: connector segments interleaved with the
 //! chosen required paths.
 //!
-//! The ordering is an asymmetric generalized TSP (see [`agtsp`]); cost is a
-//! pluggable joint-space metric ([`TransitionCost`]). The planner is only used
-//! to *generate* connector paths and is optional — [`plan_multipath`] uses a
-//! planner for obstacle-aware connectors, [`plan_multipath_straight`] emits
-//! validated straight-line connectors instead.
+//! The ordering is an asymmetric generalized TSP (see [`agtsp`]); cost is any
+//! `Fn(SRobotQ<N, f64>, SRobotQ<N, f64>) -> f64` scoring a transition between
+//! two configurations. [`weighted_euclidean`], [`planned_path_length`] and
+//! [`planned_trajectory_time`] build the common ones (cheap joint distance,
+//! planner arc length, retimed trajectory time). The planner passed to
+//! [`plan_multipath`] is only used to *generate* connector paths in the output
+//! — [`plan_multipath_straight`] emits validated straight-line connectors
+//! instead.
+//!
+//! If you already hold a precomputed `option × option` cost matrix and want the
+//! chosen option index per cluster (rather than stitched paths), call
+//! [`solve_matrix`] / [`solve_matrix_multi_start`] directly.
 //!
 //! ```no_run
 //! # use deke_multipath::*;
@@ -24,7 +31,7 @@
 //! #       V::Context<'ctx>: Sync,
 //! #       MW: Fn(SRobotQ<N, f64>, SRobotQ<N, f64>) -> P::Waypoints + Sync {
 //! let settings = MultiPathSettings::new(start);
-//! let cost = TransitionCost::JointWeighted(weights);
+//! let cost = weighted_euclidean(weights);
 //! let transition = TransitionPlanner { planner, config: cfg, make_waypoints: make_wp };
 //! plan_multipath(&paths, &cost, &settings, &transition, validator, ctx)
 //! # }
@@ -47,15 +54,25 @@ mod cost;
 mod error;
 mod reqpath;
 
+use std::cmp::Ordering;
+use std::collections::HashMap;
+
 use deke_types::{DekeError, Planner, SRobotPath, SRobotQ, Validator};
 
 use agtsp::Problem;
 use cost::build_matrices;
 use reqpath::{DirectedOption, expand};
 
-pub use cost::{TransitionCost, weighted_distance};
+pub use cost::{
+    planned_path_length, planned_trajectory_time, weighted_distance, weighted_euclidean,
+};
 pub use error::{MultipathError, MultipathResult};
 pub use reqpath::ReqPath;
+
+/// Default Held–Karp cell budget: above this many DP cells the solver switches
+/// from exact to the nearest-neighbour + 2-opt heuristic. `16 * 1024 * 1024`
+/// cells ≈ 256 MB.
+pub const DEFAULT_CELL_BUDGET: usize = agtsp::DEFAULT_CELL_BUDGET;
 
 /// `Sync` exactly when the `rayon` feature is enabled. The public API requires
 /// thread-safety only when work is actually dispatched across the rayon pool;
@@ -118,9 +135,9 @@ where
 
 /// Solve the ordering and stitch the full motion using `transition` to plan
 /// obstacle-aware connectors between the chosen paths.
-pub fn plan_multipath<'ctx, const N: usize, P, V, MW>(
+pub fn plan_multipath<'ctx, const N: usize, P, V, MW, C>(
     req_paths: &[ReqPath<N>],
-    cost: &TransitionCost<N>,
+    cost: &C,
     settings: &MultiPathSettings<N>,
     transition: &TransitionPlanner<'_, N, P, MW>,
     validator: &V,
@@ -132,6 +149,7 @@ where
     V: Validator<N, (), f64>,
     V::Context<'ctx>: MaybeSync,
     MW: Fn(SRobotQ<N, f64>, SRobotQ<N, f64>) -> P::Waypoints + MaybeSync,
+    C: Fn(SRobotQ<N, f64>, SRobotQ<N, f64>) -> f64,
 {
     run(req_paths, cost, settings, |from, to| {
         let waypoints = (transition.make_waypoints)(*from, *to);
@@ -147,9 +165,9 @@ where
 /// connectors. Each connector is checked with `validator.validate_motion`; if a
 /// straight line between two required paths is infeasible the solve fails (there
 /// is no planner to route around the obstacle).
-pub fn plan_multipath_straight<'ctx, const N: usize, V>(
+pub fn plan_multipath_straight<'ctx, const N: usize, V, C>(
     req_paths: &[ReqPath<N>],
-    cost: &TransitionCost<N>,
+    cost: &C,
     settings: &MultiPathSettings<N>,
     validator: &V,
     ctx: &V::Context<'ctx>,
@@ -157,6 +175,7 @@ pub fn plan_multipath_straight<'ctx, const N: usize, V>(
 where
     V: Validator<N, (), f64>,
     V::Context<'ctx>: MaybeSync,
+    C: Fn(SRobotQ<N, f64>, SRobotQ<N, f64>) -> f64,
 {
     run(req_paths, cost, settings, |from, to| {
         validator.validate_motion(&[*from, *to], ctx)?;
@@ -164,14 +183,181 @@ where
     })
 }
 
-fn run<const N: usize, C>(
+/// Solve the asymmetric generalized TSP directly over a precomputed cost matrix,
+/// returning the chosen option index per cluster in visiting order and the total
+/// cost — without expanding paths or stitching motion. This is the bare ordering
+/// core for callers that already have their own cost structure and only want the
+/// selection and order back.
+///
+/// - `cluster_ids[i]` is the cluster option `i` belongs to. Cluster labels may be
+///   any `usize`; they are densified internally, so the returned indices are
+///   positions into `cluster_ids` regardless of how the clusters are numbered.
+/// - `transition` is the `option × option` matrix where `(i, j)` is the cost to
+///   move from option `i` to option `j` (fold option `j`'s own traversal cost
+///   into the entry if you want the solver to prefer cheaper realizations). Must
+///   be square with side `cluster_ids.len()`.
+/// - `start[i]` is the cost to begin the tour at option `i`; `end[i]` the cost to
+///   finish at it. `None` means a zero vector (no start/end bias).
+/// - Non-finite entries mark infeasible edges and are routed around.
+/// - `cell_budget` switches exact Held–Karp → heuristic above that many DP cells;
+///   pass [`DEFAULT_CELL_BUDGET`] for the standard 16M-cell cap.
+///
+/// Returns `None` if no feasible tour visits every cluster exactly once.
+pub fn solve_matrix(
+    cluster_ids: &[usize],
+    transition: &[Vec<f64>],
+    start: Option<&[f64]>,
+    end: Option<&[f64]>,
+    cell_budget: usize,
+) -> Option<(Vec<usize>, f64)> {
+    let prepared = MatrixProblem::new(cluster_ids, transition, start, end);
+    let solution = agtsp::solve(&prepared.problem(&prepared.start), cell_budget)?;
+    Some((solution.order, solution.cost))
+}
+
+/// Multi-start, top-k variant of [`solve_matrix`]: run one solve per starting
+/// cluster (each constrained to begin its tour at that cluster) and return the
+/// `k` cheapest tours found, ascending by cost. Useful when a single optimum is
+/// not enough — e.g. choosing among near-equal orderings by a downstream metric
+/// the cost matrix does not capture.
+///
+/// Arguments are identical to [`solve_matrix`]. The per-start solves are
+/// independent and fan out across the rayon pool when the `rayon` feature is
+/// enabled. At most one tour is returned per starting cluster, so the result has
+/// at most `min(k, n_clusters)` entries.
+pub fn solve_matrix_multi_start(
+    cluster_ids: &[usize],
+    transition: &[Vec<f64>],
+    start: Option<&[f64]>,
+    end: Option<&[f64]>,
+    cell_budget: usize,
+    k: usize,
+) -> Vec<(Vec<usize>, f64)> {
+    if k == 0 {
+        return Vec::new();
+    }
+    let prepared = MatrixProblem::new(cluster_ids, transition, start, end);
+
+    // Force the tour to begin in cluster `c` by leaving only that cluster's
+    // start edges finite. One independent solve per starting cluster.
+    let solve_from = |c: usize| -> Option<(Vec<usize>, f64)> {
+        let start: Vec<f64> = prepared
+            .cluster_ids
+            .iter()
+            .zip(&prepared.start)
+            .map(|(&ci, &s)| if ci == c { s } else { f64::INFINITY })
+            .collect();
+        let solution = agtsp::solve(&prepared.problem(&start), cell_budget)?;
+        Some((solution.order, solution.cost))
+    };
+
+    let mut tours: Vec<(Vec<usize>, f64)> = {
+        #[cfg(feature = "rayon")]
+        {
+            use rayon::prelude::*;
+            (0..prepared.n_clusters)
+                .into_par_iter()
+                .filter_map(solve_from)
+                .collect()
+        }
+        #[cfg(not(feature = "rayon"))]
+        {
+            (0..prepared.n_clusters).filter_map(solve_from).collect()
+        }
+    };
+
+    tours.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
+    tours.truncate(k);
+    tours
+}
+
+/// Owned, validated inputs for the matrix-level AGTSP entry points. Holds the
+/// densified cluster labels and the flattened row-major matrix / start / end
+/// vectors so a borrowing [`Problem`] can be built (once per solve) against them.
+struct MatrixProblem {
+    cluster_ids: Vec<usize>,
+    n_clusters: usize,
+    options: usize,
+    transition: Vec<f64>,
+    start: Vec<f64>,
+    end: Vec<f64>,
+}
+
+impl MatrixProblem {
+    fn new(
+        cluster_ids: &[usize],
+        transition: &[Vec<f64>],
+        start: Option<&[f64]>,
+        end: Option<&[f64]>,
+    ) -> Self {
+        let options = cluster_ids.len();
+        debug_assert_eq!(
+            transition.len(),
+            options,
+            "transition must be square with side cluster_ids.len()"
+        );
+        debug_assert!(
+            transition.iter().all(|row| row.len() == options),
+            "transition rows must each have length cluster_ids.len()"
+        );
+        let (dense, n_clusters) = densify_clusters(cluster_ids);
+        let flat = transition
+            .iter()
+            .flat_map(|row| row.iter().copied())
+            .collect();
+        let resolve = |v: Option<&[f64]>| match v {
+            Some(s) => {
+                debug_assert_eq!(s.len(), options, "start/end length must equal option count");
+                s.to_vec()
+            }
+            None => vec![0.0; options],
+        };
+        MatrixProblem {
+            cluster_ids: dense,
+            n_clusters,
+            options,
+            transition: flat,
+            start: resolve(start),
+            end: resolve(end),
+        }
+    }
+
+    fn problem<'a>(&'a self, start: &'a [f64]) -> Problem<'a> {
+        Problem {
+            cluster_ids: &self.cluster_ids,
+            n_clusters: self.n_clusters,
+            transition: &self.transition,
+            options: self.options,
+            start,
+            end: &self.end,
+        }
+    }
+}
+
+/// Remap arbitrary cluster labels onto a dense `0..k` range (in order of first
+/// appearance), returning the remapped labels and `k`. The Held–Karp bitmask
+/// indexes clusters by bit position, so labels must be dense and zero-based.
+fn densify_clusters(cluster_ids: &[usize]) -> (Vec<usize>, usize) {
+    let mut map: HashMap<usize, usize> = HashMap::new();
+    let dense = cluster_ids
+        .iter()
+        .map(|&c| {
+            let next = map.len();
+            *map.entry(c).or_insert(next)
+        })
+        .collect();
+    (dense, map.len())
+}
+
+fn run<const N: usize, Cost, Conn>(
     req_paths: &[ReqPath<N>],
-    cost: &TransitionCost<N>,
+    cost: &Cost,
     settings: &MultiPathSettings<N>,
-    connect: C,
+    connect: Conn,
 ) -> MultipathResult<Vec<SRobotPath<N, f64>>>
 where
-    C: Fn(&SRobotQ<N, f64>, &SRobotQ<N, f64>) -> MultipathResult<SRobotPath<N, f64>> + MaybeSync,
+    Cost: Fn(SRobotQ<N, f64>, SRobotQ<N, f64>) -> f64,
+    Conn: Fn(&SRobotQ<N, f64>, &SRobotQ<N, f64>) -> MultipathResult<SRobotPath<N, f64>> + MaybeSync,
 {
     let (options, n_clusters) = expand(req_paths)?;
     let matrices = build_matrices(&options, cost, &settings.start, settings.end.as_ref());
