@@ -38,6 +38,10 @@ const LIMIT_MARGIN: f64 = 0.97;
 /// and its FK arc length tracks the commanded Cartesian arc closely.
 const SMOOTH_STEP: f64 = 1e-4;
 
+/// A converged solve: the arc-length profile `σ`, the live-sample count, the
+/// reconstructed joint samples, and the realized TCP accel/jerk overshoot ratios.
+type SolvedProfile<const N: usize> = (Vec<f64>, usize, Vec<SRobotQ<N, f64>>, f64, f64);
+
 /// Constant-feedrate, jerk-limited retimer over a joint path.
 #[derive(Clone, Debug)]
 pub struct ConstantSpeedRetimer<'a, const N: usize, FK> {
@@ -139,60 +143,93 @@ where
         let ramp_t = v_cmd / a_eff + a_eff / j_eff;
         let mut kk = ((total / (v_cmd * dt)).ceil() as usize + (4.0 * ramp_t / dt) as usize + 64).max(8);
 
-        // Solve, growing the horizon if the program is infeasible (a too-small
-        // tick count, distinct from a path that genuinely can't be timed). The
-        // chord-linear coefficients depend on which segment each σ[k] lands in,
-        // so re-bin and re-solve to a fixed point (stable in 1–3 passes).
-        let mut sigma: Option<Vec<f64>> = None;
-        for _grow in 0..6 {
-            let mut sg: Vec<f64> = (0..kk).map(|k| k as f64 / (kk - 1) as f64 * total).collect();
-            let mut prev_bins: Vec<usize> = Vec::new();
-            let mut feasible = true;
-            for _pass in 0..4 {
-                let bins: Vec<usize> = sg.iter().map(|&sx| bin_of(sx)).collect();
-                if bins == prev_bins {
-                    break;
-                }
-                let cap_v: Vec<f64> = bins
-                    .iter()
-                    .map(|&b| (mg * proj(b, &c.joint.v_max)).min(v_cmd) * dt)
-                    .collect();
-                let cap_a: Vec<f64> = bins
-                    .iter()
-                    .map(|&b| (mg * proj(b, &c.joint.a_max)).min(c.tcp.accel.map_or(f64::INFINITY, |t| mg * t)) * dt * dt)
-                    .collect();
-                let cap_j: Vec<f64> = bins
-                    .iter()
-                    .map(|&b| (mg * proj(b, &c.joint.j_max)).min(c.tcp.jerk.map_or(f64::INFINITY, |t| mg * t)) * dt * dt * dt)
-                    .collect();
-                match solve_sigma(kk, total, &cap_v, &cap_a, &cap_j) {
-                    Some(next) => sg = next,
-                    None => {
-                        feasible = false;
+        // The TCP tangential accel/jerk a controller measures is the finite
+        // difference of the FK Cartesian speed, which the chord-linear
+        // reconstruction over-reads vs the arc-length `Δσ` the program bounds (the
+        // third difference — jerk — most). Rather than guess a fixed derate, plan
+        // the TCP caps at the joint margin, measure the *realized* FK-FD overshoot,
+        // and tighten each TCP quantity by exactly its overshoot before re-solving.
+        // This converges in 1–2 passes, derates only what actually over-reads (so
+        // accel isn't throttled needlessly), and is robust to path/robot curvature.
+        let mut a_der = mg;
+        let mut j_der = mg;
+        let mut solved: Option<SolvedProfile<N>> = None;
+        for _tcp_iter in 0..5 {
+            // Solve, growing the horizon if the program is infeasible (a too-small
+            // tick count, distinct from a path that genuinely can't be timed). The
+            // chord-linear coefficients depend on which segment each σ[k] lands in,
+            // so re-bin and re-solve to a fixed point (stable in 1–3 passes).
+            let mut sigma: Option<Vec<f64>> = None;
+            for _grow in 0..6 {
+                let mut sg: Vec<f64> = (0..kk).map(|k| k as f64 / (kk - 1) as f64 * total).collect();
+                let mut prev_bins: Vec<usize> = Vec::new();
+                let mut feasible = true;
+                for _pass in 0..4 {
+                    let bins: Vec<usize> = sg.iter().map(|&sx| bin_of(sx)).collect();
+                    if bins == prev_bins {
                         break;
                     }
+                    let cap_v: Vec<f64> = bins
+                        .iter()
+                        .map(|&b| (mg * proj(b, &c.joint.v_max)).min(v_cmd) * dt)
+                        .collect();
+                    let cap_a: Vec<f64> = bins
+                        .iter()
+                        .map(|&b| (mg * proj(b, &c.joint.a_max)).min(c.tcp.accel.map_or(f64::INFINITY, |t| a_der * t)) * dt * dt)
+                        .collect();
+                    let cap_j: Vec<f64> = bins
+                        .iter()
+                        .map(|&b| (mg * proj(b, &c.joint.j_max)).min(c.tcp.jerk.map_or(f64::INFINITY, |t| j_der * t)) * dt * dt * dt)
+                        .collect();
+                    match solve_sigma(kk, total, &cap_v, &cap_a, &cap_j) {
+                        Some(next) => sg = next,
+                        None => {
+                            feasible = false;
+                            break;
+                        }
+                    }
+                    prev_bins = bins;
                 }
-                prev_bins = bins;
+                if feasible {
+                    sigma = Some(sg);
+                    break;
+                }
+                kk = (kk as f64 * 1.6) as usize + 16;
             }
-            if feasible {
-                sigma = Some(sg);
+            let sigma = sigma.ok_or(LinearError::Stalled { run: run_idx, s: 0.0 })?;
+
+            // Reconstruct chord-linear joint samples; trim the trailing stationary
+            // tail (ticks parked at `total` after the motion finished).
+            let recon = |sx: f64| -> SRobotQ<N, f64> {
+                let b = bin_of(sx);
+                SRobotQ(std::array::from_fn(|j| knots[b].0[j] + secant[b][j] * (sx - s[b])))
+            };
+            let mut end = kk;
+            while end > 2 && (total - sigma[end - 2]).abs() < 1e-9 {
+                end -= 1;
+            }
+            let samples: Vec<SRobotQ<N, f64>> = sigma[..end].iter().map(|&sx| recon(sx)).collect();
+
+            // Measure the realized FK TCP accel/jerk overshoot (FK finite
+            // difference ÷ true cap; `0` when a cap is unset). `1.0` is exactly at.
+            let (a_over, j_over) = tcp_fd_ratios(self.fk, &samples, c.tcp.accel, c.tcp.jerk, dt)?;
+            let tol = 1.0 + 1e-6;
+            let converged = a_over <= tol && j_over <= tol;
+            solved = Some((sigma, end, samples, a_over, j_over));
+            if converged {
                 break;
             }
-            kk = (kk as f64 * 1.6) as usize + 16;
+            // Tighten only the quantity that over-reads, by its overshoot plus a
+            // small safety factor for the residual nonlinearity, then re-solve.
+            if a_over > tol {
+                a_der /= a_over * 1.01;
+            }
+            if j_over > tol {
+                j_der /= j_over * 1.01;
+            }
         }
-        let sigma = sigma.ok_or(LinearError::Stalled { run: run_idx, s: 0.0 })?;
-
-        // Reconstruct chord-linear joint samples; trim the trailing stationary
-        // tail (ticks parked at `total` after the motion finished).
-        let recon = |sx: f64| -> SRobotQ<N, f64> {
-            let b = bin_of(sx);
-            SRobotQ(std::array::from_fn(|j| knots[b].0[j] + secant[b][j] * (sx - s[b])))
-        };
-        let mut end = kk;
-        while end > 2 && (total - sigma[end - 2]).abs() < 1e-9 {
-            end -= 1;
-        }
-        let samples: Vec<SRobotQ<N, f64>> = sigma[..end].iter().map(|&sx| recon(sx)).collect();
+        let (sigma, end, samples, a_over, j_over) =
+            solved.ok_or(LinearError::Stalled { run: run_idx, s: 0.0 })?;
 
         // Airtight backstop: the *finite differences* of the emitted samples
         // against the *true* (un-margined) per-joint limits. If any exceeds, the
@@ -204,6 +241,27 @@ where
                 joint,
                 kind,
                 value,
+                limit,
+            });
+        }
+        // Same backstop for the TCP caps: if the adaptation above could not bring
+        // the realized FK accel/jerk under the true cap, fail rather than emit a
+        // trajectory that exceeds it.
+        if a_over > 1.0 + 1e-6 {
+            let limit = c.tcp.accel.expect("accel cap set when its ratio is positive");
+            return Err(LinearError::TcpLimitExceeded {
+                run: run_idx,
+                kind: "acceleration",
+                value: a_over * limit,
+                limit,
+            });
+        }
+        if j_over > 1.0 + 1e-6 {
+            let limit = c.tcp.jerk.expect("jerk cap set when its ratio is positive");
+            return Err(LinearError::TcpLimitExceeded {
+                run: run_idx,
+                kind: "jerk",
+                value: j_over * limit,
                 limit,
             });
         }
@@ -417,16 +475,28 @@ fn solve_sigma(n: usize, total: f64, cap_v: &[f64], cap_a: &[f64], cap_j: &[f64]
         }
     }
     let m = row;
+    // Row-scale each inequality so its (tiny) cap RHS becomes ±1: the difference
+    // caps span ~1e-6…1, and normalizing them to O(1) lets the interior-point
+    // solver hit the tight ramp constraints in far fewer iterations.
+    let mut scale = vec![1.0f64; m];
+    for r in n_eq..m {
+        if b[r].abs() > 1e-12 {
+            scale[r] = 1.0 / b[r].abs();
+        }
+    }
+    for entry in t.iter_mut() {
+        entry.2 *= scale[entry.0];
+    }
+    for r in 0..m {
+        b[r] *= scale[r];
+    }
     let a = triplets_to_csc(m, n, t);
     let p = CscMatrix::new(n, n, vec![0; n + 1], vec![], vec![]);
     let q = vec![-1.0f64; n];
     let cones = [SupportedConeT::ZeroConeT(n_eq), SupportedConeT::NonnegativeConeT(m - n_eq)];
     let mut set = DefaultSettings::default();
     set.verbose = false;
-    set.max_iter = 1000;
-    set.tol_feas = 1e-8;
-    set.tol_gap_abs = 1e-8;
-    set.tol_gap_rel = 1e-8;
+    set.max_iter = 200;
     let mut solver = DefaultSolver::new(&p, &q, &a, &b, &cones, set).ok()?;
     solver.solve();
     match solver.solution.status {
@@ -490,6 +560,34 @@ fn verify_fd<const N: usize>(
         }
     }
     worst.map(|(_, kind, j, val, limit, idx)| (kind, j, val, limit, idx))
+}
+
+/// Realized TCP tangential acceleration/jerk overshoot — the finite differences
+/// of the FK Cartesian speed stream divided by their caps (`(accel, jerk)`, each
+/// `0.0` when its cap is unset). `1.0` is exactly at the cap; `> 1` over it.
+fn tcp_fd_ratios<const N: usize, FK: ContinuousFKChain<N, f64>>(
+    fk: &FK,
+    q: &[SRobotQ<N, f64>],
+    accel_cap: Option<f64>,
+    jerk_cap: Option<f64>,
+    dt: f64,
+) -> Result<(f64, f64), LinearError> {
+    if (accel_cap.is_none() && jerk_cap.is_none()) || q.len() < 3 {
+        return Ok((0.0, 0.0));
+    }
+    let pos: Vec<DVec3> = q
+        .iter()
+        .map(|qi| fk.fk_end(qi).map(|t| t.translation))
+        .collect::<Result<_, DekeError>>()?;
+    let sp: Vec<f64> = (0..pos.len() - 1).map(|i| pos[i + 1].distance(pos[i]) / dt).collect();
+    let a_ratio = accel_cap.map_or(0.0, |a| {
+        (1..sp.len()).fold(0.0f64, |w, i| w.max((sp[i] - sp[i - 1]).abs() / dt)) / a
+    });
+    let j_ratio = jerk_cap.map_or(0.0, |j| {
+        (2..sp.len()).fold(0.0f64, |w, i| w.max((sp[i] - 2.0 * sp[i - 1] + sp[i - 2]).abs() / (dt * dt)))
+            / j
+    });
+    Ok((a_ratio, j_ratio))
 }
 
 /// Peak per-joint finite-difference velocity/acceleration/jerk of the output.

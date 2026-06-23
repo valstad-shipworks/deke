@@ -253,6 +253,38 @@ pub fn joint_acc_peak(traj: &SRobotTraj<6, f64>) -> f64 {
     peak
 }
 
+/// Peak per-axis joint jerk (rad/s³) via third difference — the quantity a
+/// controller reconstructs from the position stream.
+pub fn joint_jerk_peak(traj: &SRobotTraj<6, f64>) -> f64 {
+    let dt = traj.dt().as_secs_f64();
+    let p = traj.path();
+    let mut peak = 0.0f64;
+    for i in 3..p.len() {
+        for j in 0..6 {
+            let jk = (p[i].0[j] - 3.0 * p[i - 1].0[j] + 3.0 * p[i - 2].0[j] - p[i - 3].0[j])
+                / (dt * dt * dt);
+            peak = peak.max(jk.abs());
+        }
+    }
+    peak
+}
+
+/// Peak TCP tangential acceleration and jerk (m/s², m/s³) from the FK speed
+/// stream — the second/third difference of `tcp_speeds`.
+pub fn tcp_accel_jerk_peak(robot: &Kinematics<6, f64>, traj: &SRobotTraj<6, f64>) -> (f64, f64) {
+    let dt = traj.dt().as_secs_f64();
+    let sp = tcp_speeds(robot, traj);
+    let mut a = 0.0f64;
+    let mut j = 0.0f64;
+    for i in 1..sp.len() {
+        a = a.max(((sp[i] - sp[i - 1]) / dt).abs());
+    }
+    for i in 2..sp.len() {
+        j = j.max(((sp[i] - 2.0 * sp[i - 1] + sp[i - 2]) / (dt * dt)).abs());
+    }
+    (a, j)
+}
+
 #[allow(dead_code)]
 pub fn identity_rot() -> DMat3 {
     DMat3::IDENTITY

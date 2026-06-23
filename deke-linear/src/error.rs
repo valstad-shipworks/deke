@@ -40,6 +40,16 @@ pub enum LinearError {
         value: f64,
         limit: f64,
     },
+    #[error(
+        "run {run}: cannot keep the TCP {kind} under its limit ({value:.4} > {limit:.4}) — the commanded speed is too high for the path here"
+    )]
+    TcpLimitExceeded {
+        run: usize,
+        /// `"acceleration"` or `"jerk"`.
+        kind: &'static str,
+        value: f64,
+        limit: f64,
+    },
     #[error(transparent)]
     Deke(#[from] DekeError),
 }
