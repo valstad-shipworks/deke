@@ -124,13 +124,15 @@ pub struct LinearConstraints<const N: usize> {
     /// instead of slowing down. Sharp corners are unaffected — they are already
     /// split into separate runs whose endpoints are legitimate stops.
     pub forbid_interior_dips: bool,
-    /// Optional joint-space chord-length spacing for natural-cubic-spline corner
+    /// Optional joint-space chord-length spacing for cubic-spline corner
     /// smoothing of each run before retiming. `None` keeps the raw piecewise-
-    /// linear path (sharp knot corners → unbounded joint jerk on coarse inputs).
-    /// `Some(res)` interpolates the waypoints with a C² spline (zero deviation
-    /// at the waypoints) and resamples it at `res`, so the executed path has
-    /// continuous curvature and bounded joint jerk. Sharp corners are still
-    /// split into separate runs upstream, so this only rounds the coarse-
-    /// sampling artifacts of an otherwise smooth run.
+    /// linear path, whose derivatives are central-differenced (sharp knot corners
+    /// → unbounded joint jerk on coarse inputs). `Some(res)` interpolates the
+    /// waypoints with a cubic spline (zero deviation at the waypoints), resamples
+    /// it at `res`, and reads `q'(s)/q''(s)/q'''(s)` *analytically* from the
+    /// spline (reparameterized to arc length) — so the curvature terms that drive
+    /// joint accel/jerk are well-defined at the knots and the run boundaries,
+    /// rather than the noisy finite differences that spiked the start/stop ramp
+    /// jerk. Sharp corners are still split into separate runs upstream.
     pub corner_smoothing: Option<f64>,
 }

@@ -69,7 +69,9 @@ fn straight_weld_holds_constant_speed_within_limits() {
 #[test]
 fn starts_and_ends_at_rest() {
     let robot = common::ur();
-    let poses = common::straight(&robot, DVec3::X, 0.12, 4);
+    // A short, coarse weld (the old finite-difference q''' spiked its ramp jerk
+    // ~8× and forced a failure here; analytic derivatives make it feasible).
+    let poses = common::straight(&robot, DVec3::X, 0.10, 3);
     let cfg = common::config(0.04);
     let (traj, _) = common::follow(&robot, &poses, &cfg, &common::noop(), &()).unwrap();
 

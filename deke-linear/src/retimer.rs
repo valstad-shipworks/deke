@@ -1,39 +1,42 @@
-//! Stage C — time-parameterise a joint path at constant TCP speed.
+//! Stage C — time-parameterise a joint path at a commanded constant TCP speed.
 //!
-//! This is a CNC-style constant-feedrate planner, not a TOPP retimer. The
-//! feasible-speed ceiling along the path (the "maximum velocity curve") comes from
-//! the per-joint v/a/j limits projected onto the path tangent `q'(s)`. The
-//! commanded speed `tcp.speed` is held flat wherever that ceiling allows; near a
-//! singularity `|q'(s)| → ∞` so the ceiling collapses and the feedrate dips to zero
-//! smoothly instead of demanding infinite joint speed. The profile is built by a
-//! backward+forward acceleration-bounded pass (zero speed at both ends) followed by
-//! a forward jerk-limited time integration that tracks it.
+//! This is a CNC-style constant-feedrate planner. The timing is found by a
+//! **discrete convex program**: the variable is the cumulative arc length
+//! `σ[k]` at each output tick `k·dt`, and the per-joint velocity/acceleration/
+//! jerk limits are written directly as bounds on the *finite differences* of the
+//! emitted joint samples — the exact quantities a downstream controller
+//! reconstructs. So the limits are honoured **by construction** rather than by a
+//! continuous bound plus a margin, and the solver never touches a fragile
+//! joint-space third derivative.
 //!
-//! Joint velocity is enforced exactly; acceleration and jerk are enforced through
-//! the tangent projection — the `q''(s)·ṡ²` curvature cross-term is a deliberate
-//! first-pass approximation, softened by the jerk-limited integrator.
+//! The joint path is first smoothed (a cubic spline, densely resampled) so the
+//! chord-linear interpolation the solver times is C²-smooth at the tick scale;
+//! `σ` is solved with a small banded LP (Clarabel); the result is reconstructed,
+//! and a final finite-difference check against the *true* limits is the airtight
+//! backstop. A path that physically cannot fit under the limits fails.
 
 use std::time::Duration;
 
+use clarabel::algebra::CscMatrix;
+use clarabel::solver::{DefaultSettings, DefaultSolver, IPSolver, SolverStatus, SupportedConeT};
 use deke_types::glam::DVec3;
 use deke_types::{
     ContinuousFKChain, DekeError, DekeResult, Retimer, SRobotPath, SRobotQ, SRobotTraj, Validator,
 };
 
-use crate::constraints::LinearConstraints;
+use crate::constraints::{JointLimits, LinearConstraints};
 use crate::diagnostic::LinearRetimerDiagnostic;
 use crate::error::LinearError;
 
-const BIG: f64 = 1e9;
+/// The per-tick limit caps are planned at `margin·limit` so the small cross-bin
+/// leak of the chord-linear reconstruction stays under the true limit; the final
+/// finite-difference verify against the *true* limits is the airtight backstop.
+const LIMIT_MARGIN: f64 = 0.97;
 
-/// Safety derating applied to every joint and TCP accel/jerk limit the solver
-/// plans against. The integrator bounds the *continuous* v/a/j exactly, but the
-/// discrete finite differences a controller reconstructs from the sampled output
-/// read a little higher (half-step integration, the secant-vs-tangent gap across
-/// knots); planning at `margin·limit` keeps those reconstructions under the true
-/// limit. It does not derate the commanded TCP speed, which is a target rather
-/// than a ceiling to retreat from.
-const LIMIT_MARGIN: f64 = 0.95;
+/// Finest arc-length spacing (metres) the smoothing spline is resampled at, so
+/// the chord-linear path the solver times is C²-smooth at the output-tick scale
+/// and its FK arc length tracks the commanded Cartesian arc closely.
+const SMOOTH_STEP: f64 = 1e-4;
 
 /// Constant-feedrate, jerk-limited retimer over a joint path.
 #[derive(Clone, Debug)]
@@ -56,296 +59,148 @@ where
         run_idx: usize,
     ) -> Result<(SRobotTraj<N, f64>, LinearRetimerDiagnostic), LinearError> {
         let raw: Vec<SRobotQ<N, f64>> = path.iter().copied().collect();
-        let q = match c.corner_smoothing {
-            Some(res) => spline_resample(&raw, res),
-            None => raw,
-        };
-        let m = q.len();
         let dt = c.output_dt.as_secs_f64().max(1e-6);
 
-        // Plan against limits derated by `LIMIT_MARGIN`, leaving the headroom the
-        // sampled output needs: the integrator bounds the continuous v/a/j, but
-        // the discrete finite differences a controller reconstructs read a little
-        // higher (half-step integration, the secant-vs-tangent gap between knots).
-        // Planning at `margin·limit` keeps those within the true limit. The
-        // commanded `tcp.speed` is a target, not a ceiling to back off from, so it
-        // is left underated.
-        let v_max = c.joint.v_max * LIMIT_MARGIN;
-        let a_max = c.joint.a_max * LIMIT_MARGIN;
-        let j_max = c.joint.j_max * LIMIT_MARGIN;
-        let tcp_accel = c.tcp.accel.map(|x| x * LIMIT_MARGIN);
-        let tcp_jerk = c.tcp.jerk.map(|x| x * LIMIT_MARGIN);
-
-        // Cartesian arc length from FK end positions (true metres for `tcp.speed`).
-        let pos: Vec<DVec3> = q
-            .iter()
-            .map(|qi| self.fk.fk_end(qi).map(|t| t.translation))
-            .collect::<Result<_, DekeError>>()?;
-        let mut s = vec![0.0f64; m];
-        for i in 1..m {
-            s[i] = s[i - 1] + pos[i].distance(pos[i - 1]);
-        }
-        let total = s[m - 1];
-        if m < 2 || total < 1e-9 {
+        // Smooth, densely-resampled joint path + its Cartesian arc length. The
+        // solver works on the chord-linear interpolation of these knots, so
+        // smoothing keeps the secant changes between knots tiny (small cross-bin
+        // leak) and removes the IK jitter that would otherwise spike the jerk.
+        let (knots, s) = smooth_path(self.fk, &raw, c.corner_smoothing)?;
+        let nb = knots.len();
+        let total = if nb == 0 { 0.0 } else { s[nb - 1] };
+        if nb < 2 || total < 1e-9 {
             let traj = SRobotTraj::new(c.output_dt, path.clone());
-            return Ok((
-                traj,
-                LinearRetimerDiagnostic {
-                    output_samples: m,
-                    duration: Duration::from_secs_f64((m.saturating_sub(1)) as f64 * dt),
-                    arc_length: total,
-                    commanded_speed: c.tcp.speed,
-                    peak_speed: 0.0,
-                    peak_joint_accel: 0.0,
-                    peak_joint_jerk: 0.0,
-                },
-            ));
+            return Ok((traj, degenerate_diag(nb, dt, total, c.tcp.speed)));
         }
 
-        // Path derivatives wrt arc length by central difference: q'(s), q''(s),
-        // q'''(s). The higher derivatives carry the joint-space path curvature
-        // that turns Cartesian motion into joint accel/jerk via the chain rule
-        //   q̇  = q'·v
-        //   q̈  = q'·a + q''·v²
-        //   q⃛ = q'·j_s + 3·q''·a·v + q'''·v³
-        // so a straight-Cartesian line can still load the joints when q bends.
-        let central = |arr: &[SRobotQ<N, f64>], i: usize| -> SRobotQ<N, f64> {
-            let (lo, hi) = if i == 0 {
-                (0, 1)
-            } else if i == m - 1 {
-                (m - 2, m - 1)
-            } else {
-                (i - 1, i + 1)
-            };
-            let ds = (s[hi] - s[lo]).max(1e-12);
-            (arr[hi] - arr[lo]) * (1.0 / ds)
-        };
-        let qp: Vec<SRobotQ<N, f64>> = (0..m).map(|i| central(&q, i)).collect();
-        let qpp: Vec<SRobotQ<N, f64>> = (0..m).map(|i| central(&qp, i)).collect();
-        let qppp: Vec<SRobotQ<N, f64>> = (0..m).map(|i| central(&qpp, i)).collect();
+        // Per-segment secant slope dq/ds — the chord-linear path derivative. The
+        // joint velocity/accel/jerk of the output are exactly `secant·Δᵐσ/dtᵐ`
+        // within a segment, so capping the σ-differences bounds the per-joint
+        // finite differences the consumer measures, with no path derivatives.
+        let secant: Vec<[f64; N]> = (0..nb - 1)
+            .map(|b| {
+                let ds = (s[b + 1] - s[b]).max(1e-12);
+                std::array::from_fn(|j| (knots[b + 1].0[j] - knots[b].0[j]) / ds)
+            })
+            .collect();
 
-        // Velocity-limit curve: the joint velocity limit plus the centripetal
-        // caps where path curvature alone (at zero tangential accel/jerk) would
-        // breach a joint's accel/jerk limit — `|q''|·v² ≤ a_max` and
-        // `|q'''|·v³ ≤ j_max` — all intersected with the commanded TCP speed.
-        // Holds the speed down through joint-space bends.
-        let v_ceiling = |i: usize| {
-            project_min(&qp[i], &v_max)
-                .min(project_min(&qpp[i], &a_max).sqrt())
-                .min(project_min(&qppp[i], &j_max).cbrt())
-                .min(c.tcp.speed)
+        let v_cmd = c.tcp.speed.max(1e-9);
+        let bin_of = |sx: f64| -> usize {
+            let sx = sx.clamp(0.0, total);
+            let mut b = 0;
+            while b + 1 < nb - 1 && s[b + 1] <= sx {
+                b += 1;
+            }
+            b
+        };
+        // `min_j limit_j / |secant_j|` on a segment — the projected scalar limit.
+        let proj = |b: usize, lim: &SRobotQ<N, f64>| -> f64 {
+            (0..N)
+                .map(|j| lim.0[j] / secant[b][j].abs().max(1e-12))
+                .fold(f64::INFINITY, f64::min)
         };
 
-        // An interior dip below the command is forced by the joint v/a/j limits
-        // and path curvature (a shallow corner or near-singular patch) — distinct
-        // from the temporal rest ramps the profile adds at the ends. With
-        // `forbid_interior_dips` the caller would rather fail than slow, so report
-        // the worst offending sample against the full feasible-speed ceiling.
+        // Constant-speed contract: if the joint velocity limits force the
+        // feasible speed below the command anywhere interior and the caller
+        // forbids dips, fail loudly rather than slow down.
         if c.forbid_interior_dips {
             let mut worst: Option<(usize, f64)> = None;
             #[allow(clippy::needless_range_loop)]
-            for i in 1..m - 1 {
-                let g = v_ceiling(i);
-                if g < c.tcp.speed * (1.0 - 1e-3) && worst.is_none_or(|(_, gw)| g < gw) {
-                    worst = Some((i, g));
+            for b in 1..nb - 1 {
+                let g = proj(b, &c.joint.v_max);
+                if g < v_cmd * (1.0 - 1e-3) && worst.is_none_or(|(_, gw)| g < gw) {
+                    worst = Some((b, g));
                 }
             }
-            if let Some((i, g)) = worst {
+            if let Some((b, g)) = worst {
                 return Err(LinearError::SpeedDipRequired {
                     run: run_idx,
-                    s: s[i],
+                    s: s[b],
                     feasible_speed: g,
-                    commanded: c.tcp.speed,
+                    commanded: v_cmd,
                 });
             }
         }
 
-        let a_path: Vec<f64> = (0..m).map(|i| project_min(&qp[i], &a_max)).collect();
-        let j_path: Vec<f64> = (0..m).map(|i| project_min(&qp[i], &j_max)).collect();
+        // Generous tick count: cruise time + a few jerk-limited ramp lengths,
+        // using the *effective* accel/jerk floor (joint projection intersected
+        // with the TCP caps, which can be far tighter and lengthen the ramps).
+        let mg = LIMIT_MARGIN;
+        let a_eff = (0..nb - 1)
+            .map(|b| proj(b, &c.joint.a_max))
+            .fold(f64::INFINITY, f64::min)
+            .min(c.tcp.accel.unwrap_or(f64::INFINITY))
+            .max(1e-6);
+        let j_eff = (0..nb - 1)
+            .map(|b| proj(b, &c.joint.j_max))
+            .fold(f64::INFINITY, f64::min)
+            .min(c.tcp.jerk.unwrap_or(f64::INFINITY))
+            .max(1e-6);
+        let ramp_t = v_cmd / a_eff + a_eff / j_eff;
+        let mut kk = ((total / (v_cmd * dt)).ceil() as usize + (4.0 * ramp_t / dt) as usize + 64).max(8);
 
-        // Acceleration-bounded velocity ceiling for interior corners. The end is
-        // NOT pinned to rest here: pinning it to 0 makes the in-segment linear
-        // interpolation decelerate `v` to rest across the entire final segment
-        // (an unbounded-time crawl on a coarse segment). The terminal stop is
-        // instead enforced per step by the jerk-limited `jerk_stop_speed`
-        // ceiling, which holds cruise until the physical stopping distance.
-        // Start-from-rest is the integrator's initial condition (v = 0).
-        let mut vc: Vec<f64> = (0..m).map(v_ceiling).collect();
-        for i in (0..m - 1).rev() {
-            let ds = s[i + 1] - s[i];
-            vc[i] = vc[i].min((vc[i + 1] * vc[i + 1] + 2.0 * a_path[i] * ds).sqrt());
-        }
-        for i in 1..m {
-            let ds = s[i] - s[i - 1];
-            vc[i] = vc[i].min((vc[i - 1] * vc[i - 1] + 2.0 * a_path[i - 1] * ds).sqrt());
-        }
-
-        // Per-segment reciprocal lengths and value slopes. Precomputing these
-        // turns every inner-loop lookup into a fused `base + slope·f` — no
-        // division and no subtraction in the hot path — and the joint sample
-        // becomes `q[i] + dq[i]·f`.
-        let seg_n = m - 1;
-        let mut inv_ds = vec![0.0f64; seg_n];
-        let mut vc_d = vec![0.0f64; seg_n];
-        let mut a_d = vec![0.0f64; seg_n];
-        let mut j_d = vec![0.0f64; seg_n];
-        let mut dq = vec![SRobotQ::<N, f64>::zeros(); seg_n];
-        let mut qp_d = vec![SRobotQ::<N, f64>::zeros(); seg_n];
-        let mut qpp_d = vec![SRobotQ::<N, f64>::zeros(); seg_n];
-        let mut qppp_d = vec![SRobotQ::<N, f64>::zeros(); seg_n];
-        for i in 0..seg_n {
-            let ds = s[i + 1] - s[i];
-            inv_ds[i] = if ds > 0.0 { 1.0 / ds } else { 0.0 };
-            vc_d[i] = vc[i + 1] - vc[i];
-            a_d[i] = a_path[i + 1] - a_path[i];
-            j_d[i] = j_path[i + 1] - j_path[i];
-            dq[i] = q[i + 1] - q[i];
-            qp_d[i] = qp[i + 1] - qp[i];
-            qpp_d[i] = qpp[i + 1] - qpp[i];
-            qppp_d[i] = qppp[i + 1] - qppp[i];
-        }
-
-        // Forward jerk-limited time integration tracking the ceiling. The flat
-        // estimate `total / (tcp.speed·dt)` is a lower bound on the step count
-        // (real speed never exceeds the command); doubling it covers the rest
-        // ramps so the buffer almost never reallocates mid-sweep.
-        let est = (total / (c.tcp.speed.max(1e-6) * dt)) as usize;
-        let mut samples: Vec<SRobotQ<N, f64>> = Vec::with_capacity(est * 2 + 16);
-        samples.push(q[0]);
-        let mut sx = 0.0f64;
-        let mut v = 0.0f64;
-        let mut a = 0.0f64;
-        let mut peak = 0.0f64;
-        let mut pk_ja = 0.0f64;
-        let mut pk_jj = 0.0f64;
-        // Worst per-joint limit overrun against the *true* (un-derated) limits,
-        // `(ratio, value, limit, arc_length, joint, kind)`. Tracked so a run the
-        // curvature drives past a velocity/accel/jerk limit fails rather than
-        // emitting a trajectory the arm cannot execute. `LIMIT_MARGIN` keeps the
-        // common case clear; this catches what the margin cannot.
-        let mut overrun: Option<(f64, f64, f64, f64, usize, &'static str)> = None;
-        let max_iters = (est + m) * 8 + 100_000;
-
-        // `sx` only ever advances, so a single forward cursor (`seg`) brackets
-        // every lookup in amortised O(1). The bracket landed on at the end of a
-        // step is exactly where the next step's ceiling is read, so it is carried
-        // across iterations — one `seg` call per step serves both the sample and
-        // the next ceiling read.
-        let mut cur = 0usize;
-        let mut i = 0usize;
-        let mut f = 0.0f64;
-        let mut iters = 0usize;
-        while sx < total - 1e-9 {
-            iters += 1;
-            if iters > max_iters {
-                return Err(LinearError::Stalled {
-                    run: run_idx,
-                    s: sx,
-                });
-            }
-            let alim = a_path[i] + a_d[i] * f;
-            let jlim = j_path[i] + j_d[i] * f;
-            // Effective tangential ceilings: the joint-projected scalar bound
-            // intersected with the optional Cartesian TCP accel/jerk caps. These
-            // shape the terminal stop envelope and the emergency fallbacks below.
-            let alim_eff = tcp_accel.map_or(alim, |t| alim.min(t));
-            let jlim_eff = tcp_jerk.map_or(jlim, |t| jlim.min(t));
-
-            // Interior corner ceiling (`vc`) intersected with the jerk-limited
-            // stopping envelope to the path end, so the terminal decel takes the
-            // physical S-curve distance rather than the whole final segment. The
-            // stop is planned at `STOP_JERK_FRACTION` of the available jerk.
-            let vlim = (vc[i] + vc_d[i] * f)
-                .min(jerk_stop_speed(total - sx, alim_eff, STOP_JERK_FRACTION * jlim_eff))
-                .max(0.0);
-
-            // Joint dynamics: bound the path accel `a` (= s̈) and path jerk `j_s`
-            // (= s⃛) so the chain-rule joint accel `q'·a + q''·v²` and joint jerk
-            // `q'·j_s + 3·q''·a·v + q'''·v³` stay within the per-joint limits, then
-            // tighten by the optional Cartesian TCP accel/jerk caps (`s̈`/`s⃛` are
-            // the tangential TCP accel/jerk, since `s` is Cartesian arc length).
-            // The velocity-limit curve keeps `a = 0` joint-feasible; under extreme
-            // curvature the jerk interval can pin, in which case slew `a` back
-            // toward zero as hard as the (capped) jerk allows.
-            let qp_c = qp[i] + qp_d[i] * f;
-            let qpp_c = qpp[i] + qpp_d[i] * f;
-            let qppp_c = qppp[i] + qppp_d[i] * f;
-            let (aj_lo, aj_hi) = feasible_interval(&qp_c, &(qpp_c * (v * v)), &a_max);
-            let (a_lo, a_hi) = cap_interval(aj_lo, aj_hi, tcp_accel);
-            let (a_lo, a_hi) = if a_lo <= a_hi {
-                (a_lo, a_hi)
-            } else if aj_lo <= aj_hi {
-                // Joints feasible but the TCP cap excludes the whole interval: the
-                // joint limit is hard, so take the joint endpoint nearest zero and
-                // accept the TCP-cap overshoot rather than stalling.
-                let a_edge = if aj_lo > 0.0 { aj_lo } else { aj_hi };
-                (a_edge, a_edge)
-            } else {
-                (-alim, -alim)
-            };
-
-            let jc = qpp_c * (3.0 * a * v) + qppp_c * (v * v * v);
-            let (jj_lo, jj_hi) = feasible_interval(&qp_c, &jc, &j_max);
-            let (js_lo, js_hi) = cap_interval(jj_lo, jj_hi, c.tcp.jerk);
-
-            let a_des = ((vlim - v) / dt).clamp(a_lo, a_hi);
-            let j_s = if js_lo <= js_hi {
-                ((a_des - a) / dt).clamp(js_lo, js_hi)
-            } else {
-                (-a / dt).clamp(-jlim_eff, jlim_eff)
-            };
-            a = (a + j_s * dt).clamp(a_lo, a_hi);
-            v = (v + a * dt).clamp(0.0, vlim);
-            peak = peak.max(v);
-
-            // Continuous chain-rule joint accel/jerk actually realized this step
-            // — bounded by the limits by construction of the interval clamps.
-            let jv = qp_c * v;
-            let ja = qp_c * a + qpp_c * (v * v);
-            let jj = qp_c * j_s + qpp_c * (3.0 * a * v) + qppp_c * (v * v * v);
-            pk_ja = pk_ja.max(ja.0.iter().fold(0.0, |m, &x| m.max(x.abs())));
-            pk_jj = pk_jj.max(jj.0.iter().fold(0.0, |m, &x| m.max(x.abs())));
-            for k in 0..N {
-                for (value, limit, kind) in [
-                    (jv.0[k].abs(), c.joint.v_max.0[k], "velocity"),
-                    (ja.0[k].abs(), c.joint.a_max.0[k], "acceleration"),
-                    (jj.0[k].abs(), c.joint.j_max.0[k], "jerk"),
-                ] {
-                    if value > limit * (1.0 + 1e-6) {
-                        let ratio = value / limit;
-                        if overrun.is_none_or(|(w, ..)| ratio > w) {
-                            overrun = Some((ratio, value, limit, sx, k, kind));
-                        }
+        // Solve, growing the horizon if the program is infeasible (a too-small
+        // tick count, distinct from a path that genuinely can't be timed). The
+        // chord-linear coefficients depend on which segment each σ[k] lands in,
+        // so re-bin and re-solve to a fixed point (stable in 1–3 passes).
+        let mut sigma: Option<Vec<f64>> = None;
+        for _grow in 0..6 {
+            let mut sg: Vec<f64> = (0..kk).map(|k| k as f64 / (kk - 1) as f64 * total).collect();
+            let mut prev_bins: Vec<usize> = Vec::new();
+            let mut feasible = true;
+            for _pass in 0..4 {
+                let bins: Vec<usize> = sg.iter().map(|&sx| bin_of(sx)).collect();
+                if bins == prev_bins {
+                    break;
+                }
+                let cap_v: Vec<f64> = bins
+                    .iter()
+                    .map(|&b| (mg * proj(b, &c.joint.v_max)).min(v_cmd) * dt)
+                    .collect();
+                let cap_a: Vec<f64> = bins
+                    .iter()
+                    .map(|&b| (mg * proj(b, &c.joint.a_max)).min(c.tcp.accel.map_or(f64::INFINITY, |t| mg * t)) * dt * dt)
+                    .collect();
+                let cap_j: Vec<f64> = bins
+                    .iter()
+                    .map(|&b| (mg * proj(b, &c.joint.j_max)).min(c.tcp.jerk.map_or(f64::INFINITY, |t| mg * t)) * dt * dt * dt)
+                    .collect();
+                match solve_sigma(kk, total, &cap_v, &cap_a, &cap_j) {
+                    Some(next) => sg = next,
+                    None => {
+                        feasible = false;
+                        break;
                     }
                 }
+                prev_bins = bins;
             }
-            sx += v * dt;
-            (i, f) = seg(&s, &inv_ds, &mut cur, sx.min(total));
-            samples.push(q[i] + dq[i] * f);
-
-            // Terminal decel has bled to rest within a sub-sample of the end:
-            // the `vc[m-1] = 0` ceiling drives `v → 0` slightly before `sx`
-            // reaches `total`, after which `sx += v·dt` only crawls the geometric
-            // tail toward the `total - 1e-9` margin, emitting hundreds of
-            // effectively-stationary samples. Stop; the exact endpoint is
-            // appended below. Bounded to the end (`total - sx` small) so a
-            // mid-path singularity still trips the stall guard.
-            if v < 1e-6 && total - sx < c.tcp.speed.max(1e-6) * dt {
+            if feasible {
+                sigma = Some(sg);
                 break;
             }
-
-            // Guard against a stall at a vanishing ceiling (true singularity).
-            if v < 1e-9 && vlim < 1e-9 && sx < total - 1e-6 {
-                return Err(LinearError::Stalled {
-                    run: run_idx,
-                    s: sx,
-                });
-            }
+            kk = (kk as f64 * 1.6) as usize + 16;
         }
-        if let Some((_, value, limit, s_at, joint, kind)) = overrun {
+        let sigma = sigma.ok_or(LinearError::Stalled { run: run_idx, s: 0.0 })?;
+
+        // Reconstruct chord-linear joint samples; trim the trailing stationary
+        // tail (ticks parked at `total` after the motion finished).
+        let recon = |sx: f64| -> SRobotQ<N, f64> {
+            let b = bin_of(sx);
+            SRobotQ(std::array::from_fn(|j| knots[b].0[j] + secant[b][j] * (sx - s[b])))
+        };
+        let mut end = kk;
+        while end > 2 && (total - sigma[end - 2]).abs() < 1e-9 {
+            end -= 1;
+        }
+        let samples: Vec<SRobotQ<N, f64>> = sigma[..end].iter().map(|&sx| recon(sx)).collect();
+
+        // Airtight backstop: the *finite differences* of the emitted samples
+        // against the *true* (un-margined) per-joint limits. If any exceeds, the
+        // path can't be timed under the limits at this speed — fail.
+        if let Some((kind, joint, value, limit, idx)) = verify_fd(&samples, &c.joint, dt) {
             return Err(LinearError::LimitExceeded {
                 run: run_idx,
-                s: s_at,
+                s: sigma.get(idx).copied().unwrap_or(total),
                 joint,
                 kind,
                 value,
@@ -353,11 +208,11 @@ where
             });
         }
 
-        if samples.last().map(|l| l.distance(&q[m - 1])).unwrap_or(1.0) > 1e-9 {
-            samples.push(q[m - 1]);
-        }
-
         let out_samples = samples.len();
+        let (_, pk_a, pk_j) = fd_peaks(&samples, dt);
+        let peak_speed = (1..end)
+            .map(|k| (sigma[k] - sigma[k - 1]) / dt)
+            .fold(0.0, f64::max);
         let path_out = SRobotPath::try_new(samples).map_err(LinearError::from)?;
         let traj = SRobotTraj::new(c.output_dt, path_out);
         Ok((
@@ -367,9 +222,9 @@ where
                 duration: Duration::from_secs_f64((out_samples.saturating_sub(1)) as f64 * dt),
                 arc_length: total,
                 commanded_speed: c.tcp.speed,
-                peak_speed: peak,
-                peak_joint_accel: pk_ja,
-                peak_joint_jerk: pk_jj,
+                peak_speed,
+                peak_joint_accel: pk_a,
+                peak_joint_jerk: pk_j,
             },
         ))
     }
@@ -413,173 +268,248 @@ where
     }
 }
 
-/// `min_j limit_j / |qp_j|` over axes that actually move; `BIG` if none do.
-fn project_min<const N: usize>(qp: &SRobotQ<N, f64>, limit: &SRobotQ<N, f64>) -> f64 {
-    let mut m = BIG;
-    let mut any = false;
-    for j in 0..N {
-        let g = qp.0[j].abs();
-        if g > 1e-9 {
-            any = true;
-            m = m.min(limit.0[j] / g);
+fn degenerate_diag(nb: usize, dt: f64, total: f64, speed: f64) -> LinearRetimerDiagnostic {
+    LinearRetimerDiagnostic {
+        output_samples: nb,
+        duration: Duration::from_secs_f64((nb.saturating_sub(1)) as f64 * dt),
+        arc_length: total,
+        commanded_speed: speed,
+        peak_speed: 0.0,
+        peak_joint_accel: 0.0,
+        peak_joint_jerk: 0.0,
+    }
+}
+
+/// Smooth and densely resample the joint path, returning the knots and their
+/// cumulative Cartesian arc length. Coincident-arc knots are dropped first (a
+/// zero-length chord makes the cubic singular). `None` (or too few knots) keeps
+/// the raw deduped polyline.
+fn smooth_path<const N: usize, FK: ContinuousFKChain<N, f64>>(
+    fk: &FK,
+    raw: &[SRobotQ<N, f64>],
+    res: Option<f64>,
+) -> Result<(Vec<SRobotQ<N, f64>>, Vec<f64>), LinearError> {
+    let arc = |pts: &[SRobotQ<N, f64>]| -> Result<Vec<f64>, LinearError> {
+        let pos: Vec<DVec3> = pts
+            .iter()
+            .map(|q| fk.fk_end(q).map(|t| t.translation))
+            .collect::<Result<_, DekeError>>()?;
+        let mut s = vec![0.0f64; pts.len()];
+        for i in 1..pts.len() {
+            s[i] = s[i - 1] + pos[i].distance(pos[i - 1]);
+        }
+        Ok(s)
+    };
+    let s_raw = arc(raw)?;
+    let mut sd: Vec<f64> = Vec::with_capacity(raw.len());
+    let mut qd: Vec<SRobotQ<N, f64>> = Vec::with_capacity(raw.len());
+    for i in 0..raw.len() {
+        if qd.is_empty() || s_raw[i] - sd[sd.len() - 1] > 1e-9 {
+            sd.push(s_raw[i]);
+            qd.push(raw[i]);
         }
     }
-    if any { m } else { BIG }
-}
-
-/// Feasible interval for a scalar path-rate control `x` under the per-joint
-/// affine constraints `|qp_k·x + c_k| ≤ lim_k` (the chain-rule joint accel or
-/// jerk written as `qp·x + const`). Returns `(lo, hi)`; `lo > hi` signals that
-/// the constant terms alone already breach a limit — the caller backs off.
-#[inline]
-fn feasible_interval<const N: usize>(
-    qp: &SRobotQ<N, f64>,
-    c: &SRobotQ<N, f64>,
-    lim: &SRobotQ<N, f64>,
-) -> (f64, f64) {
-    let mut lo = f64::NEG_INFINITY;
-    let mut hi = f64::INFINITY;
-    for k in 0..N {
-        let g = qp.0[k];
-        let l = -lim.0[k] - c.0[k]; // qp_k·x ≥ l
-        let h = lim.0[k] - c.0[k]; //  qp_k·x ≤ h
-        if g > 1e-9 {
-            lo = lo.max(l / g);
-            hi = hi.min(h / g);
-        } else if g < -1e-9 {
-            lo = lo.max(h / g);
-            hi = hi.min(l / g);
-        } else if l > 0.0 || h < 0.0 {
-            // qp_k ≈ 0 and 0 ∉ [l, h]: |c_k| > lim_k, infeasible at this speed.
-            return (1.0, -1.0);
+    let n = qd.len();
+    let step = match res {
+        Some(r) if r > 0.0 && n >= 3 => r.min(SMOOTH_STEP),
+        _ => {
+            let s = arc(&qd)?;
+            return Ok((qd, s));
+        }
+    };
+    let h: Vec<f64> = (0..n - 1).map(|i| (sd[i + 1] - sd[i]).max(1e-12)).collect();
+    let mm = natural_cubic(&h, &qd);
+    let mut out = vec![qd[0]];
+    for i in 0..n - 1 {
+        let k = ((h[i] / step).ceil() as usize).max(1);
+        for ss in 1..=k {
+            let uu = sd[i] + h[i] * (ss as f64) / (k as f64);
+            let a = (sd[i + 1] - uu) / h[i];
+            let b = (uu - sd[i]) / h[i];
+            out.push(SRobotQ(std::array::from_fn(|j| {
+                qd[i].0[j] * a
+                    + qd[i + 1].0[j] * b
+                    + (mm[i][j] * (a * a * a - a) + mm[i + 1][j] * (b * b * b - b)) * (h[i] * h[i] / 6.0)
+            })));
         }
     }
-    (lo, hi)
+    let s = arc(&out)?;
+    Ok((out, s))
 }
 
-/// Intersect a feasible interval `[lo, hi]` with the symmetric cap `[-c, c]`
-/// when `cap` is `Some(c)`; pass it through unchanged when `None`. The result
-/// may come back empty (`lo > hi`) if the cap excludes the whole interval — the
-/// caller decides how to back off.
-#[inline]
-fn cap_interval(lo: f64, hi: f64, cap: Option<f64>) -> (f64, f64) {
-    match cap {
-        Some(c) => (lo.max(-c), hi.min(c)),
-        None => (lo, hi),
-    }
-}
-
-/// Fraction of the available jerk used when planning the terminal stop, so the
-/// deceleration is ~80% of the time-optimal jerk and the integrator keeps a
-/// margin to the joint jerk limit instead of riding it.
-const STOP_JERK_FRACTION: f64 = 0.8;
-
-/// Highest speed from which a jerk- and acceleration-limited deceleration can
-/// reach rest within distance `d`. This is the closed-form inverse of the
-/// S-curve stopping distance under limits `a`, `j`:
-///
-/// - `Δv ≤ a²/j` (triangular accel profile, never saturating `a`):
-///   `d = v^{3/2} / √j` ⇒ `v = ∛(d²·j)`.
-/// - otherwise (a trapezoidal profile with a constant-`a` phase):
-///   `d = v²/(2a) + v·a/(2j)` ⇒ the positive root below.
-///
-/// Used as a per-step velocity ceiling toward the path end so the decel takes
-/// the physical jerk-limited distance instead of being dragged to rest across
-/// a whole (possibly coarse) input segment.
-#[inline]
-fn jerk_stop_speed(d: f64, a: f64, j: f64) -> f64 {
-    let a = a.max(1e-9);
-    let j = j.max(1e-9);
-    let v_tri = (d * d * j).cbrt();
-    if v_tri <= a * a / j {
-        v_tri
-    } else {
-        let aj = a * a / j;
-        0.5 * (-aj + (aj * aj + 8.0 * a * d).sqrt())
-    }
-}
-
-/// Resample a joint path with a natural cubic spline through the waypoints,
-/// emitting points no more than `res` apart in joint-space chord length. The
-/// spline interpolates the inputs (zero deviation at the waypoints) and is C²,
-/// so the densely-sampled curve has continuous curvature — bounded joint jerk
-/// once retimed — and tracks the intended smooth path more closely than the raw
-/// piecewise-linear polyline. Endpoints are preserved exactly.
-fn spline_resample<const N: usize>(raw: &[SRobotQ<N, f64>], res: f64) -> Vec<SRobotQ<N, f64>> {
-    if raw.len() < 3 || res <= 0.0 {
-        return raw.to_vec();
-    }
-    // Drop coincident knots first. A zero-length chord makes the natural cubic
-    // spline's tridiagonal system singular (its RHS carries a `1/h` term), and
-    // the interpolant then bows wildly off the path — quadrupling the executed
-    // arc length on an otherwise straight run. Duplicates arise where the
-    // planner samples a segment boundary twice.
-    let mut q: Vec<SRobotQ<N, f64>> = Vec::with_capacity(raw.len());
-    q.push(raw[0]);
-    for &p in &raw[1..] {
-        if p.distance(q.last().unwrap()) > 1e-9 {
-            q.push(p);
-        }
-    }
-    let m = q.len();
-    if m < 3 {
-        return q;
-    }
-    // Parameterize by cumulative joint-space chord length.
-    let mut u = vec![0.0f64; m];
-    for i in 1..m {
-        u[i] = u[i - 1] + q[i].distance(&q[i - 1]);
-    }
-    if u[m - 1] < 1e-12 {
-        return q;
-    }
-    let h: Vec<f64> = (0..m - 1).map(|i| (u[i + 1] - u[i]).max(1e-12)).collect();
-    // Natural cubic spline second derivatives via the Thomas algorithm. The
-    // tridiagonal coefficients are scalar (shared by every joint); only the RHS
-    // is a vector, so one sweep solves all dimensions. M[0] = M[m-1] = 0.
-    let mut cp = vec![0.0f64; m];
-    let mut dp = vec![SRobotQ::<N, f64>::zeros(); m];
-    for i in 1..m - 1 {
+/// Natural-cubic-spline second derivatives per joint via the Thomas algorithm
+/// (`M_0 = M_{n-1} = 0`); the scalar tridiagonal sweep is shared by every joint.
+#[allow(clippy::needless_range_loop)]
+fn natural_cubic<const N: usize>(h: &[f64], y: &[SRobotQ<N, f64>]) -> Vec<[f64; N]> {
+    let n = y.len();
+    let mut cp = vec![0.0f64; n];
+    let mut dp = vec![[0.0f64; N]; n];
+    for i in 1..n - 1 {
         let (a, b, cc) = (h[i - 1], 2.0 * (h[i - 1] + h[i]), h[i]);
-        let rhs = ((q[i + 1] - q[i]) * (1.0 / h[i]) - (q[i] - q[i - 1]) * (1.0 / h[i - 1])) * 6.0;
         let denom = b - a * cp[i - 1];
         cp[i] = cc / denom;
-        dp[i] = (rhs - dp[i - 1] * a) * (1.0 / denom);
-    }
-    let mut mm = vec![SRobotQ::<N, f64>::zeros(); m];
-    for i in (1..m - 1).rev() {
-        mm[i] = dp[i] - mm[i + 1] * cp[i];
-    }
-    let eval = |i: usize, uu: f64| -> SRobotQ<N, f64> {
-        let a = (u[i + 1] - uu) / h[i];
-        let b = (uu - u[i]) / h[i];
-        q[i] * a
-            + q[i + 1] * b
-            + (mm[i] * (a * a * a - a) + mm[i + 1] * (b * b * b - b)) * (h[i] * h[i] / 6.0)
-    };
-    let mut out = Vec::with_capacity(m + (u[m - 1] / res) as usize + 1);
-    out.push(q[0]);
-    for i in 0..m - 1 {
-        let k = ((h[i] / res).ceil() as usize).max(1);
-        for ss in 1..=k {
-            out.push(eval(i, u[i] + h[i] * (ss as f64) / (k as f64)));
+        for j in 0..N {
+            let rhs = ((y[i + 1].0[j] - y[i].0[j]) / h[i] - (y[i].0[j] - y[i - 1].0[j]) / h[i - 1]) * 6.0;
+            dp[i][j] = (rhs - dp[i - 1][j] * a) / denom;
         }
     }
-    out
+    let mut mm = vec![[0.0f64; N]; n];
+    for i in (1..n - 1).rev() {
+        for j in 0..N {
+            mm[i][j] = dp[i][j] - mm[i + 1][j] * cp[i];
+        }
+    }
+    mm
 }
 
-/// Bracket `x` against the ascending grid `s`, advancing the forward-only cursor
-/// `cur` (kept in `0..s.len()-1`). Returns the segment index `i` with
-/// `s[i] <= x <= s[i+1]` and the in-segment fraction `f`, both clamped to the
-/// grid range. `inv_ds[i]` is the reciprocal segment length, so the fraction
-/// costs a multiply, not a divide. Amortised O(1) over the monotonic sweep.
-#[inline]
-fn seg(s: &[f64], inv_ds: &[f64], cur: &mut usize, x: f64) -> (usize, f64) {
-    let last = s.len() - 1;
-    let x = x.clamp(s[0], s[last]);
-    while *cur < last - 1 && s[*cur + 1] <= x {
-        *cur += 1;
+/// Solve `maximise Σσ` subject to `σ[0]=0`, `σ[n-1]=total`, rest (v=a=0) at both
+/// ends, monotonic advance, and the per-tick first/second/third-difference caps.
+/// Returns the σ profile, or `None` if the program is infeasible.
+#[allow(clippy::needless_range_loop, clippy::field_reassign_with_default)]
+fn solve_sigma(n: usize, total: f64, cap_v: &[f64], cap_a: &[f64], cap_j: &[f64]) -> Option<Vec<f64>> {
+    // Non-dimensionalize: solve in σ̃ = σ/total ∈ [0,1] so the variables are O(1)
+    // and the (tiny) per-tick difference caps are well-conditioned against them.
+    let inv = 1.0 / total;
+    let mut t: Vec<(usize, usize, f64)> = Vec::new();
+    let mut b: Vec<f64> = Vec::new();
+    let mut row = 0usize;
+    let eq = |t: &mut Vec<(usize, usize, f64)>, b: &mut Vec<f64>, row: &mut usize, e: &[(usize, f64)], rhs: f64| {
+        for &(c, v) in e {
+            t.push((*row, c, v));
+        }
+        b.push(rhs);
+        *row += 1;
+    };
+    eq(&mut t, &mut b, &mut row, &[(0, 1.0)], 0.0);
+    eq(&mut t, &mut b, &mut row, &[(n - 1, 1.0)], 1.0);
+    eq(&mut t, &mut b, &mut row, &[(1, 1.0), (0, -1.0)], 0.0);
+    eq(&mut t, &mut b, &mut row, &[(2, 1.0), (1, -1.0)], 0.0);
+    eq(&mut t, &mut b, &mut row, &[(n - 1, 1.0), (n - 2, -1.0)], 0.0);
+    eq(&mut t, &mut b, &mut row, &[(n - 2, 1.0), (n - 3, -1.0)], 0.0);
+    let n_eq = row;
+    for k in 1..n {
+        t.push((row, k - 1, 1.0));
+        t.push((row, k, -1.0));
+        b.push(0.0);
+        row += 1;
+        t.push((row, k, 1.0));
+        t.push((row, k - 1, -1.0));
+        b.push(cap_v[k] * inv);
+        row += 1;
     }
-    let f = (x - s[*cur]) * inv_ds[*cur];
-    (*cur, f)
+    for k in 2..n {
+        for sgn in [1.0, -1.0] {
+            t.push((row, k, sgn));
+            t.push((row, k - 1, -2.0 * sgn));
+            t.push((row, k - 2, sgn));
+            b.push(cap_a[k] * inv);
+            row += 1;
+        }
+    }
+    for k in 3..n {
+        for sgn in [1.0, -1.0] {
+            t.push((row, k, sgn));
+            t.push((row, k - 1, -3.0 * sgn));
+            t.push((row, k - 2, 3.0 * sgn));
+            t.push((row, k - 3, -sgn));
+            b.push(cap_j[k] * inv);
+            row += 1;
+        }
+    }
+    let m = row;
+    let a = triplets_to_csc(m, n, t);
+    let p = CscMatrix::new(n, n, vec![0; n + 1], vec![], vec![]);
+    let q = vec![-1.0f64; n];
+    let cones = [SupportedConeT::ZeroConeT(n_eq), SupportedConeT::NonnegativeConeT(m - n_eq)];
+    let mut set = DefaultSettings::default();
+    set.verbose = false;
+    set.max_iter = 1000;
+    set.tol_feas = 1e-8;
+    set.tol_gap_abs = 1e-8;
+    set.tol_gap_rel = 1e-8;
+    let mut solver = DefaultSolver::new(&p, &q, &a, &b, &cones, set).ok()?;
+    solver.solve();
+    match solver.solution.status {
+        SolverStatus::Solved | SolverStatus::AlmostSolved => {
+            Some(solver.solution.x.iter().map(|x| x * total).collect())
+        }
+        _ => None,
+    }
+}
+
+/// Build a column-compressed sparse matrix from `(row, col, val)` triplets.
+fn triplets_to_csc(m: usize, n: usize, mut t: Vec<(usize, usize, f64)>) -> CscMatrix<f64> {
+    t.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(&b.0)));
+    let mut colptr = vec![0usize; n + 1];
+    let mut rowval = Vec::with_capacity(t.len());
+    let mut nzval = Vec::with_capacity(t.len());
+    for &(r, c, v) in &t {
+        colptr[c + 1] += 1;
+        rowval.push(r);
+        nzval.push(v);
+    }
+    for c in 0..n {
+        colptr[c + 1] += colptr[c];
+    }
+    CscMatrix::new(m, n, colptr, rowval, nzval)
+}
+
+/// Worst per-joint finite-difference violation of the *true* limits, or `None`
+/// if every difference is within limit. Returns `(kind, joint, value, limit,
+/// sample_index)`.
+fn verify_fd<const N: usize>(
+    q: &[SRobotQ<N, f64>],
+    lim: &JointLimits<N>,
+    dt: f64,
+) -> Option<(&'static str, usize, f64, f64, usize)> {
+    let n = q.len();
+    let mut worst: Option<(f64, &'static str, usize, f64, f64, usize)> = None;
+    let mut consider = |val: f64, limit: f64, kind: &'static str, j: usize, idx: usize| {
+        if val > limit * (1.0 + 1e-6) {
+            let r = val / limit;
+            if worst.is_none_or(|w| r > w.0) {
+                worst = Some((r, kind, j, val, limit, idx));
+            }
+        }
+    };
+    for i in 1..n {
+        for j in 0..N {
+            consider((q[i].0[j] - q[i - 1].0[j]).abs() / dt, lim.v_max.0[j], "velocity", j, i);
+        }
+    }
+    for i in 2..n {
+        for j in 0..N {
+            let a = (q[i].0[j] - 2.0 * q[i - 1].0[j] + q[i - 2].0[j]).abs() / (dt * dt);
+            consider(a, lim.a_max.0[j], "acceleration", j, i);
+        }
+    }
+    for i in 3..n {
+        for j in 0..N {
+            let jk = (q[i].0[j] - 3.0 * q[i - 1].0[j] + 3.0 * q[i - 2].0[j] - q[i - 3].0[j]).abs() / (dt * dt * dt);
+            consider(jk, lim.j_max.0[j], "jerk", j, i);
+        }
+    }
+    worst.map(|(_, kind, j, val, limit, idx)| (kind, j, val, limit, idx))
+}
+
+/// Peak per-joint finite-difference velocity/acceleration/jerk of the output.
+fn fd_peaks<const N: usize>(q: &[SRobotQ<N, f64>], dt: f64) -> (f64, f64, f64) {
+    let n = q.len();
+    let (mut v, mut a, mut jk) = (0.0f64, 0.0f64, 0.0f64);
+    for i in 1..n {
+        for j in 0..N {
+            v = v.max((q[i].0[j] - q[i - 1].0[j]).abs() / dt);
+        }
+    }
+    for i in 2..n {
+        for j in 0..N {
+            a = a.max((q[i].0[j] - 2.0 * q[i - 1].0[j] + q[i - 2].0[j]).abs() / (dt * dt));
+        }
+    }
+    for i in 3..n {
+        for j in 0..N {
+            jk = jk.max((q[i].0[j] - 3.0 * q[i - 1].0[j] + 3.0 * q[i - 2].0[j] - q[i - 3].0[j]).abs() / (dt * dt * dt));
+        }
+    }
+    (v, a, jk)
 }
