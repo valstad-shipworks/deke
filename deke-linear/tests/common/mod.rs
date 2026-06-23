@@ -11,7 +11,9 @@ use deke_linear::{
     condition,
 };
 use deke_types::glam::{DAffine3, DMat3, DVec3};
-use deke_types::{DekeError, FKChain, Planner, Retimer, SRobotPath, SRobotQ, SRobotTraj, Validator};
+use deke_types::{
+    DekeError, FKChain, Planner, Retimer, SRobotPath, SRobotQ, SRobotTraj, Validator,
+};
 
 /// Caller-owned bundle of the three stages' knobs. The library no longer ships
 /// an end-to-end config; orchestration (and the config it needs) lives here.

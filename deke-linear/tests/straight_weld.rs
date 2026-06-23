@@ -18,8 +18,8 @@ fn straight_weld_holds_constant_speed_within_limits() {
     let poses = common::straight(&robot, DVec3::X, 0.12, 4);
     let cfg = common::config(0.05);
 
-    let (traj, diag) = common::follow(&robot, &poses, &cfg, &common::noop(), &())
-        .expect("follow failed");
+    let (traj, diag) =
+        common::follow(&robot, &poses, &cfg, &common::noop(), &()).expect("follow failed");
 
     assert_eq!(diag.runs, 1, "a straight line is one run");
     assert!(

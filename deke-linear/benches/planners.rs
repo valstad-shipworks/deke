@@ -88,7 +88,12 @@ fn bench(c: &mut Criterion) {
         let cm = (len * 100.0) as usize;
         c.bench_function(&format!("fixed_plan_{cm}cm"), |b| {
             b.iter(|| {
-                black_box(fixed.plan::<DekeError, _>(&opts, black_box(&run), &noop, &()).0).is_ok()
+                black_box(
+                    fixed
+                        .plan::<DekeError, _>(&opts, black_box(&run), &noop, &())
+                        .0,
+                )
+                .is_ok()
             })
         });
         let rcfg = RedundantConfig {
@@ -97,7 +102,11 @@ fn bench(c: &mut Criterion) {
         };
         c.bench_function(&format!("redundant_plan_{cm}cm"), |b| {
             b.iter(|| {
-                black_box(red.plan::<DekeError, _>(&rcfg, black_box(&run), &noop, &()).0).is_ok()
+                black_box(
+                    red.plan::<DekeError, _>(&rcfg, black_box(&run), &noop, &())
+                        .0,
+                )
+                .is_ok()
             })
         });
     }

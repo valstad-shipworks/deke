@@ -141,7 +141,8 @@ where
             .min(c.tcp.jerk.unwrap_or(f64::INFINITY))
             .max(1e-6);
         let ramp_t = v_cmd / a_eff + a_eff / j_eff;
-        let mut kk = ((total / (v_cmd * dt)).ceil() as usize + (4.0 * ramp_t / dt) as usize + 64).max(8);
+        let mut kk =
+            ((total / (v_cmd * dt)).ceil() as usize + (4.0 * ramp_t / dt) as usize + 64).max(8);
 
         // The TCP tangential accel/jerk a controller measures is the finite
         // difference of the FK Cartesian speed, which the chord-linear
@@ -161,7 +162,9 @@ where
             // so re-bin and re-solve to a fixed point (stable in 1–3 passes).
             let mut sigma: Option<Vec<f64>> = None;
             for _grow in 0..6 {
-                let mut sg: Vec<f64> = (0..kk).map(|k| k as f64 / (kk - 1) as f64 * total).collect();
+                let mut sg: Vec<f64> = (0..kk)
+                    .map(|k| k as f64 / (kk - 1) as f64 * total)
+                    .collect();
                 let mut prev_bins: Vec<usize> = Vec::new();
                 let mut feasible = true;
                 for _pass in 0..4 {
@@ -175,11 +178,22 @@ where
                         .collect();
                     let cap_a: Vec<f64> = bins
                         .iter()
-                        .map(|&b| (mg * proj(b, &c.joint.a_max)).min(c.tcp.accel.map_or(f64::INFINITY, |t| a_der * t)) * dt * dt)
+                        .map(|&b| {
+                            (mg * proj(b, &c.joint.a_max))
+                                .min(c.tcp.accel.map_or(f64::INFINITY, |t| a_der * t))
+                                * dt
+                                * dt
+                        })
                         .collect();
                     let cap_j: Vec<f64> = bins
                         .iter()
-                        .map(|&b| (mg * proj(b, &c.joint.j_max)).min(c.tcp.jerk.map_or(f64::INFINITY, |t| j_der * t)) * dt * dt * dt)
+                        .map(|&b| {
+                            (mg * proj(b, &c.joint.j_max))
+                                .min(c.tcp.jerk.map_or(f64::INFINITY, |t| j_der * t))
+                                * dt
+                                * dt
+                                * dt
+                        })
                         .collect();
                     match solve_sigma(kk, total, &cap_v, &cap_a, &cap_j) {
                         Some(next) => sg = next,
@@ -196,13 +210,18 @@ where
                 }
                 kk = (kk as f64 * 1.6) as usize + 16;
             }
-            let sigma = sigma.ok_or(LinearError::Stalled { run: run_idx, s: 0.0 })?;
+            let sigma = sigma.ok_or(LinearError::Stalled {
+                run: run_idx,
+                s: 0.0,
+            })?;
 
             // Reconstruct chord-linear joint samples; trim the trailing stationary
             // tail (ticks parked at `total` after the motion finished).
             let recon = |sx: f64| -> SRobotQ<N, f64> {
                 let b = bin_of(sx);
-                SRobotQ(std::array::from_fn(|j| knots[b].0[j] + secant[b][j] * (sx - s[b])))
+                SRobotQ(std::array::from_fn(|j| {
+                    knots[b].0[j] + secant[b][j] * (sx - s[b])
+                }))
             };
             let mut end = kk;
             while end > 2 && (total - sigma[end - 2]).abs() < 1e-9 {
@@ -228,8 +247,10 @@ where
                 j_der /= j_over * 1.01;
             }
         }
-        let (sigma, end, samples, a_over, j_over) =
-            solved.ok_or(LinearError::Stalled { run: run_idx, s: 0.0 })?;
+        let (sigma, end, samples, a_over, j_over) = solved.ok_or(LinearError::Stalled {
+            run: run_idx,
+            s: 0.0,
+        })?;
 
         // Airtight backstop: the *finite differences* of the emitted samples
         // against the *true* (un-margined) per-joint limits. If any exceeds, the
@@ -248,7 +269,10 @@ where
         // the realized FK accel/jerk under the true cap, fail rather than emit a
         // trajectory that exceeds it.
         if a_over > 1.0 + 1e-6 {
-            let limit = c.tcp.accel.expect("accel cap set when its ratio is positive");
+            let limit = c
+                .tcp
+                .accel
+                .expect("accel cap set when its ratio is positive");
             return Err(LinearError::TcpLimitExceeded {
                 run: run_idx,
                 kind: "acceleration",
@@ -387,7 +411,8 @@ fn smooth_path<const N: usize, FK: ContinuousFKChain<N, f64>>(
             out.push(SRobotQ(std::array::from_fn(|j| {
                 qd[i].0[j] * a
                     + qd[i + 1].0[j] * b
-                    + (mm[i][j] * (a * a * a - a) + mm[i + 1][j] * (b * b * b - b)) * (h[i] * h[i] / 6.0)
+                    + (mm[i][j] * (a * a * a - a) + mm[i + 1][j] * (b * b * b - b))
+                        * (h[i] * h[i] / 6.0)
             })));
         }
     }
@@ -407,7 +432,8 @@ fn natural_cubic<const N: usize>(h: &[f64], y: &[SRobotQ<N, f64>]) -> Vec<[f64; 
         let denom = b - a * cp[i - 1];
         cp[i] = cc / denom;
         for j in 0..N {
-            let rhs = ((y[i + 1].0[j] - y[i].0[j]) / h[i] - (y[i].0[j] - y[i - 1].0[j]) / h[i - 1]) * 6.0;
+            let rhs =
+                ((y[i + 1].0[j] - y[i].0[j]) / h[i] - (y[i].0[j] - y[i - 1].0[j]) / h[i - 1]) * 6.0;
             dp[i][j] = (rhs - dp[i - 1][j] * a) / denom;
         }
     }
@@ -424,14 +450,24 @@ fn natural_cubic<const N: usize>(h: &[f64], y: &[SRobotQ<N, f64>]) -> Vec<[f64; 
 /// ends, monotonic advance, and the per-tick first/second/third-difference caps.
 /// Returns the σ profile, or `None` if the program is infeasible.
 #[allow(clippy::needless_range_loop, clippy::field_reassign_with_default)]
-fn solve_sigma(n: usize, total: f64, cap_v: &[f64], cap_a: &[f64], cap_j: &[f64]) -> Option<Vec<f64>> {
+fn solve_sigma(
+    n: usize,
+    total: f64,
+    cap_v: &[f64],
+    cap_a: &[f64],
+    cap_j: &[f64],
+) -> Option<Vec<f64>> {
     // Non-dimensionalize: solve in σ̃ = σ/total ∈ [0,1] so the variables are O(1)
     // and the (tiny) per-tick difference caps are well-conditioned against them.
     let inv = 1.0 / total;
     let mut t: Vec<(usize, usize, f64)> = Vec::new();
     let mut b: Vec<f64> = Vec::new();
     let mut row = 0usize;
-    let eq = |t: &mut Vec<(usize, usize, f64)>, b: &mut Vec<f64>, row: &mut usize, e: &[(usize, f64)], rhs: f64| {
+    let eq = |t: &mut Vec<(usize, usize, f64)>,
+              b: &mut Vec<f64>,
+              row: &mut usize,
+              e: &[(usize, f64)],
+              rhs: f64| {
         for &(c, v) in e {
             t.push((*row, c, v));
         }
@@ -442,8 +478,20 @@ fn solve_sigma(n: usize, total: f64, cap_v: &[f64], cap_a: &[f64], cap_j: &[f64]
     eq(&mut t, &mut b, &mut row, &[(n - 1, 1.0)], 1.0);
     eq(&mut t, &mut b, &mut row, &[(1, 1.0), (0, -1.0)], 0.0);
     eq(&mut t, &mut b, &mut row, &[(2, 1.0), (1, -1.0)], 0.0);
-    eq(&mut t, &mut b, &mut row, &[(n - 1, 1.0), (n - 2, -1.0)], 0.0);
-    eq(&mut t, &mut b, &mut row, &[(n - 2, 1.0), (n - 3, -1.0)], 0.0);
+    eq(
+        &mut t,
+        &mut b,
+        &mut row,
+        &[(n - 1, 1.0), (n - 2, -1.0)],
+        0.0,
+    );
+    eq(
+        &mut t,
+        &mut b,
+        &mut row,
+        &[(n - 2, 1.0), (n - 3, -1.0)],
+        0.0,
+    );
     let n_eq = row;
     for k in 1..n {
         t.push((row, k - 1, 1.0));
@@ -493,7 +541,10 @@ fn solve_sigma(n: usize, total: f64, cap_v: &[f64], cap_a: &[f64], cap_j: &[f64]
     let a = triplets_to_csc(m, n, t);
     let p = CscMatrix::new(n, n, vec![0; n + 1], vec![], vec![]);
     let q = vec![-1.0f64; n];
-    let cones = [SupportedConeT::ZeroConeT(n_eq), SupportedConeT::NonnegativeConeT(m - n_eq)];
+    let cones = [
+        SupportedConeT::ZeroConeT(n_eq),
+        SupportedConeT::NonnegativeConeT(m - n_eq),
+    ];
     let mut set = DefaultSettings::default();
     set.verbose = false;
     set.max_iter = 200;
@@ -544,7 +595,13 @@ fn verify_fd<const N: usize>(
     };
     for i in 1..n {
         for j in 0..N {
-            consider((q[i].0[j] - q[i - 1].0[j]).abs() / dt, lim.v_max.0[j], "velocity", j, i);
+            consider(
+                (q[i].0[j] - q[i - 1].0[j]).abs() / dt,
+                lim.v_max.0[j],
+                "velocity",
+                j,
+                i,
+            );
         }
     }
     for i in 2..n {
@@ -555,7 +612,8 @@ fn verify_fd<const N: usize>(
     }
     for i in 3..n {
         for j in 0..N {
-            let jk = (q[i].0[j] - 3.0 * q[i - 1].0[j] + 3.0 * q[i - 2].0[j] - q[i - 3].0[j]).abs() / (dt * dt * dt);
+            let jk = (q[i].0[j] - 3.0 * q[i - 1].0[j] + 3.0 * q[i - 2].0[j] - q[i - 3].0[j]).abs()
+                / (dt * dt * dt);
             consider(jk, lim.j_max.0[j], "jerk", j, i);
         }
     }
@@ -579,13 +637,16 @@ fn tcp_fd_ratios<const N: usize, FK: ContinuousFKChain<N, f64>>(
         .iter()
         .map(|qi| fk.fk_end(qi).map(|t| t.translation))
         .collect::<Result<_, DekeError>>()?;
-    let sp: Vec<f64> = (0..pos.len() - 1).map(|i| pos[i + 1].distance(pos[i]) / dt).collect();
+    let sp: Vec<f64> = (0..pos.len() - 1)
+        .map(|i| pos[i + 1].distance(pos[i]) / dt)
+        .collect();
     let a_ratio = accel_cap.map_or(0.0, |a| {
         (1..sp.len()).fold(0.0f64, |w, i| w.max((sp[i] - sp[i - 1]).abs() / dt)) / a
     });
     let j_ratio = jerk_cap.map_or(0.0, |j| {
-        (2..sp.len()).fold(0.0f64, |w, i| w.max((sp[i] - 2.0 * sp[i - 1] + sp[i - 2]).abs() / (dt * dt)))
-            / j
+        (2..sp.len()).fold(0.0f64, |w, i| {
+            w.max((sp[i] - 2.0 * sp[i - 1] + sp[i - 2]).abs() / (dt * dt))
+        }) / j
     });
     Ok((a_ratio, j_ratio))
 }
@@ -606,7 +667,10 @@ fn fd_peaks<const N: usize>(q: &[SRobotQ<N, f64>], dt: f64) -> (f64, f64, f64) {
     }
     for i in 3..n {
         for j in 0..N {
-            jk = jk.max((q[i].0[j] - 3.0 * q[i - 1].0[j] + 3.0 * q[i - 2].0[j] - q[i - 3].0[j]).abs() / (dt * dt * dt));
+            jk = jk.max(
+                (q[i].0[j] - 3.0 * q[i - 1].0[j] + 3.0 * q[i - 2].0[j] - q[i - 3].0[j]).abs()
+                    / (dt * dt * dt),
+            );
         }
     }
     (v, a, jk)

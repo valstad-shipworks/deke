@@ -73,10 +73,22 @@ fn axis_choice_changes_the_solution() {
         })
     };
 
-    let (tz, _) =
-        common::follow(&robot, &poses, &base(RedundantAxis::PosZ), &common::noop(), &()).unwrap();
-    let (tx, _) =
-        common::follow(&robot, &poses, &base(RedundantAxis::PosX), &common::noop(), &()).unwrap();
+    let (tz, _) = common::follow(
+        &robot,
+        &poses,
+        &base(RedundantAxis::PosZ),
+        &common::noop(),
+        &(),
+    )
+    .unwrap();
+    let (tx, _) = common::follow(
+        &robot,
+        &poses,
+        &base(RedundantAxis::PosX),
+        &common::noop(),
+        &(),
+    )
+    .unwrap();
 
     // Same first TCP position regardless of which axis is free.
     let pz = robot.fk_end(&tz.path()[0]).unwrap().translation;

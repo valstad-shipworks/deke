@@ -25,7 +25,8 @@ fn captured_short_weld_is_within_jerk_or_refused() {
     let jl = 16.696_939_610_631_677;
     let poses = common::straight(&robot, dir, 0.118_001_859_153_488, 7);
     let mut cfg = common::config(0.119_636_760_917_933_6);
-    cfg.constraints.joint = JointLimits::symmetric(0.364_662_007_797_896_65, 2.343_016_777_374_244_5, jl);
+    cfg.constraints.joint =
+        JointLimits::symmetric(0.364_662_007_797_896_65, 2.343_016_777_374_244_5, jl);
     match common::follow(&robot, &poses, &cfg, &common::noop(), &()) {
         Ok((traj, _)) => {
             let dt = traj.dt().as_secs_f64();
@@ -34,15 +35,22 @@ fn captured_short_weld_is_within_jerk_or_refused() {
             for i in 3..p.len() {
                 for j in 0..6 {
                     fd_j = fd_j.max(
-                        (p[i].0[j] - 3.0 * p[i - 1].0[j] + 3.0 * p[i - 2].0[j] - p[i - 3].0[j]).abs()
+                        (p[i].0[j] - 3.0 * p[i - 1].0[j] + 3.0 * p[i - 2].0[j] - p[i - 3].0[j])
+                            .abs()
                             / (dt * dt * dt),
                     );
                 }
             }
-            assert!(fd_j <= jl, "returned trajectory FD jerk {fd_j:.2} exceeds limit {jl:.2}");
+            assert!(
+                fd_j <= jl,
+                "returned trajectory FD jerk {fd_j:.2} exceeds limit {jl:.2}"
+            );
         }
         Err(e) => {
-            assert!(format!("{e}").contains("jerk"), "expected a jerk-limit refusal, got: {e}");
+            assert!(
+                format!("{e}").contains("jerk"),
+                "expected a jerk-limit refusal, got: {e}"
+            );
         }
     }
 }
@@ -73,7 +81,10 @@ fn fuzz_tcp_stays_on_commanded_line() {
             "TCP deviation {dev:.6} m — dir={dir:?} len={len:.3} n={n} speed={speed:.4}",
         );
     }
-    assert!(cases > 30, "too few reachable cases ({cases}) — generator drifted");
+    assert!(
+        cases > 30,
+        "too few reachable cases ({cases}) — generator drifted"
+    );
 }
 
 /// Criterion 2 — never exceed joint limits. With tight, randomised limits and
@@ -87,7 +98,11 @@ fn fuzz_feasible_motion_never_exceeds_joint_limits() {
     let mut rng = common::Rng::new(0x5EED_0002);
     let mut cases = 0;
     for _ in 0..80 {
-        let (vl, al, jl) = (rng.range(0.4, 1.6), rng.range(1.5, 6.0), rng.range(15.0, 60.0));
+        let (vl, al, jl) = (
+            rng.range(0.4, 1.6),
+            rng.range(1.5, 6.0),
+            rng.range(15.0, 60.0),
+        );
         let dir = rng.unit_dir();
         let len = rng.range(0.05, 0.20);
         let n = rng.int(2, 8);
@@ -133,7 +148,11 @@ fn fuzz_returned_output_respects_all_fd_limits() {
     let mut rng = common::Rng::new(0x5EED_0010);
     let (mut ok, mut err) = (0, 0);
     for _ in 0..160 {
-        let (vl, al, jl) = (rng.range(0.3, 2.0), rng.range(1.0, 8.0), rng.range(10.0, 80.0));
+        let (vl, al, jl) = (
+            rng.range(0.3, 2.0),
+            rng.range(1.0, 8.0),
+            rng.range(10.0, 80.0),
+        );
         let dir = rng.unit_dir();
         let len = rng.range(0.05, 0.25);
         let n = rng.int(2, 9);
@@ -166,8 +185,14 @@ fn fuzz_returned_output_respects_all_fd_limits() {
                     "FD joint jerk {fj:.3} > {jl:.3} (speed={speed:.4} len={len:.3} n={n})",
                 );
                 // #1: TCP speed never exceeds the command.
-                let pk = common::tcp_speeds(&robot, &traj).iter().cloned().fold(0.0, f64::max);
-                assert!(pk <= speed * (1.0 + 1e-3), "TCP speed {pk:.5} > commanded {speed:.5}");
+                let pk = common::tcp_speeds(&robot, &traj)
+                    .iter()
+                    .cloned()
+                    .fold(0.0, f64::max);
+                assert!(
+                    pk <= speed * (1.0 + 1e-3),
+                    "TCP speed {pk:.5} > commanded {speed:.5}"
+                );
                 // #1: TCP accel/jerk within caps (chord-linear approximation margin).
                 if let Some((a, j)) = tcp {
                     // TCP accel/jerk are the *approximate* caps (chord-linear FK
@@ -195,7 +220,11 @@ fn fuzz_shallow_corners_respect_fd_limits() {
         let turn = rng.range(-0.4, 0.4); // ±23° < 30° split threshold → single run
         let per = rng.int(3, 6);
         let speed = rng.range(0.01, 0.08);
-        let (vl, al, jl) = (rng.range(0.4, 2.0), rng.range(1.5, 8.0), rng.range(15.0, 80.0));
+        let (vl, al, jl) = (
+            rng.range(0.4, 2.0),
+            rng.range(1.5, 8.0),
+            rng.range(15.0, 80.0),
+        );
         let poses = common::corner(&robot, leg, turn, per);
         let mut cfg = common::config(speed);
         cfg.constraints.joint = JointLimits::symmetric(vl, al, jl);
@@ -206,9 +235,18 @@ fn fuzz_shallow_corners_respect_fd_limits() {
             continue; // skip if split into multiple runs (concat seam is the caller's concern)
         }
         ok += 1;
-        assert!(common::joint_vel_peak(&traj) <= vl * (1.0 + 1e-6), "corner FD vel over limit");
-        assert!(common::joint_acc_peak(&traj) <= al * (1.0 + 1e-6), "corner FD accel over limit");
-        assert!(common::joint_jerk_peak(&traj) <= jl * (1.0 + 1e-6), "corner FD jerk over limit");
+        assert!(
+            common::joint_vel_peak(&traj) <= vl * (1.0 + 1e-6),
+            "corner FD vel over limit"
+        );
+        assert!(
+            common::joint_acc_peak(&traj) <= al * (1.0 + 1e-6),
+            "corner FD accel over limit"
+        );
+        assert!(
+            common::joint_jerk_peak(&traj) <= jl * (1.0 + 1e-6),
+            "corner FD jerk over limit"
+        );
     }
     assert!(ok > 20, "too few single-run corners ({ok})");
 }
@@ -223,7 +261,11 @@ fn fuzz_constant_speed_during_cruise() {
     let mut rng = common::Rng::new(0x5EED_0003);
     let mut cases = 0;
     for _ in 0..80 {
-        let (vl, al, jl) = (rng.range(0.5, 1.6), rng.range(2.0, 6.0), rng.range(20.0, 60.0));
+        let (vl, al, jl) = (
+            rng.range(0.5, 1.6),
+            rng.range(2.0, 6.0),
+            rng.range(20.0, 60.0),
+        );
         let dir = rng.unit_dir();
         let len = rng.range(0.06, 0.20);
         let n = rng.int(2, 6);
@@ -247,7 +289,10 @@ fn fuzz_constant_speed_during_cruise() {
         let thr = speed * 0.98;
         let first = speeds.iter().position(|&v| v >= thr).unwrap();
         let last = speeds.iter().rposition(|&v| v >= thr).unwrap();
-        let notch = speeds[first..=last].iter().cloned().fold(f64::INFINITY, f64::min);
+        let notch = speeds[first..=last]
+            .iter()
+            .cloned()
+            .fold(f64::INFINITY, f64::min);
         assert!(
             notch >= speed * 0.95,
             "cruise dipped to {notch:.5} (commanded {speed:.5}) — dir={dir:?} len={len:.3} n={n}",

@@ -20,8 +20,8 @@ fn unreachable_pose_reports_clearly() {
         })
         .collect();
 
-    let err = common::follow(&robot, &poses, &common::config(0.05), &common::noop(), &())
-        .unwrap_err();
+    let err =
+        common::follow(&robot, &poses, &common::config(0.05), &common::noop(), &()).unwrap_err();
     // The structured `LinearError::Unreachable` is collapsed to `DekeError` as it
     // crosses the `Planner` trait boundary; the descriptive message survives.
     assert!(
@@ -37,8 +37,8 @@ fn too_few_poses_is_rejected() {
         use deke_types::FKChain;
         robot.fk_end(&common::anchor()).unwrap()
     };
-    let err = common::follow(&robot, &[base], &common::config(0.05), &common::noop(), &())
-        .unwrap_err();
+    let err =
+        common::follow(&robot, &[base], &common::config(0.05), &common::noop(), &()).unwrap_err();
     assert!(
         matches!(&err, DekeError::RetimerFailed(s) if s.contains("at least 2")),
         "expected too-few-poses, got {err:?}"

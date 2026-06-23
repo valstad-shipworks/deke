@@ -111,19 +111,23 @@ fn rrt_path_retimes_on_six_axis_arm_with_linear_rail() {
     // the rail in the planner's distance metric so a meter of rail travel is
     // commensurate with ~a radian of joint motion; left at 1.0 the rail would
     // dominate nearest-neighbor and steering.
-    settings.dof_cost_weights =
-        SRobotQ::<N, f64>::from_array([0.1, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]);
+    settings.dof_cost_weights = SRobotQ::<N, f64>::from_array([0.1, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]);
     settings.seed = 7;
 
     let waypoints = StartEnd { start, end: goal };
     let planner = RrtcPlanner::<N>::new();
     let (path_res, diag) = planner.plan::<DekeError, _>(&settings, &waypoints, &validator, &ctx);
-    let path =
-        path_res.unwrap_or_else(|e| panic!("RRT failed for 7-DOF rail+arm: {e} ({diag})"));
+    let path = path_res.unwrap_or_else(|e| panic!("RRT failed for 7-DOF rail+arm: {e} ({diag})"));
 
     assert!(path.len() >= 2, "degenerate path: {} waypoints", path.len());
-    assert!(path.first().distance(&start) < 1e-9, "path does not start at start");
-    assert!(path.last().distance(&goal) < 1e-9, "path does not end at goal");
+    assert!(
+        path.first().distance(&start) < 1e-9,
+        "path does not start at start"
+    );
+    assert!(
+        path.last().distance(&goal) < 1e-9,
+        "path does not end at goal"
+    );
 
     let (rail_lo, rail_hi) = path
         .iter()
@@ -168,11 +172,22 @@ fn rrt_path_retimes_on_six_axis_arm_with_linear_rail() {
     };
 
     let (retime_res, rdiag) = Topp3TcpSpline::new(&fk).retime(&cfg, &path, &validator, &ctx);
-    let traj = retime_res.unwrap_or_else(|e| panic!("retimer failed on rail+arm path: {e} ({rdiag})"));
+    let traj =
+        retime_res.unwrap_or_else(|e| panic!("retimer failed on rail+arm path: {e} ({rdiag})"));
 
-    assert!(traj.len() >= 4, "trajectory too short: {} samples", traj.len());
-    assert!(traj.first().distance(&start) < 1e-3, "trajectory drifts from start");
-    assert!(traj.last().distance(&goal) < 1e-3, "trajectory drifts from goal");
+    assert!(
+        traj.len() >= 4,
+        "trajectory too short: {} samples",
+        traj.len()
+    );
+    assert!(
+        traj.first().distance(&start) < 1e-3,
+        "trajectory drifts from start"
+    );
+    assert!(
+        traj.last().distance(&goal) < 1e-3,
+        "trajectory drifts from goal"
+    );
 
     // The retimer must respect each joint's own velocity bound, the rail's 2 m/s
     // included. A finite-difference check on the emitted samples; the internal
