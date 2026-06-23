@@ -1,6 +1,6 @@
 mod common;
 
-use deke_linear::{LinearError, LinearFollower};
+use deke_types::DekeError;
 use deke_types::glam::DVec3;
 
 /// A straight line is dip-free, so the flag changes nothing.
@@ -8,16 +8,15 @@ use deke_types::glam::DVec3;
 fn straight_line_passes_with_flag() {
     let robot = common::ur();
     let poses = common::straight(&robot, DVec3::X, 0.12, 4);
-    let follower = LinearFollower::new(&robot);
 
-    let (traj, _) = follower
-        .follow(
-            &poses,
-            &common::config_flag(0.05, true),
-            &common::noop(),
-            &(),
-        )
-        .expect("a straight line never dips in the interior");
+    let (traj, _) = common::follow(
+        &robot,
+        &poses,
+        &common::config_flag(0.05, true),
+        &common::noop(),
+        &(),
+    )
+    .expect("a straight line never dips in the interior");
     let speeds = common::tcp_speeds(&robot, &traj);
     let lo = speeds.len() / 4;
     let hi = speeds.len() * 3 / 4;
@@ -26,53 +25,46 @@ fn straight_line_passes_with_flag() {
     }
 }
 
-/// A shallow corner under a command the joints can't sustain forces an interior
-/// dip: the flag turns the (otherwise graceful) slowdown into a hard, located
-/// error, while leaving it off slows through.
+/// A shallow corner under a command the joints can't sustain through it. Neither
+/// mode may emit an inexecutable trajectory: with the flag set it refuses up
+/// front because it cannot hold constant speed; without it, the slowdown still
+/// cannot round the corner under the jerk limit at this speed, so it refuses
+/// there instead. Both errors are collapsed to `DekeError` across the `Retimer`
+/// trait boundary; their descriptive messages survive.
 #[test]
-fn interior_dip_is_forbidden_when_flag_set() {
+fn corner_too_fast_is_refused_not_emitted() {
     let robot = common::ur();
     let poses = common::corner(&robot, 0.05, 25f64.to_radians(), 4);
-    let follower = LinearFollower::new(&robot);
     let speed = 1.5; // above what the joints can sustain through the corner
 
-    // Flag off: succeeds by slowing through the infeasible region.
-    let (traj, diag_off) = follower
-        .follow(
-            &poses,
-            &common::config_flag(speed, false),
-            &common::noop(),
-            &(),
-        )
-        .expect("flag-off should slow through");
-    assert_eq!(diag_off.runs, 1, "25° corner is one run");
-    let speeds = common::tcp_speeds(&robot, &traj);
-    let peak = speeds.iter().cloned().fold(0.0, f64::max);
+    // Flag on: the constant-speed contract can't hold, so it names where and how
+    // fast it could actually go.
+    let err_on = common::follow(
+        &robot,
+        &poses,
+        &common::config_flag(speed, true),
+        &common::noop(),
+        &(),
+    )
+    .unwrap_err();
     assert!(
-        peak < speed,
-        "the path cannot actually reach the command anywhere"
+        matches!(&err_on, DekeError::RetimerFailed(s) if s.contains("interior dip")),
+        "expected SpeedDipRequired, got {err_on:?}"
     );
 
-    // Flag on: refuses, naming where and how fast it could actually go.
-    let err = follower
-        .follow(
-            &poses,
-            &common::config_flag(speed, true),
-            &common::noop(),
-            &(),
-        )
-        .unwrap_err();
-    match err {
-        LinearError::SpeedDipRequired {
-            s,
-            feasible_speed,
-            commanded,
-            ..
-        } => {
-            assert!(feasible_speed < commanded);
-            assert_eq!(commanded, speed);
-            assert!(s > 0.0, "dip is in the interior, not the start");
-        }
-        other => panic!("expected SpeedDipRequired, got {other:?}"),
-    }
+    // Flag off: it would slow through, but the corner is too sharp to round under
+    // the jerk limit at this speed — so it still refuses rather than emit a
+    // trajectory the arm cannot execute.
+    let err_off = common::follow(
+        &robot,
+        &poses,
+        &common::config_flag(speed, false),
+        &common::noop(),
+        &(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(&err_off, DekeError::RetimerFailed(s) if s.contains("jerk limit")),
+        "expected a jerk-limit error, got {err_off:?}"
+    );
 }

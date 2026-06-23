@@ -2,7 +2,8 @@ mod common;
 
 use std::time::Duration;
 
-use deke_linear::{FollowConfig, JointLimits, LinearFollower, RedundantAxis, RedundantOptions};
+use common::Cfg;
+use deke_linear::{JointLimits, RedundantAxis, RedundantOptions};
 use deke_types::FKChain;
 use deke_types::glam::DVec3;
 
@@ -13,7 +14,7 @@ fn redundant_follow_resolves_yaw_and_runs() {
     let robot = common::ur();
     let poses = common::straight(&robot, DVec3::X, 0.10, 4);
 
-    let cfg = FollowConfig::weld(
+    let cfg = Cfg::weld(
         35.0,
         JointLimits::symmetric(2.0, 8.0, 80.0),
         Duration::from_millis(8),
@@ -25,9 +26,7 @@ fn redundant_follow_resolves_yaw_and_runs() {
         ..RedundantOptions::default()
     });
 
-    let follower = LinearFollower::new(&robot);
-    let (traj, diag) = follower
-        .follow(&poses, &cfg, &common::noop(), &())
+    let (traj, diag) = common::follow(&robot, &poses, &cfg, &common::noop(), &())
         .expect("redundant follow failed");
 
     assert_eq!(diag.redundant.len(), 1, "one run, one redundant report");
@@ -65,24 +64,31 @@ fn axis_choice_changes_the_solution() {
     let robot = common::ur();
     let poses = common::straight(&robot, DVec3::Y, 0.08, 3);
     let joint = JointLimits::symmetric(2.0, 8.0, 80.0);
-    let follower = LinearFollower::new(&robot);
 
     let base = |axis| {
-        FollowConfig::weld(30.0, joint.clone(), Duration::from_millis(8)).with_redundancy(
-            RedundantOptions {
-                axis,
-                yaw_samples: 16,
-                ..RedundantOptions::default()
-            },
-        )
+        Cfg::weld(30.0, joint.clone(), Duration::from_millis(8)).with_redundancy(RedundantOptions {
+            axis,
+            yaw_samples: 16,
+            ..RedundantOptions::default()
+        })
     };
 
-    let (tz, _) = follower
-        .follow(&poses, &base(RedundantAxis::PosZ), &common::noop(), &())
-        .unwrap();
-    let (tx, _) = follower
-        .follow(&poses, &base(RedundantAxis::PosX), &common::noop(), &())
-        .unwrap();
+    let (tz, _) = common::follow(
+        &robot,
+        &poses,
+        &base(RedundantAxis::PosZ),
+        &common::noop(),
+        &(),
+    )
+    .unwrap();
+    let (tx, _) = common::follow(
+        &robot,
+        &poses,
+        &base(RedundantAxis::PosX),
+        &common::noop(),
+        &(),
+    )
+    .unwrap();
 
     // Same first TCP position regardless of which axis is free.
     let pz = robot.fk_end(&tz.path()[0]).unwrap().translation;

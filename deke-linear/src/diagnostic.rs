@@ -27,6 +27,13 @@ pub struct LinearRetimerDiagnostic {
     pub arc_length: f64,
     pub commanded_speed: f64,
     pub peak_speed: f64,
+    /// Peak continuous per-joint acceleration `|q'·a + q''·v²|` over the run.
+    pub peak_joint_accel: f64,
+    /// Peak continuous per-joint jerk `|q'·j_s + 3·q''·a·v + q'''·v³|` over the
+    /// run. Bounded by the joint jerk limit by construction (the FD third
+    /// difference of the dt-sampled output can read higher at the jerk steps a
+    /// jerk-limited profile necessarily takes).
+    pub peak_joint_jerk: f64,
 }
 
 impl fmt::Display for LinearRetimerDiagnostic {
@@ -61,29 +68,6 @@ impl fmt::Display for RedundantDiagnostic {
             self.min_manipulability,
             self.yaw_range.0.to_degrees(),
             self.yaw_range.1.to_degrees()
-        )
-    }
-}
-
-/// Whole-path follow outcome (one entry per run).
-#[derive(Clone, Debug, Default)]
-pub struct LinearFollowDiagnostic {
-    pub runs: usize,
-    pub planner: Vec<LinearPlannerDiagnostic>,
-    pub redundant: Vec<RedundantDiagnostic>,
-    pub retimer: Vec<LinearRetimerDiagnostic>,
-    pub total_samples: usize,
-    pub total_duration: Duration,
-}
-
-impl fmt::Display for LinearFollowDiagnostic {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "follow: {} run(s), {} samples, {:.3}s total",
-            self.runs,
-            self.total_samples,
-            self.total_duration.as_secs_f64()
         )
     }
 }

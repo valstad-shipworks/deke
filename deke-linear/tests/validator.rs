@@ -2,9 +2,8 @@ mod common;
 
 use std::time::Duration;
 
-use deke_linear::{
-    FollowConfig, JointLimits, LinearError, LinearFollower, RedundantAxis, RedundantOptions,
-};
+use common::Cfg;
+use deke_linear::{JointLimits, RedundantAxis, RedundantOptions};
 use deke_types::glam::DVec3;
 use deke_types::{DekeError, DekeResult, SRobotQ, SRobotQLike, Validator};
 
@@ -71,20 +70,17 @@ impl Validator<6, (), f64> for RejectBand {
 fn reject_all_obstructs_both_planners() {
     let robot = common::ur();
     let poses = common::straight(&robot, DVec3::X, 0.05, 3);
-    let follower = LinearFollower::new(&robot);
     let cfg = common::config(0.04);
     let cfg_red = cfg.clone().with_redundancy(RedundantOptions::default());
 
-    let e_fixed = follower.follow(&poses, &cfg, &RejectAll, &()).unwrap_err();
+    let e_fixed = common::follow(&robot, &poses, &cfg, &RejectAll, &()).unwrap_err();
     assert!(
-        matches!(e_fixed, LinearError::Obstructed { .. }),
+        matches!(&e_fixed, DekeError::RetimerFailed(s) if s.contains("obstructed")),
         "fixed: {e_fixed:?}"
     );
-    let e_red = follower
-        .follow(&poses, &cfg_red, &RejectAll, &())
-        .unwrap_err();
+    let e_red = common::follow(&robot, &poses, &cfg_red, &RejectAll, &()).unwrap_err();
     assert!(
-        matches!(e_red, LinearError::Obstructed { .. }),
+        matches!(&e_red, DekeError::RetimerFailed(s) if s.contains("obstructed")),
         "redundant: {e_red:?}"
     );
 }
@@ -93,8 +89,7 @@ fn reject_all_obstructs_both_planners() {
 fn redundant_planner_rotates_yaw_around_an_obstacle() {
     let robot = common::ur();
     let poses = common::straight(&robot, DVec3::X, 0.05, 3);
-    let follower = LinearFollower::new(&robot);
-    let cfg = FollowConfig::weld(
+    let cfg = Cfg::weld(
         30.0,
         JointLimits::symmetric(2.0, 8.0, 80.0),
         Duration::from_millis(8),
@@ -106,9 +101,8 @@ fn redundant_planner_rotates_yaw_around_an_obstacle() {
     });
 
     // Baseline (no obstacle): record the wrist-roll value the planner settles on.
-    let (traj0, _) = follower
-        .follow(&poses, &cfg, &common::noop(), &())
-        .expect("noop follow");
+    let (traj0, _) =
+        common::follow(&robot, &poses, &cfg, &common::noop(), &()).expect("noop follow");
     let mid = traj0.path().len() / 2;
     let center = traj0.path()[mid].0[5];
 
@@ -123,8 +117,7 @@ fn redundant_planner_rotates_yaw_around_an_obstacle() {
     assert!(obstacle.validate_motion(&baseline, &()).is_err());
 
     // With the obstacle, the free yaw must rotate the arm to a config outside it.
-    let (traj1, diag) = follower
-        .follow(&poses, &cfg, &obstacle, &())
+    let (traj1, diag) = common::follow(&robot, &poses, &cfg, &obstacle, &())
         .expect("free yaw should route around the obstacle");
     for q in traj1.path().iter() {
         assert!(

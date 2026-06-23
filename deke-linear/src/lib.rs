@@ -15,44 +15,51 @@
 //!   v/a/j limits allow and dips smoothly where they don't
 //!   ([`ConstantSpeedRetimer`], implements [`deke_types::Retimer`]).
 //!
-//! [`LinearFollower`] runs all three and stitches the per-run trajectories.
+//! Each stage is a standalone, trait-conforming component; the caller drives
+//! them. [`condition`] splits the polyline into runs, then for each run the
+//! [`CartesianLinearPlanner`] resolves a joint path and the
+//! [`ConstantSpeedRetimer`] times it:
 //!
 //! ```no_run
 //! # use deke_linear::*;
+//! # use deke_types::{Planner, Retimer};
 //! # use deke_types::glam::DAffine3;
 //! # fn run<FK: deke_types::ContinuousFKChain<6, f64> + deke_types::IkSolver<6, f64>>(
-//! #     fk: &FK, poses: &[DAffine3], cfg: &FollowConfig<6>) {
-//! let follower = LinearFollower::new(fk);
+//! #     fk: &FK, poses: &[DAffine3], cond: &PathConditioning,
+//! #     opts: &PlannerOptions<6>, cons: &LinearConstraints<6>) {
+//! let planner = CartesianLinearPlanner::new(fk);
+//! let retimer = ConstantSpeedRetimer::new(fk);
 //! // `NoopValidator` plans without obstacle checks; pass a real `Validator`
 //! // (and its context) to route the arm around obstacles inside the planner.
-//! let (traj, diag) = follower.follow(poses, cfg, &NoopValidator::<6>, &()).unwrap();
-//! # let _ = (traj, diag);
+//! for run in condition(poses, cond).unwrap() {
+//!     let (path, _) = planner.plan::<deke_types::DekeError, _>(opts, &run, &NoopValidator::<6>, &());
+//!     let (traj, _) = retimer.retime(cons, &path.unwrap(), &NoopValidator::<6>, &());
+//!     let _ = traj;
+//! }
 //! # }
 //! ```
 //!
-//! For a symmetric welding torch, declare the free tool-axis on
-//! [`FollowConfig::redundant`] and the [`RedundantLinearPlanner`] resolves the yaw
-//! globally to dodge singularities — and, with a real `Validator`, obstacles.
+//! For a symmetric welding torch, the [`RedundantLinearPlanner`] treats the free
+//! tool-axis yaw as a DOF and resolves it globally to dodge singularities — and,
+//! with a real `Validator`, obstacles.
 
 pub mod constraints;
 pub mod diagnostic;
 pub mod error;
-pub mod follower;
 pub mod path;
 pub mod planner;
 pub mod redundant;
 pub mod retimer;
 mod util;
+mod validator;
 
 pub use constraints::{
-    FollowConfig, JointLimits, LinearConstraints, PathConditioning, PlannerOptions,
+    JointLimits, LinearConstraints, PathConditioning, PlannerOptions, TcpLimits,
 };
-pub use diagnostic::{
-    LinearFollowDiagnostic, LinearPlannerDiagnostic, LinearRetimerDiagnostic, RedundantDiagnostic,
-};
+pub use diagnostic::{LinearPlannerDiagnostic, LinearRetimerDiagnostic, RedundantDiagnostic};
 pub use error::LinearError;
-pub use follower::{LinearFollower, NoopValidator};
 pub use path::{CartesianRun, condition};
 pub use planner::CartesianLinearPlanner;
-pub use redundant::{RedundantAxis, RedundantLinearPlanner, RedundantOptions};
+pub use redundant::{RedundantAxis, RedundantConfig, RedundantLinearPlanner, RedundantOptions};
 pub use retimer::ConstantSpeedRetimer;
+pub use validator::NoopValidator;

@@ -1,17 +1,13 @@
 mod common;
 
-use deke_linear::LinearFollower;
-
 #[test]
 fn shallow_corner_stays_one_run_and_keeps_moving() {
     let robot = common::ur();
     let poses = common::corner(&robot, 0.06, 20f64.to_radians(), 4);
     let cfg = common::config(0.04);
 
-    let follower = LinearFollower::new(&robot);
-    let (traj, diag) = follower
-        .follow(&poses, &cfg, &common::noop(), &())
-        .expect("follow failed");
+    let (traj, diag) =
+        common::follow(&robot, &poses, &cfg, &common::noop(), &()).expect("follow failed");
 
     assert_eq!(
         diag.runs, 1,
@@ -42,10 +38,8 @@ fn sharp_corner_splits_and_stops_at_the_vertex() {
     let poses = common::corner(&robot, 0.06, 90f64.to_radians(), 4);
     let cfg = common::config(0.04);
 
-    let follower = LinearFollower::new(&robot);
-    let (traj, diag) = follower
-        .follow(&poses, &cfg, &common::noop(), &())
-        .expect("follow failed");
+    let (traj, diag) =
+        common::follow(&robot, &poses, &cfg, &common::noop(), &()).expect("follow failed");
 
     assert_eq!(diag.runs, 2, "a 90° corner is sharp → two runs");
 

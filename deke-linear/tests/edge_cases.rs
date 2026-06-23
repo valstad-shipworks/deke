@@ -1,6 +1,6 @@
 mod common;
 
-use deke_linear::{LinearError, LinearFollower};
+use deke_types::DekeError;
 use deke_types::glam::{DAffine3, DVec3};
 
 #[test]
@@ -20,13 +20,13 @@ fn unreachable_pose_reports_clearly() {
         })
         .collect();
 
-    let follower = LinearFollower::new(&robot);
-    let err = follower
-        .follow(&poses, &common::config(0.05), &common::noop(), &())
-        .unwrap_err();
+    let err =
+        common::follow(&robot, &poses, &common::config(0.05), &common::noop(), &()).unwrap_err();
+    // The structured `LinearError::Unreachable` is collapsed to `DekeError` as it
+    // crosses the `Planner` trait boundary; the descriptive message survives.
     assert!(
-        matches!(err, LinearError::Unreachable { .. }),
-        "expected Unreachable, got {err:?}"
+        matches!(&err, DekeError::RetimerFailed(s) if s.contains("reachable")),
+        "expected unreachable, got {err:?}"
     );
 }
 
@@ -37,9 +37,10 @@ fn too_few_poses_is_rejected() {
         use deke_types::FKChain;
         robot.fk_end(&common::anchor()).unwrap()
     };
-    let follower = LinearFollower::new(&robot);
-    let err = follower
-        .follow(&[base], &common::config(0.05), &common::noop(), &())
-        .unwrap_err();
-    assert!(matches!(err, LinearError::TooFewPoses(1)));
+    let err =
+        common::follow(&robot, &[base], &common::config(0.05), &common::noop(), &()).unwrap_err();
+    assert!(
+        matches!(&err, DekeError::RetimerFailed(s) if s.contains("at least 2")),
+        "expected too-few-poses, got {err:?}"
+    );
 }

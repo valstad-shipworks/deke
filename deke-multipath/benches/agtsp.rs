@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
-use deke_multipath::{MultiPathSettings, ReqPath, TransitionCost, plan_multipath_straight};
+use deke_multipath::{MultiPathSettings, ReqPath, plan_multipath_straight, weighted_euclidean};
 use deke_types::{DekeError, DekeResult, SRobotPath, SRobotQ, SRobotQLike, Validator};
 
 #[derive(Clone, Debug)]
@@ -70,7 +70,7 @@ fn bench(c: &mut Criterion) {
         for &opts in &[1usize, 2, 4] {
             let req = build_reqpaths(clusters, opts);
             let settings = MultiPathSettings::new(start);
-            let cost = TransitionCost::JointWeighted(weights);
+            let cost = weighted_euclidean(weights);
             group.bench_with_input(
                 BenchmarkId::from_parameter(format!("c{clusters}_k{opts}")),
                 &(),
@@ -120,7 +120,7 @@ fn bench_rrt_connectors(c: &mut Criterion) {
     for &clusters in &[8usize, 14] {
         let req = build_reqpaths(clusters, 1);
         let settings = MultiPathSettings::new(start);
-        let cost = TransitionCost::JointWeighted(weights);
+        let cost = weighted_euclidean(weights);
         let transition = TransitionPlanner {
             planner: &planner,
             config: &config,

@@ -8,7 +8,10 @@
 //! manipulability term steers away from singular configurations and an edge term
 //! penalises joint motion while rejecting discontinuous wrist flips.
 
-use deke_types::{ContinuousFKChain, IkOutcome, IkSolver, SRobotPath, SRobotQ, Validator};
+use deke_types::{
+    ContinuousFKChain, DekeError, DekeResult, IkOutcome, IkSolver, Planner, SRobotPath, SRobotQ,
+    Validator,
+};
 
 use crate::constraints::PlannerOptions;
 use crate::diagnostic::LinearPlannerDiagnostic;
@@ -38,7 +41,7 @@ where
     /// `seed` anchors the first sample to a configuration the run must continue
     /// from (the previous run's final pose), so stitched runs stay continuous in
     /// joint space across a corner.
-    pub fn plan_run<V: Validator<N, (), f64>>(
+    pub(crate) fn plan_run<V: Validator<N, (), f64>>(
         &self,
         run: &CartesianRun,
         opts: &PlannerOptions<N>,
@@ -123,6 +126,35 @@ where
                 total_cost: total,
             },
         ))
+    }
+}
+
+impl<'a, const N: usize, FK> Planner<N, f64> for CartesianLinearPlanner<'a, N, FK>
+where
+    FK: ContinuousFKChain<N, f64> + IkSolver<N, f64>,
+{
+    type Diagnostic = LinearPlannerDiagnostic;
+    type Config = PlannerOptions<N>;
+    type Waypoints = CartesianRun;
+
+    fn plan<E: Into<DekeError>, V: Validator<N, (), f64>>(
+        &self,
+        config: &Self::Config,
+        waypoints: &Self::Waypoints,
+        validator: &V,
+        ctx: &V::Context<'_>,
+    ) -> (DekeResult<SRobotPath<N, f64>>, Self::Diagnostic) {
+        match self.plan_run(waypoints, config, validator, ctx, None, 0) {
+            Ok((path, diag)) => (Ok(path), diag),
+            Err(e) => (
+                Err(e.into()),
+                LinearPlannerDiagnostic {
+                    samples: 0,
+                    min_manipulability: 0.0,
+                    total_cost: f64::INFINITY,
+                },
+            ),
+        }
     }
 }
 

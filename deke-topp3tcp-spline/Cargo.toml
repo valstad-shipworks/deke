@@ -13,3 +13,4 @@ thiserror = "2.0.18"
 
 [dev-dependencies]
 deke-kin = { version = "2.0", path = "../deke-kin" }
+deke-rrt = { path = "../deke-rrt" }
