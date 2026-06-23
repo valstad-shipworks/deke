@@ -27,6 +27,13 @@ pub struct LinearRetimerDiagnostic {
     pub arc_length: f64,
     pub commanded_speed: f64,
     pub peak_speed: f64,
+    /// Peak continuous per-joint acceleration `|q'·a + q''·v²|` over the run.
+    pub peak_joint_accel: f64,
+    /// Peak continuous per-joint jerk `|q'·j_s + 3·q''·a·v + q'''·v³|` over the
+    /// run. Bounded by the joint jerk limit by construction (the FD third
+    /// difference of the dt-sampled output can read higher at the jerk steps a
+    /// jerk-limited profile necessarily takes).
+    pub peak_joint_jerk: f64,
 }
 
 impl fmt::Display for LinearRetimerDiagnostic {

@@ -21,6 +21,40 @@ impl<const N: usize> JointLimits<N> {
     }
 }
 
+/// Cartesian TCP motion limits along the path tangent. The commanded `speed` is
+/// always set; `accel` and `jerk` are optional caps on the tangential `s̈`/`s⃛`
+/// of the tool centre point. `None` leaves a quantity bounded only by what the
+/// per-joint limits permit through the path curvature.
+#[derive(Clone, Copy, Debug)]
+pub struct TcpLimits {
+    /// Commanded constant TCP linear speed (m/s), held wherever feasible.
+    pub speed: f64,
+    /// Optional cap on tangential TCP acceleration (m/s²).
+    pub accel: Option<f64>,
+    /// Optional cap on tangential TCP jerk (m/s³).
+    pub jerk: Option<f64>,
+}
+
+impl TcpLimits {
+    /// Speed-only limits — acceleration and jerk are left to the joint ceilings.
+    pub fn speed(speed: f64) -> Self {
+        Self {
+            speed,
+            accel: None,
+            jerk: None,
+        }
+    }
+
+    /// Speed plus explicit tangential acceleration and jerk caps.
+    pub fn new(speed: f64, accel: f64, jerk: f64) -> Self {
+        Self {
+            speed,
+            accel: Some(accel),
+            jerk: Some(jerk),
+        }
+    }
+}
+
 /// How the raw Cartesian polyline is conditioned into smooth, arc-length runs.
 #[derive(Clone, Debug)]
 pub struct PathConditioning {
@@ -78,15 +112,25 @@ impl<const N: usize> Default for PlannerOptions<N> {
 #[derive(Clone, Debug)]
 pub struct LinearConstraints<const N: usize> {
     pub joint: JointLimits<N>,
-    /// Commanded constant TCP linear speed (m/s), held wherever feasible.
-    pub tcp_speed: f64,
+    /// Cartesian TCP limits: commanded `speed` plus optional tangential
+    /// acceleration and jerk caps (see [`TcpLimits`]).
+    pub tcp: TcpLimits,
     /// Output trajectory sample period.
     pub output_dt: Duration,
-    /// When `true`, the speed may only fall below `tcp_speed` during the rest
+    /// When `true`, the speed may only fall below the commanded `tcp.speed` during the rest
     /// ramp at the start and end of each run. If the joint v/a/j geometry would
     /// force a dip anywhere in a run's interior (a shallow corner or a
     /// near-singular patch), the retime fails with [`crate::LinearError::SpeedDipRequired`]
     /// instead of slowing down. Sharp corners are unaffected — they are already
     /// split into separate runs whose endpoints are legitimate stops.
     pub forbid_interior_dips: bool,
+    /// Optional joint-space chord-length spacing for natural-cubic-spline corner
+    /// smoothing of each run before retiming. `None` keeps the raw piecewise-
+    /// linear path (sharp knot corners → unbounded joint jerk on coarse inputs).
+    /// `Some(res)` interpolates the waypoints with a C² spline (zero deviation
+    /// at the waypoints) and resamples it at `res`, so the executed path has
+    /// continuous curvature and bounded joint jerk. Sharp corners are still
+    /// split into separate runs upstream, so this only rounds the coarse-
+    /// sampling artifacts of an otherwise smooth run.
+    pub corner_smoothing: Option<f64>,
 }

@@ -7,7 +7,8 @@ use deke_kin::{DHJoint, JointLimits as KinJointLimits, Kinematics};
 use deke_linear::{
     CartesianLinearPlanner, ConstantSpeedRetimer, JointLimits, LinearConstraints,
     LinearPlannerDiagnostic, LinearRetimerDiagnostic, PathConditioning, PlannerOptions,
-    RedundantConfig, RedundantDiagnostic, RedundantLinearPlanner, RedundantOptions, condition,
+    RedundantConfig, RedundantDiagnostic, RedundantLinearPlanner, RedundantOptions, TcpLimits,
+    condition,
 };
 use deke_types::glam::{DAffine3, DMat3, DVec3};
 use deke_types::{DekeError, FKChain, Planner, Retimer, SRobotPath, SRobotQ, SRobotTraj, Validator};
@@ -42,9 +43,10 @@ impl Cfg {
             redundant: None,
             constraints: LinearConstraints {
                 joint,
-                tcp_speed,
+                tcp: TcpLimits::speed(tcp_speed),
                 output_dt,
                 forbid_interior_dips: false,
+                corner_smoothing: Some(0.01),
             },
         }
     }
@@ -160,9 +162,10 @@ pub fn config_flag(tcp_speed: f64, forbid_interior_dips: bool) -> Cfg {
         redundant: None,
         constraints: LinearConstraints {
             joint: JointLimits::symmetric(2.0, 8.0, 80.0),
-            tcp_speed,
+            tcp: TcpLimits::speed(tcp_speed),
             output_dt: Duration::from_millis(8),
             forbid_interior_dips,
+            corner_smoothing: Some(0.01),
         },
     }
 }
@@ -253,4 +256,70 @@ pub fn joint_acc_peak(traj: &SRobotTraj<6, f64>) -> f64 {
 #[allow(dead_code)]
 pub fn identity_rot() -> DMat3 {
     DMat3::IDENTITY
+}
+
+/// Deterministic SplitMix64 PRNG so fuzz cases are reproducible from a seed.
+pub struct Rng(u64);
+
+impl Rng {
+    pub fn new(seed: u64) -> Self {
+        Self(seed)
+    }
+    fn next_u64(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+    /// Uniform in `[0, 1)`.
+    pub fn unit(&mut self) -> f64 {
+        (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64
+    }
+    /// Uniform in `[lo, hi)`.
+    pub fn range(&mut self, lo: f64, hi: f64) -> f64 {
+        lo + (hi - lo) * self.unit()
+    }
+    /// Uniform integer in `[lo, hi]`.
+    pub fn int(&mut self, lo: usize, hi: usize) -> usize {
+        lo + (self.next_u64() as usize) % (hi - lo + 1)
+    }
+    /// A random unit direction, rejection-sampled away from the origin.
+    pub fn unit_dir(&mut self) -> DVec3 {
+        loop {
+            let v = DVec3::new(
+                self.range(-1.0, 1.0),
+                self.range(-1.0, 1.0),
+                self.range(-1.0, 1.0),
+            );
+            if v.length() > 0.2 {
+                return v.normalize();
+            }
+        }
+    }
+}
+
+fn point_segment_distance(p: DVec3, a: DVec3, b: DVec3) -> f64 {
+    let ab = b - a;
+    let t = ((p - a).dot(ab) / ab.length_squared().max(1e-18)).clamp(0.0, 1.0);
+    (p - (a + ab * t)).length()
+}
+
+/// Worst-case Cartesian distance (metres) from any output TCP sample to the
+/// commanded pose polyline — the path-fidelity error of the executed weld.
+pub fn tcp_polyline_deviation(
+    robot: &Kinematics<6, f64>,
+    traj: &SRobotTraj<6, f64>,
+    poses: &[DAffine3],
+) -> f64 {
+    let line: Vec<DVec3> = poses.iter().map(|p| p.translation).collect();
+    let path = traj.path();
+    (0..path.len())
+        .map(|i| {
+            let pt = robot.fk_end(&path[i]).unwrap().translation;
+            (0..line.len() - 1)
+                .map(|s| point_segment_distance(pt, line[s], line[s + 1]))
+                .fold(f64::INFINITY, f64::min)
+        })
+        .fold(0.0, f64::max)
 }

@@ -5,7 +5,7 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use deke_kin::{DHJoint, JointLimits as KinJointLimits, Kinematics};
 use deke_linear::{
     CartesianLinearPlanner, CartesianRun, ConstantSpeedRetimer, JointLimits, LinearConstraints,
-    NoopValidator, PathConditioning, PlannerOptions, condition,
+    NoopValidator, PathConditioning, PlannerOptions, TcpLimits, condition,
 };
 use deke_types::glam::{DAffine3, DVec3};
 use deke_types::{DekeError, FKChain, Planner, Retimer, SRobotPath, SRobotQ};
@@ -61,9 +61,10 @@ fn opts() -> PlannerOptions<6> {
 fn constraints() -> LinearConstraints<6> {
     LinearConstraints {
         joint: JointLimits::symmetric(2.0, 8.0, 80.0),
-        tcp_speed: 35.0 * 0.0254 / 60.0,
+        tcp: TcpLimits::speed(35.0 * 0.0254 / 60.0),
         output_dt: Duration::from_millis(8),
         forbid_interior_dips: false,
+        corner_smoothing: Some(0.01),
     }
 }
 

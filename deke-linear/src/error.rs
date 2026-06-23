@@ -28,6 +28,18 @@ pub enum LinearError {
         feasible_speed: f64,
         commanded: f64,
     },
+    #[error(
+        "run {run}: cannot keep joint {joint} under its {kind} limit at arc length {s:.4} m ({value:.3} > {limit:.3}) — the joint path is too curved here for the commanded speed; smooth the path or lower the speed"
+    )]
+    LimitExceeded {
+        run: usize,
+        s: f64,
+        joint: usize,
+        /// `"velocity"`, `"acceleration"`, or `"jerk"`.
+        kind: &'static str,
+        value: f64,
+        limit: f64,
+    },
     #[error(transparent)]
     Deke(#[from] DekeError),
 }

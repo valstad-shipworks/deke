@@ -53,7 +53,9 @@ pub mod retimer;
 mod util;
 mod validator;
 
-pub use constraints::{JointLimits, LinearConstraints, PathConditioning, PlannerOptions};
+pub use constraints::{
+    JointLimits, LinearConstraints, PathConditioning, PlannerOptions, TcpLimits,
+};
 pub use diagnostic::{LinearPlannerDiagnostic, LinearRetimerDiagnostic, RedundantDiagnostic};
 pub use error::LinearError;
 pub use path::{CartesianRun, condition};
