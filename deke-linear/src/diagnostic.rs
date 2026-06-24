@@ -71,3 +71,22 @@ impl fmt::Display for RedundantDiagnostic {
         )
     }
 }
+
+/// Outcome of the rail-axis redundancy plan over one run.
+#[derive(Clone, Debug)]
+pub struct RailDiagnostic {
+    pub samples: usize,
+    pub min_manipulability: f64,
+    /// (min, max) resolved rail position along the rail axis, metres.
+    pub rail_range: (f64, f64),
+}
+
+impl fmt::Display for RailDiagnostic {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "rail: {} samples, min manipulability {:.3e}, x ∈ [{:.3} m, {:.3} m]",
+            self.samples, self.min_manipulability, self.rail_range.0, self.rail_range.1
+        )
+    }
+}

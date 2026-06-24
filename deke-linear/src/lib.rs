@@ -42,12 +42,19 @@
 //! For a symmetric welding torch, the [`RedundantLinearPlanner`] treats the free
 //! tool-axis yaw as a DOF and resolves it globally to dodge singularities — and,
 //! with a real `Validator`, obstacles.
+//!
+//! For an arm on a linear rail (a 7th external axis), the [`RailLinearPlanner`]
+//! treats the prismatic rail position as a smooth redundant DOF, resolves it
+//! globally, and emits a rail-first `q = [x_rail, q_arm…]` path that flows
+//! through the same [`ConstantSpeedRetimer`] via the seven-DOF
+//! [`RailMountedChain`]. [`RailYawPlanner`] composes the rail with the tool yaw.
 
 pub mod constraints;
 pub mod diagnostic;
 pub mod error;
 pub mod path;
 pub mod planner;
+pub mod rail;
 pub mod redundant;
 pub mod retimer;
 mod util;
@@ -56,10 +63,16 @@ mod validator;
 pub use constraints::{
     JointLimits, LinearConstraints, PathConditioning, PlannerOptions, TcpLimits,
 };
-pub use diagnostic::{LinearPlannerDiagnostic, LinearRetimerDiagnostic, RedundantDiagnostic};
+pub use diagnostic::{
+    LinearPlannerDiagnostic, LinearRetimerDiagnostic, RailDiagnostic, RedundantDiagnostic,
+};
 pub use error::LinearError;
 pub use path::{CartesianRun, condition};
 pub use planner::CartesianLinearPlanner;
+pub use rail::{
+    RailAxis, RailConfig, RailLinearPlanner, RailMountedChain, RailOptions, RailRefine,
+    RailYawConfig, RailYawPlanner,
+};
 pub use redundant::{RedundantAxis, RedundantConfig, RedundantLinearPlanner, RedundantOptions};
 pub use retimer::ConstantSpeedRetimer;
 pub use validator::NoopValidator;

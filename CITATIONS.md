@@ -194,7 +194,7 @@ Real-time Trajectory Generation with Arbitrary Target States" (arXiv:2105.04830,
 
 RRT-Connect:
 
-```
+```text
 J. J. Kuffner and S. M. LaValle. "RRT-Connect: An efficient approach to
 single-query path planning". In: IEEE International Conference on Robotics and
 Automation. Vol. 2. IEEE. 2000, pp. 995–1001.
@@ -397,3 +397,34 @@ Catmull–Rom spline:
   doi       = {10.1016/B978-0-12-079050-0.50020-5}
 }
 ```
+
+### Rail-axis (7th external axis) redundancy
+
+A 6-DOF arm on a prismatic linear rail (`src/rail.rs`) resolves the rail position
+as an *additional* smooth redundant DOF in the same global ladder DP, emitting a
+rail-first `q = [x_rail, q1..q6]`. The rail enters inverse kinematics as a
+base-frame shift — the world target is translated by `−x·â` and solved by the
+unchanged 6-DOF analytic IK — the standard coordinated external-axis / linear-track
+model. Resolving the rail (like the tool yaw) as a redundant DOF in the
+path-constrained DP follows the same Ferrentino et al. framework cited above.
+Treating a redundant external axis as a smooth function of the weld arc length,
+decoupled from the inner IK, follows recent welding work:
+
+> "An effective path planning approach for robot welding considering redundant
+> kinematics", *Robotics and Computer-Integrated Manufacturing* (2024),
+> <https://www.sciencedirect.com/science/article/abs/pii/S0141635924002356>.
+
+The rail position schedule `x(s)` is smoothed with the Fritsch–Carlson monotone
+PCHIP (cited under [deke-topp3tcp-nlp, deke-topp3tcp-spline](#deke-topp3tcp-nlp-deke-topp3tcp-spline))
+— monotone so the slow heavy axis never overshoots a sampled value. Resolving the
+rail *upstream* of the constant-feedrate retimer (rather than as a variable inside
+it) is required because inverse kinematics is nonlinear in the rail position, which
+would break the convexity the timing step relies on — the decoupling principle of
+the Verscheure et al. convex path-tracking formulation (cited under
+[deke-topp3tcp-nlp, deke-topp3tcp-spline](#deke-topp3tcp-nlp-deke-topp3tcp-spline)).
+
+The DP node cost scores the **arm's** 6-DOF Yoshikawa manipulability, not the
+augmented 7-DOF chain's: the rail's prismatic Jacobian column keeps `det(J·Jᵀ)`
+high even when the arm itself is singular, so an augmented measure masks arm
+singularities and the rail is never recruited to escape them. (Yoshikawa measure
+cited under [deke-kin](#deke-kin).)
