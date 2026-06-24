@@ -89,7 +89,10 @@ fn fd_peaks(traj: &SRobotTraj<7, f64>) -> FdPeaks {
     FdPeaks { v, a, j }
 }
 
-fn tcp_speeds(chain: &RailMountedChain<6, 7, Kinematics<6, f64>>, traj: &SRobotTraj<7, f64>) -> Vec<f64> {
+fn tcp_speeds(
+    chain: &RailMountedChain<6, 7, Kinematics<6, f64>>,
+    traj: &SRobotTraj<7, f64>,
+) -> Vec<f64> {
     let dt = traj.dt().as_secs_f64();
     let p = traj.path();
     (0..p.len().saturating_sub(1))
@@ -321,7 +324,16 @@ fn rail_matrix_weld_dir_x_rail_dir() {
 
     println!(
         "\n{:<7} {:<4} {:<4} {:<6} | {:>7} {:>7} {:>7} | {:>8} {:>8} | {:>9} {:>7} | note",
-        "refine", "weld", "rail", "pass", "v/lim", "a/lim", "j/lim", "tcp_a", "tcp_j", "cruise%",
+        "refine",
+        "weld",
+        "rail",
+        "pass",
+        "v/lim",
+        "a/lim",
+        "j/lim",
+        "tcp_a",
+        "tcp_j",
+        "cruise%",
         "dev_mm"
     );
     for r in &results {

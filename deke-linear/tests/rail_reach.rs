@@ -49,9 +49,11 @@ fn over_reach(speed: f64, output_dt: Duration) {
     // ordinary 6-DOF branch planner fails (the far end has no IK solution).
     let base = CartesianLinearPlanner::new(&arm);
     let bopts = PlannerOptions::<6>::default();
-    let base_ok = runs
-        .iter()
-        .all(|run| base.plan::<DekeError, _>(&bopts, run, &NoopValidator::<6>, &()).0.is_ok());
+    let base_ok = runs.iter().all(|run| {
+        base.plan::<DekeError, _>(&bopts, run, &NoopValidator::<6>, &())
+            .0
+            .is_ok()
+    });
     assert!(
         !base_ok,
         "expected the {len:.2} m seam to exceed the fixed-base reach (~{reach:.2} m upper bound)"
@@ -127,14 +129,20 @@ fn over_reach(speed: f64, output_dt: Duration) {
     for i in 2..p.len() {
         for j in 0..7 {
             let a = (p[i].0[j] - 2.0 * p[i - 1].0[j] + p[i - 2].0[j]).abs() / (dt * dt);
-            assert!(a <= lim.a_max.0[j] * eps, "accel over limit on joint {j} at {speed} m/s");
+            assert!(
+                a <= lim.a_max.0[j] * eps,
+                "accel over limit on joint {j} at {speed} m/s"
+            );
         }
     }
     for i in 3..p.len() {
         for j in 0..7 {
             let jk = (p[i].0[j] - 3.0 * p[i - 1].0[j] + 3.0 * p[i - 2].0[j] - p[i - 3].0[j]).abs()
                 / (dt * dt * dt);
-            assert!(jk <= lim.j_max.0[j] * eps, "jerk over limit on joint {j} at {speed} m/s");
+            assert!(
+                jk <= lim.j_max.0[j] * eps,
+                "jerk over limit on joint {j} at {speed} m/s"
+            );
         }
     }
 
@@ -149,7 +157,10 @@ fn over_reach(speed: f64, output_dt: Duration) {
     let p0 = chain.fk_end(&p[0]).unwrap().translation;
     let pn = chain.fk_end(&p[p.len() - 1]).unwrap().translation;
     let span = (pn - p0).length();
-    assert!(span > len - 0.02, "TCP spanned {span:.3} m of the {len:.2} m seam");
+    assert!(
+        span > len - 0.02,
+        "TCP spanned {span:.3} m of the {len:.2} m seam"
+    );
 
     let line: Vec<DVec3> = poses.iter().map(|q| q.translation).collect();
     let max_dev = (0..p.len())
@@ -160,7 +171,11 @@ fn over_reach(speed: f64, output_dt: Duration) {
                 .fold(f64::INFINITY, f64::min)
         })
         .fold(0.0, f64::max);
-    assert!(max_dev < 2e-3, "max deviation {:.4} mm at {speed} m/s", max_dev * 1e3);
+    assert!(
+        max_dev < 2e-3,
+        "max deviation {:.4} mm at {speed} m/s",
+        max_dev * 1e3
+    );
 
     println!(
         "{speed:.4} m/s: seam {len:.2} m > reach ~{reach:.2} m, rail travelled {travel:.3} m, TCP span {span:.3} m, dev {:.4} mm",

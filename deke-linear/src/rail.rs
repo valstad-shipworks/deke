@@ -158,7 +158,9 @@ where
         let (x, arm_q) = Self::split(q);
         let t = self.rail_tf(x);
         let af = self.arm.fk(&arm_q)?;
-        Ok(std::array::from_fn(|i| if i == 0 { t } else { t * af[i - 1] }))
+        Ok(std::array::from_fn(
+            |i| if i == 0 { t } else { t * af[i - 1] },
+        ))
     }
 
     fn ee_tf(&self) -> DAffine3 {
@@ -232,8 +234,9 @@ where
         let length = run.length();
         let n_dp = ((length / rail.dp_ds).ceil() as usize).max(1) + 1;
 
-        let stations =
-            self.build_stations(run, rail, planner, axis, length, n_dp, validator, ctx, run_idx)?;
+        let stations = self.build_stations(
+            run, rail, planner, axis, length, n_dp, validator, ctx, run_idx,
+        )?;
 
         let (coarse_s, coarse_x) = solve_global(&stations, rail, planner, length, n_dp)
             .ok_or(LinearError::NoContinuousTrack { run: run_idx })?;
@@ -294,10 +297,8 @@ where
             let mut had_ik = false;
             for m in 0..samples {
                 let x = x_at(m);
-                let target = DAffine3::from_rotation_translation(
-                    ref_rot,
-                    ref_pose.translation - axis * x,
-                );
+                let target =
+                    DAffine3::from_rotation_translation(ref_rot, ref_pose.translation - axis * x);
                 if let IkOutcome::Solved(sols) = self.arm.ik(target)? {
                     had_ik |= !sols.is_empty();
                     for arm_q in sols {
@@ -387,8 +388,7 @@ where
             x_hi = x_hi.max(x);
             let ref_pose = run.eval(s);
             let rot = DQuat::from_mat3(&ref_pose.matrix3);
-            let target =
-                DAffine3::from_rotation_translation(rot, ref_pose.translation - axis * x);
+            let target = DAffine3::from_rotation_translation(rot, ref_pose.translation - axis * x);
             let raw = match self.arm.ik(target)? {
                 IkOutcome::Solved(sols) if !sols.is_empty() => sols,
                 _ => return Err(LinearError::Unreachable { run: run_idx, s }),
@@ -439,16 +439,15 @@ where
 
         // Remove the per-sample floating-point jitter of the independent analytic IK
         // solves (~1e-5 rad — sub-mm at the TCP, so well within path tolerance). A
-        // fast scan cubes that jitter into a spurious jerk spike; a narrow
-        // slope-preserving filter erases it while leaving the real joint motion.
-        let jwin = (0.003 / step.max(1e-9)).round() as usize;
-        if jwin >= 1 {
-            for j in 0..N {
-                let mut col: Vec<f64> = fine.iter().map(|q| q.0[j]).collect();
-                smooth_schedule(&mut col, jwin, 2);
-                for (q, &c) in fine.iter_mut().zip(col.iter()) {
-                    q.0[j] = c;
-                }
+        // fast scan cubes that jitter into a spurious jerk spike. The window is a
+        // *few samples* (jitter is per-sample noise), not a fixed distance: a wider
+        // window would also smooth genuine high-frequency joint motion such as a
+        // weave overlay, which must be preserved.
+        for j in 0..N {
+            let mut col: Vec<f64> = fine.iter().map(|q| q.0[j]).collect();
+            smooth_schedule(&mut col, 1, 2);
+            for (q, &c) in fine.iter_mut().zip(col.iter()) {
+                q.0[j] = c;
             }
         }
 
@@ -643,7 +642,9 @@ where
         run_idx: usize,
     ) -> Result<Vec<Vec<RailNode<N>>>, LinearError> {
         let inner = RailLinearPlanner::<A, N, ARM>::new(self.arm);
-        inner.build_stations(run, rail, planner, axis, length, n_dp, validator, ctx, run_idx)
+        inner.build_stations(
+            run, rail, planner, axis, length, n_dp, validator, ctx, run_idx,
+        )
     }
 }
 

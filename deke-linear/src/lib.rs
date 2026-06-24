@@ -48,6 +48,11 @@
 //! globally, and emits a rail-first `q = [x_rail, q_arm…]` path that flows
 //! through the same [`ConstantSpeedRetimer`] via the seven-DOF
 //! [`RailMountedChain`]. [`RailYawPlanner`] composes the rail with the tool yaw.
+//!
+//! To weave (torch oscillation), overlay a [`WeaveOptions`] on a run with
+//! [`CartesianRun::with_weave`] — a transverse sinusoid locked to seam arc length —
+//! and retime it at constant travel speed with
+//! [`ConstantSpeedRetimer::retime_weave`].
 
 pub mod constraints;
 pub mod diagnostic;
@@ -59,6 +64,7 @@ pub mod redundant;
 pub mod retimer;
 mod util;
 mod validator;
+pub mod weave;
 
 pub use constraints::{
     JointLimits, LinearConstraints, PathConditioning, PlannerOptions, TcpLimits,
@@ -76,3 +82,4 @@ pub use rail::{
 pub use redundant::{RedundantAxis, RedundantConfig, RedundantLinearPlanner, RedundantOptions};
 pub use retimer::ConstantSpeedRetimer;
 pub use validator::NoopValidator;
+pub use weave::{WeaveOptions, WeavePattern};
