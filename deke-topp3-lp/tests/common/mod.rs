@@ -84,6 +84,52 @@ pub fn dh_7dof_prismatic() -> Kinematics<7, f64> {
     Kinematics::from_kinspec(spec, JointLimits::symmetric(10.0), &[])
 }
 
+/// A real production 7-DOF RTU chain (prismatic rail at q[0], metres, carrying a
+/// 6-DOF arm), KinSpec extracted from orchestra's `nanopanel-material` handler.
+/// Used by the long-chord TCP-cap regression / perf tests because its arm has a
+/// large TCP Jacobian gain on the shoulder joints, which is what surfaces the
+/// per-segment kappa under-estimate (see `docs/FUTURE.md`). The synthetic
+/// `dh_7dof_prismatic` UR5 arm does not reproduce it.
+pub fn material_7dof() -> Kinematics<7, f64> {
+    let base = DAffine3::from_cols_array(&[
+        1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, -2.3285, -0.2049, -0.5005,
+    ]);
+    let rev = |c: &[f64; 12]| {
+        (
+            DAffine3::from_cols_array(c),
+            JointSpec::Revolute { axis_local: DVec3::Z },
+        )
+    };
+    let joints: [(DAffine3, JointSpec<f64>); 7] = [
+        (
+            DAffine3::from_cols_array(&[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
+            JointSpec::Prismatic { axis_local: DVec3::X },
+        ),
+        rev(&[-0.000003673, 1.0, 0.0, -1.0, -0.000003673, 0.0, 0.0, 0.0, 1.0, 0.315, -0.412, 0.8335]),
+        rev(&[1.0, 0.0, 0.0, 0.0, -0.000003673, -1.0, 0.0, 1.0, -0.000003673, 0.312, 0.108, 0.4095]),
+        rev(&[1.0, 0.0, 0.0, 0.0, -1.0, 0.000002654, 0.0, -0.000002654, -1.0, 0.0, -1.075, 0.0565]),
+        rev(&[-0.000003673, 0.0, -1.0, 0.000002654, -1.0, 0.0, -1.0, -0.000002654, 0.000003673, 1.0146, 0.225, 0.1645]),
+        rev(&[-0.000003673, 0.0, -1.0, -0.000002654, -1.0, 0.0, -1.0, 0.000002654, 0.000003673, -0.0664, 0.0, -0.2654]),
+        rev(&[-0.000003673, 0.0, -1.0, 0.000002654, -1.0, 0.0, -1.0, -0.000002654, 0.000003673, 0.1814, 0.0, -0.0664]),
+    ];
+    let end = DAffine3::from_cols_array(&[
+        0.0, -1.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, -0.0586,
+    ]);
+    Kinematics::from_kinspec(KinSpec::new(base, joints, end), JointLimits::symmetric(100.0), &[])
+}
+
+/// Two real `nanopanel-material` transitions that exercise the long-chord TCP cap:
+/// each is a single 2-waypoint chord that slides the rail (metres) and reconfigures
+/// the arm a lot at once, so the TCP sweeps several metres.
+pub const MATERIAL_PATH_A: [[f64; 7]; 2] = [
+    [6.098, 0.518589, 0.522595, -0.086285, -0.001229, -0.965298, -0.511949],
+    [7.875, 1.170435, 1.205216, 0.407282, 0.538306, 0.871359, -0.362264],
+];
+pub const MATERIAL_PATH_B: [[f64; 7]; 2] = [
+    [7.575, 1.293054, 1.173025, 0.343524, -1.35973, 1.380238, 0.724128],
+    [8.5, 0.002574, 0.150109, 0.000204, 0.000738, 0.147501, 0.003309],
+];
+
 pub fn wide_validator<const N: usize>() -> JointValidator<N, f64> {
     JointValidator::<N, f64>::new(
         SRobotQ::from_array([-10.0; N]),

@@ -251,21 +251,39 @@ where
         })
     }
 
+    /// Per-segment `κ = ‖J_lin·secant‖`, the TCP linear speed per unit `σ̇`. The
+    /// Jacobian varies along a segment, so sampling only the start knot
+    /// under-estimates `κ` on a long chord that reconfigures the arm a lot — the
+    /// realised mid-chord TCP speed then overshoots the cap and the derate loop
+    /// in `time_run` can't recover a few-percent overshoot. Sample the Jacobian
+    /// at several interior points of each segment and take the max, so the
+    /// per-segment cap is conservative (bounds the worst-case TCP gain) and the
+    /// first solve already respects the cap. Segments are short under `Collinear`
+    /// conditioning, so the extra evals there are cheap and `κ` ≈ the endpoint.
     fn kappa_per_segment(
         &self,
         knots: &[SRobotQ<N, f64>],
         secant: &[[f64; N]],
     ) -> Result<Vec<f64>, Topp3LpError> {
+        const SAMPLES: usize = 5;
         secant
             .iter()
             .enumerate()
             .map(|(b, sec)| {
-                let j = self.fk.jacobian(&knots[b])?;
-                let mut v = [0.0f64; 3];
-                for (r, vr) in v.iter_mut().enumerate() {
-                    *vr = (0..N).map(|col| j[r][col] * sec[col]).sum();
+                let q0 = &knots[b];
+                let q1 = &knots[b + 1];
+                let mut kmax = 0.0f64;
+                for si in 0..SAMPLES {
+                    let t = si as f64 / (SAMPLES - 1) as f64;
+                    let q = SRobotQ(std::array::from_fn(|j| q0.0[j] * (1.0 - t) + q1.0[j] * t));
+                    let jac = self.fk.jacobian(&q)?;
+                    let mut v = [0.0f64; 3];
+                    for (r, vr) in v.iter_mut().enumerate() {
+                        *vr = (0..N).map(|col| jac[r][col] * sec[col]).sum();
+                    }
+                    kmax = kmax.max((v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt());
                 }
-                Ok((v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt())
+                Ok(kmax)
             })
             .collect()
     }
