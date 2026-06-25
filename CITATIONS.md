@@ -112,9 +112,11 @@ eigenproblem. Solved with faer 0.24.0 `Mat::generalized_eigen`.
 }
 ```
 
-## deke-topp3tcp-nlp, deke-topp3tcp-spline
+## deke-topp3-lp, deke-topp3tcp-spline
 
-Time-optimal path tracking as a convex optimization over a reparameterized fixed path:
+Time-optimal path tracking as a convex optimization over a reparameterized fixed
+path — the basis for `deke-topp3-lp`'s discrete-LP formulation (solved with
+Clarabel):
 
 ```bibtex
 @article{verscheure2009timeoptimal,
@@ -415,13 +417,13 @@ decoupled from the inner IK, follows recent welding work:
 > <https://www.sciencedirect.com/science/article/abs/pii/S0141635924002356>.
 
 The rail position schedule `x(s)` is smoothed with the Fritsch–Carlson monotone
-PCHIP (cited under [deke-topp3tcp-nlp, deke-topp3tcp-spline](#deke-topp3tcp-nlp-deke-topp3tcp-spline))
+PCHIP (cited under [deke-topp3-lp, deke-topp3tcp-spline](#deke-topp3-lp-deke-topp3tcp-spline))
 — monotone so the slow heavy axis never overshoots a sampled value. Resolving the
 rail *upstream* of the constant-feedrate retimer (rather than as a variable inside
 it) is required because inverse kinematics is nonlinear in the rail position, which
 would break the convexity the timing step relies on — the decoupling principle of
 the Verscheure et al. convex path-tracking formulation (cited under
-[deke-topp3tcp-nlp, deke-topp3tcp-spline](#deke-topp3tcp-nlp-deke-topp3tcp-spline)).
+[deke-topp3-lp, deke-topp3tcp-spline](#deke-topp3-lp-deke-topp3tcp-spline)).
 
 The DP node cost scores the **arm's** 6-DOF Yoshikawa manipulability, not the
 augmented 7-DOF chain's: the rail's prismatic Jacobian column keeps `det(J·Jᵀ)`

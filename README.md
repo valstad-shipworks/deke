@@ -62,7 +62,7 @@ joint limits.
 | `deke-wreck` | Collision validation backed by the `wreck` library. |
 | `deke-rrt` | RRT-Connect, AORRTC, and KRRTC planners over the validator interface. |
 | `deke-multipath` | Optimal ordering and orientation of required paths (asymmetric generalized TSP), stitched with planned or straight-line connectors. |
-| `deke-topp3tcp-nlp` | Continuous- and discrete-NLP TOPP-3TCP retimers. |
+| `deke-topp3-lp` | Joint-space, path-exact, jerk-limited TOPP-3 retimer via a discrete convex LP (Clarabel); zero chord deviation, hard finite-difference v/a/j bounds, optional TCP-velocity cap. |
 | `deke-topp3tcp-spline` | B-spline path representation with depth-first search over jerk candidates. |
 | `deke-topp-speed` | Real-time jerk-limited shaper plus a live goal-tracking pursuer. |
 | `deke-linear` | Constant-TCP-speed Cartesian polyline following: conditions a polyline, branch-tracks IK around singularities, and holds commanded speed within joint limits. |
@@ -81,7 +81,7 @@ use deke_rrt::StartEnd;
 
 let (path, _diag) = planner.plan(&config, &StartEnd::new(start, goal)?, &validator, &ctx);  // deke-rrt
 let path = path?;
-// The retimer is constructed with the FK chain (e.g. `Topp3Tcp6::new(&chain)`).
+// The retimer is constructed with the FK chain (e.g. `Topp3LpTcp::new(&chain)`).
 let (traj, _diag) = retimer.retime(&constraints, &path, &validator, &ctx); // deke-topp*
 ```
 

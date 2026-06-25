@@ -1,9 +1,8 @@
 # deke-bench-retimers
 
-Comparative harness across the four `deke_types::Retimer` implementations:
+Comparative harness across the `deke_types::Retimer` implementations:
 
-- `deke_topp3tcp_nlp::continuous::Topp3Tcp6` (continuous NLP)
-- `deke_topp3tcp_nlp::discrete::Topp3Tcp6Discrete` (discrete NLP)
+- `deke_topp3_lp::Topp3LpTcp` (joint-space convex-LP, exact path)
 - `deke_topp3tcp_spline::Topp3TcpSpline` (B-spline + DFS over jerk)
 - `deke_topp_speed::ToppSolver` (real-time jerk-limited shaper)
 
