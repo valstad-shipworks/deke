@@ -3,12 +3,14 @@ name = "deke-bench-retimers"
 version = "2.0.0"
 edition = "2024"
 publish = false
-description = "Comparative analysis across the deke retimer family (topp3tcp-nlp, topp3tcp-spline, topp-speed)."
+description = "Comparative analysis across the deke retimer family (topp3-lp, topp3tcp-spline, topp-speed)."
 license = "Apache-2.0"
+authors = ["Bowan Foryt <bowan@valstad.com>"]
+repository = "https://github.com/valstad-shipworks/deke"
 
 [dependencies]
 deke-types = { path = "../deke-types" }
 deke-kin = { version = "2.0", path = "../deke-kin" }
-deke-topp3tcp-nlp = { path = "../deke-topp3tcp-nlp" }
+deke-topp3-lp = { path = "../deke-topp3-lp" }
 deke-topp3tcp-spline = { path = "../deke-topp3tcp-spline" }
 deke-topp-speed = { path = "../deke-topp-speed" }

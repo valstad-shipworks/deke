@@ -102,6 +102,15 @@ pub fn condition(
     if poses.len() < 2 {
         return Err(LinearError::TooFewPoses(poses.len()));
     }
+    // A non-finite pose survives the translation-distance dedup (`inf > 1e-9` is
+    // true) and poisons the spline/arc tables → downstream usize-overflow abort or
+    // a `partial_cmp().unwrap()` panic. Reject it here.
+    if poses
+        .iter()
+        .any(|t| !t.translation.is_finite() || !t.matrix3.is_finite())
+    {
+        return Err(LinearError::NonFiniteInput);
+    }
 
     let p: Vec<DVec3> = poses.iter().map(|t| t.translation).collect();
 

@@ -252,10 +252,17 @@ where
             }
 
             let q = match prev {
-                Some((pq, _)) => sols
-                    .into_iter()
-                    .min_by(|a, b| pq.distance(a).total_cmp(&pq.distance(b)))
-                    .unwrap(),
+                // Filter to continuity-passing branches BEFORE picking the nearest:
+                // the L2 metric used for selection differs from the linf/velocity
+                // reconfiguration test, so an unfiltered min_by can pick a wrist-flip
+                // that then trips the post-hoc gate even when a continuous branch exists.
+                Some((pq, ps)) => {
+                    let dsf = (s - ps).max(1e-12);
+                    sols.into_iter()
+                        .filter(|q| !is_reconfiguration(&pq, q, dsf, planner))
+                        .min_by(|a, b| pq.distance(a).total_cmp(&pq.distance(b)))
+                        .ok_or(LinearError::NoContinuousTrack { run: run_idx })?
+                }
                 None => match seed {
                     Some(s) => sols
                         .into_iter()

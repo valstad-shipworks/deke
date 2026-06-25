@@ -4,7 +4,7 @@ members = [
     "deke-kin",
     "deke-wreck",
     "deke-rrt",
-    "deke-topp3tcp-nlp",
+    "deke-topp3-lp",
     "deke-topp3tcp-spline",
     "deke-topp-speed",
     "deke-bench-retimers",

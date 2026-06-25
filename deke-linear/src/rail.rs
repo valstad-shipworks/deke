@@ -521,7 +521,6 @@ where
         ctx: &V::Context<'_>,
         run_idx: usize,
     ) -> Result<(SRobotPath<N, f64>, RailDiagnostic), LinearError> {
-        let chain = RailMountedChain::<A, N, ARM>::new(self.arm, rail.axis);
         let rail_axis = rail.axis.vector();
         let yaw_axis = yaw.axis.vector();
         let length = run.length();
@@ -587,15 +586,27 @@ where
             }
 
             let q = match prev {
-                Some((pq, _)) => candidates
-                    .into_iter()
-                    .min_by(|a, b| pq.distance(a).total_cmp(&pq.distance(b)))
-                    .unwrap(),
+                // Filter to continuity-passing branches before picking the nearest
+                // (the L2 selection metric differs from the linf/velocity reconfig
+                // gate, so an unfiltered nearest can be a flip the gate then rejects).
+                Some((pq, ps)) => {
+                    let dsf = (s - ps).max(1e-12);
+                    candidates
+                        .into_iter()
+                        .filter(|q| !is_reconfiguration(&pq, q, dsf, planner))
+                        .min_by(|a, b| pq.distance(a).total_cmp(&pq.distance(b)))
+                        .ok_or(LinearError::NoContinuousTrack { run: run_idx })?
+                }
                 None => {
                     let mut best = candidates[0];
                     let mut best_w = -1.0;
                     for q in candidates {
-                        let w = chain.manipulability(&q).map_err(LinearError::Deke)?;
+                        // Score the ARM's 6-DOF conditioning, not the 7-DOF chain's:
+                        // the rail's prismatic Jacobian column keeps det(JJᵀ) high even
+                        // when the arm is singular, masking exactly the singularities the
+                        // seed must avoid (matches RailLinearPlanner).
+                        let (_, arm_q) = RailMountedChain::<A, N, ARM>::split(&q);
+                        let w = self.arm.manipulability(&arm_q).map_err(LinearError::Deke)?;
                         if w > best_w {
                             best_w = w;
                             best = q;
@@ -612,7 +623,8 @@ where
                 }
             }
 
-            min_manip = min_manip.min(chain.manipulability(&q).map_err(LinearError::Deke)?);
+            let (_, arm_q) = RailMountedChain::<A, N, ARM>::split(&q);
+            min_manip = min_manip.min(self.arm.manipulability(&arm_q).map_err(LinearError::Deke)?);
             fine.push(q);
             prev = Some((q, s));
         }

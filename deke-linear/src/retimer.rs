@@ -33,6 +33,10 @@ use crate::error::LinearError;
 /// finite-difference verify against the *true* limits is the airtight backstop.
 const LIMIT_MARGIN: f64 = 0.97;
 
+/// Backstop on the σ tick count so a pathological (but limit-validated) request
+/// fails fast rather than attempting a multi-gigabyte allocation.
+const MAX_TICKS: usize = 5_000_000;
+
 /// Finest arc-length spacing (metres) the smoothing spline is resampled at, so
 /// the chord-linear path the solver times is C²-smooth at the output-tick scale
 /// and its FK arc length tracks the commanded Cartesian arc closely.
@@ -64,7 +68,7 @@ where
         run_idx: usize,
     ) -> Result<(SRobotTraj<N, f64>, LinearRetimerDiagnostic), LinearError> {
         let raw: Vec<SRobotQ<N, f64>> = path.iter().copied().collect();
-        let dt = c.output_dt.as_secs_f64().max(1e-6);
+        let dt = validate_constraints(c, &raw, progress)?;
 
         // Smooth, densely-resampled joint path + its arc length. The solver works on
         // the chord-linear interpolation of these knots, so smoothing keeps the
@@ -75,6 +79,20 @@ where
         let nb = knots.len();
         let total = if nb == 0 { 0.0 } else { s[nb - 1] };
         if nb < 2 || total < 1e-9 {
+            // Never emit unverified samples. A near-zero-arc path (e.g. an in-place
+            // wrist reorientation, whose FK-tip arc is ~0) still carries joint motion
+            // the held-speed LP never timed; run the same FD backstop on the raw
+            // samples and pass only if they are genuinely (near-)stationary.
+            if let Some((kind, joint, value, limit, _idx)) = verify_fd(&raw, &c.joint, dt) {
+                return Err(LinearError::LimitExceeded {
+                    run: run_idx,
+                    s: 0.0,
+                    joint,
+                    kind,
+                    value,
+                    limit,
+                });
+            }
             let traj = SRobotTraj::new(c.output_dt, path.clone());
             return Ok((traj, degenerate_diag(nb, dt, total, c.tcp.speed)));
         }
@@ -143,8 +161,8 @@ where
             .min(c.tcp.jerk.unwrap_or(f64::INFINITY))
             .max(1e-6);
         let ramp_t = v_cmd / a_eff + a_eff / j_eff;
-        let mut kk =
-            ((total / (v_cmd * dt)).ceil() as usize + (4.0 * ramp_t / dt) as usize + 64).max(8);
+        let mut kk = ((total / (v_cmd * dt)).ceil() as usize + (4.0 * ramp_t / dt) as usize + 64)
+            .clamp(8, MAX_TICKS);
 
         // The TCP tangential accel/jerk a controller measures is the finite
         // difference of the FK Cartesian speed, which the chord-linear
@@ -379,6 +397,50 @@ where
             Err(e) => (Err(e.into()), zero_diag(constraints.tcp.speed)),
         }
     }
+}
+
+/// Reject malformed inputs up front and return the output period in seconds.
+/// Guards the hard-FD invariant and the planner/LP allocation at the boundary: a
+/// sub-microsecond/zero/non-finite `output_dt` would make the verified dt and the
+/// stamped dt disagree; non-positive limits/speed would blow up the tick count or
+/// silently coerce; non-finite joints would ride through the FD check; and a
+/// mismatched `seam_progress` length would index out of bounds in `smooth_path`.
+fn validate_constraints<const N: usize>(
+    c: &LinearConstraints<N>,
+    raw: &[SRobotQ<N, f64>],
+    progress: Option<&[f64]>,
+) -> Result<f64, LinearError> {
+    let dt = c.output_dt.as_secs_f64();
+    if !dt.is_finite() || dt < 1e-6 {
+        return Err(LinearError::InvalidOutputDt);
+    }
+    let positive = |q: &SRobotQ<N, f64>| q.0.iter().all(|x| x.is_finite() && *x > 0.0);
+    if !(positive(&c.joint.v_max) && positive(&c.joint.a_max) && positive(&c.joint.j_max)) {
+        return Err(LinearError::InvalidLimits);
+    }
+    if !(c.tcp.speed.is_finite() && c.tcp.speed > 0.0) {
+        return Err(LinearError::InvalidLimits);
+    }
+    for cap in [c.tcp.accel, c.tcp.jerk].into_iter().flatten() {
+        if !(cap.is_finite() && cap > 0.0) {
+            return Err(LinearError::InvalidLimits);
+        }
+    }
+    if raw.iter().any(|q| q.0.iter().any(|x| !x.is_finite())) {
+        return Err(LinearError::NonFiniteInput);
+    }
+    if let Some(p) = progress {
+        if p.len() != raw.len() {
+            return Err(LinearError::ProgressLengthMismatch {
+                expected: raw.len(),
+                got: p.len(),
+            });
+        }
+        if p.iter().any(|x| !x.is_finite()) {
+            return Err(LinearError::NonFiniteInput);
+        }
+    }
+    Ok(dt)
 }
 
 fn degenerate_diag(nb: usize, dt: f64, total: f64, speed: f64) -> LinearRetimerDiagnostic {
@@ -633,9 +695,15 @@ fn verify_fd<const N: usize>(
     let n = q.len();
     let mut worst: Option<(f64, &'static str, usize, f64, f64, usize)> = None;
     let mut consider = |val: f64, limit: f64, kind: &'static str, j: usize, idx: usize| {
-        if val > limit * (1.0 + 1e-6) {
-            let r = val / limit;
-            if worst.is_none_or(|w| r > w.0) {
+        // Flag non-finite explicitly (fail-closed): `NaN > x` is false, which would
+        // silently pass a NaN/inf finite difference.
+        if !val.is_finite() || val > limit * (1.0 + 1e-6) {
+            let r = if limit > 0.0 {
+                val / limit
+            } else {
+                f64::INFINITY
+            };
+            if worst.is_none_or(|w| !r.is_finite() || r > w.0) {
                 worst = Some((r, kind, j, val, limit, idx));
             }
         }

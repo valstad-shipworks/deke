@@ -86,6 +86,11 @@ pub struct PlannerOptions<const N: usize> {
     /// joint past [`Self::reconfig_vel_fraction`] of its velocity limit at this
     /// speed is treated as a reconfiguration/discontinuity. At weld speeds this is
     /// the signature of a singularity or wrist flip. Set `0.0` to disable.
+    ///
+    /// NOTE: the [`Default`] is `0.0` (test disabled), so by default the only
+    /// continuity guard is the absolute [`Self::max_branch_jump`]. Populate this
+    /// from `TcpLimits.speed` (and [`Self::joint_v_max`] from `JointLimits.v_max`)
+    /// to get the velocity-aware reconfiguration check.
     pub max_velocity: f64,
     /// Per-joint velocity ceilings for the velocity-based reconfiguration test.
     /// `INFINITY` (the default) disables the test on that axis.
