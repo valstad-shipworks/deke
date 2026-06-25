@@ -1,27 +1,17 @@
 [package]
-name = "deke-linear"
-version = "2.3.0"
+name = "deke-topp3-lp"
+version = "2.0.1"
 edition = "2024"
-description = "Constant-TCP-speed Cartesian polyline following for serial manipulators."
+description = "Joint-space, path-exact, jerk-limited TOPP-3 retimer via a discrete convex LP, with an optional TCP-velocity cap."
 license = "Apache-2.0"
 authors = ["Bowan Foryt <bowan@valstad.com>"]
 repository = "https://github.com/valstad-shipworks/deke"
 
 [dependencies]
 deke-types = { version = "2.0" }
-squiggle = { version = "1.0.0" }
 glam = "0.32.1"
 thiserror = "2.0.18"
 clarabel = "0.11.1"
 
 [dev-dependencies]
 deke-kin = { version = "2.0", path = "../deke-kin" }
-criterion = "0.8.2"
-
-[[bench]]
-name = "planners"
-harness = false
-
-[[bench]]
-name = "retimer"
-harness = false

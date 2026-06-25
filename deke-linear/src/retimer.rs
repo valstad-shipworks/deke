@@ -33,6 +33,10 @@ use crate::error::LinearError;
 /// finite-difference verify against the *true* limits is the airtight backstop.
 const LIMIT_MARGIN: f64 = 0.97;
 
+/// Backstop on the σ tick count so a pathological (but limit-validated) request
+/// fails fast rather than attempting a multi-gigabyte allocation.
+const MAX_TICKS: usize = 5_000_000;
+
 /// Finest arc-length spacing (metres) the smoothing spline is resampled at, so
 /// the chord-linear path the solver times is C²-smooth at the output-tick scale
 /// and its FK arc length tracks the commanded Cartesian arc closely.
@@ -60,19 +64,35 @@ where
         &self,
         c: &LinearConstraints<N>,
         path: &SRobotPath<N, f64>,
+        progress: Option<&[f64]>,
         run_idx: usize,
     ) -> Result<(SRobotTraj<N, f64>, LinearRetimerDiagnostic), LinearError> {
         let raw: Vec<SRobotQ<N, f64>> = path.iter().copied().collect();
-        let dt = c.output_dt.as_secs_f64().max(1e-6);
+        let dt = validate_constraints(c, &raw, progress)?;
 
-        // Smooth, densely-resampled joint path + its Cartesian arc length. The
-        // solver works on the chord-linear interpolation of these knots, so
-        // smoothing keeps the secant changes between knots tiny (small cross-bin
-        // leak) and removes the IK jitter that would otherwise spike the jerk.
-        let (knots, s) = smooth_path(self.fk, &raw, c.corner_smoothing)?;
+        // Smooth, densely-resampled joint path + its arc length. The solver works on
+        // the chord-linear interpolation of these knots, so smoothing keeps the
+        // secant changes between knots tiny (small cross-bin leak) and removes the IK
+        // jitter that would otherwise spike the jerk. With `progress` the arc length
+        // is seam travel, not the FK-tip path, so the held speed is travel speed.
+        let (knots, s) = smooth_path(self.fk, &raw, c.corner_smoothing, progress)?;
         let nb = knots.len();
         let total = if nb == 0 { 0.0 } else { s[nb - 1] };
         if nb < 2 || total < 1e-9 {
+            // Never emit unverified samples. A near-zero-arc path (e.g. an in-place
+            // wrist reorientation, whose FK-tip arc is ~0) still carries joint motion
+            // the held-speed LP never timed; run the same FD backstop on the raw
+            // samples and pass only if they are genuinely (near-)stationary.
+            if let Some((kind, joint, value, limit, _idx)) = verify_fd(&raw, &c.joint, dt) {
+                return Err(LinearError::LimitExceeded {
+                    run: run_idx,
+                    s: 0.0,
+                    joint,
+                    kind,
+                    value,
+                    limit,
+                });
+            }
             let traj = SRobotTraj::new(c.output_dt, path.clone());
             return Ok((traj, degenerate_diag(nb, dt, total, c.tcp.speed)));
         }
@@ -141,8 +161,8 @@ where
             .min(c.tcp.jerk.unwrap_or(f64::INFINITY))
             .max(1e-6);
         let ramp_t = v_cmd / a_eff + a_eff / j_eff;
-        let mut kk =
-            ((total / (v_cmd * dt)).ceil() as usize + (4.0 * ramp_t / dt) as usize + 64).max(8);
+        let mut kk = ((total / (v_cmd * dt)).ceil() as usize + (4.0 * ramp_t / dt) as usize + 64)
+            .clamp(8, MAX_TICKS);
 
         // The TCP tangential accel/jerk a controller measures is the finite
         // difference of the FK Cartesian speed, which the chord-linear
@@ -310,6 +330,46 @@ where
             },
         ))
     }
+
+    /// Retime a weaving (or otherwise overlaid) joint path at constant **travel
+    /// speed** along the seam, rather than constant total-tip speed. `seam_progress`
+    /// is the seam arc length at each `path` sample (e.g. `i·sample_ds` from the
+    /// planner); `tcp.speed` is then the travel speed. The held quantity is seam
+    /// progress, so the lateral weave does not eat into the commanded feed — the
+    /// per-joint finite-difference limits and the `verify_fd` backstop apply
+    /// unchanged.
+    pub fn retime_weave<V: Validator<N, (), f64>>(
+        &self,
+        constraints: &LinearConstraints<N>,
+        path: &SRobotPath<N, f64>,
+        seam_progress: &[f64],
+        validator: &V,
+        ctx: &V::Context<'_>,
+    ) -> (DekeResult<SRobotTraj<N, f64>>, LinearRetimerDiagnostic) {
+        match self.retime_path(constraints, path, Some(seam_progress), 0) {
+            Ok((traj, diag)) => {
+                let samples: Vec<SRobotQ<N, f64>> = traj.path().iter().copied().collect();
+                if let Err(e) = validator.validate_motion(&samples, ctx) {
+                    return (Err(e), diag);
+                }
+                (Ok(traj), diag)
+            }
+            Err(e) => (Err(e.into()), zero_diag(constraints.tcp.speed)),
+        }
+    }
+}
+
+/// The zeroed diagnostic returned alongside a retime error.
+fn zero_diag(commanded_speed: f64) -> LinearRetimerDiagnostic {
+    LinearRetimerDiagnostic {
+        output_samples: 0,
+        duration: Duration::ZERO,
+        arc_length: 0.0,
+        commanded_speed,
+        peak_speed: 0.0,
+        peak_joint_accel: 0.0,
+        peak_joint_jerk: 0.0,
+    }
 }
 
 impl<'a, const N: usize, FK> Retimer<N, f64> for ConstantSpeedRetimer<'a, N, FK>
@@ -326,7 +386,7 @@ where
         validator: &V,
         ctx: &V::Context<'_>,
     ) -> (DekeResult<SRobotTraj<N, f64>>, Self::Diagnostic) {
-        match self.retime_path(constraints, path, 0) {
+        match self.retime_path(constraints, path, None, 0) {
             Ok((traj, diag)) => {
                 let samples: Vec<SRobotQ<N, f64>> = traj.path().iter().copied().collect();
                 if let Err(e) = validator.validate_motion(&samples, ctx) {
@@ -334,20 +394,53 @@ where
                 }
                 (Ok(traj), diag)
             }
-            Err(e) => (
-                Err(e.into()),
-                LinearRetimerDiagnostic {
-                    output_samples: 0,
-                    duration: Duration::ZERO,
-                    arc_length: 0.0,
-                    commanded_speed: constraints.tcp.speed,
-                    peak_speed: 0.0,
-                    peak_joint_accel: 0.0,
-                    peak_joint_jerk: 0.0,
-                },
-            ),
+            Err(e) => (Err(e.into()), zero_diag(constraints.tcp.speed)),
         }
     }
+}
+
+/// Reject malformed inputs up front and return the output period in seconds.
+/// Guards the hard-FD invariant and the planner/LP allocation at the boundary: a
+/// sub-microsecond/zero/non-finite `output_dt` would make the verified dt and the
+/// stamped dt disagree; non-positive limits/speed would blow up the tick count or
+/// silently coerce; non-finite joints would ride through the FD check; and a
+/// mismatched `seam_progress` length would index out of bounds in `smooth_path`.
+fn validate_constraints<const N: usize>(
+    c: &LinearConstraints<N>,
+    raw: &[SRobotQ<N, f64>],
+    progress: Option<&[f64]>,
+) -> Result<f64, LinearError> {
+    let dt = c.output_dt.as_secs_f64();
+    if !dt.is_finite() || dt < 1e-6 {
+        return Err(LinearError::InvalidOutputDt);
+    }
+    let positive = |q: &SRobotQ<N, f64>| q.0.iter().all(|x| x.is_finite() && *x > 0.0);
+    if !(positive(&c.joint.v_max) && positive(&c.joint.a_max) && positive(&c.joint.j_max)) {
+        return Err(LinearError::InvalidLimits);
+    }
+    if !(c.tcp.speed.is_finite() && c.tcp.speed > 0.0) {
+        return Err(LinearError::InvalidLimits);
+    }
+    for cap in [c.tcp.accel, c.tcp.jerk].into_iter().flatten() {
+        if !(cap.is_finite() && cap > 0.0) {
+            return Err(LinearError::InvalidLimits);
+        }
+    }
+    if raw.iter().any(|q| q.0.iter().any(|x| !x.is_finite())) {
+        return Err(LinearError::NonFiniteInput);
+    }
+    if let Some(p) = progress {
+        if p.len() != raw.len() {
+            return Err(LinearError::ProgressLengthMismatch {
+                expected: raw.len(),
+                got: p.len(),
+            });
+        }
+        if p.iter().any(|x| !x.is_finite()) {
+            return Err(LinearError::NonFiniteInput);
+        }
+    }
+    Ok(dt)
 }
 
 fn degenerate_diag(nb: usize, dt: f64, total: f64, speed: f64) -> LinearRetimerDiagnostic {
@@ -363,13 +456,18 @@ fn degenerate_diag(nb: usize, dt: f64, total: f64, speed: f64) -> LinearRetimerD
 }
 
 /// Smooth and densely resample the joint path, returning the knots and their
-/// cumulative Cartesian arc length. Coincident-arc knots are dropped first (a
-/// zero-length chord makes the cubic singular). `None` (or too few knots) keeps
-/// the raw deduped polyline.
+/// cumulative arc length. By default the arc length is the Cartesian FK-tip path,
+/// so the retimer holds constant total-tip speed. When `progress` is given (one
+/// value per `raw` sample) it is used as the arc parameter instead, so the retimer
+/// holds constant progress along *that* parameter — e.g. seam travel for a weave,
+/// where the tip path is longer than the seam. Coincident-arc knots are dropped
+/// first (a zero-length chord makes the cubic singular); `None` (or too few knots)
+/// keeps the raw deduped polyline.
 fn smooth_path<const N: usize, FK: ContinuousFKChain<N, f64>>(
     fk: &FK,
     raw: &[SRobotQ<N, f64>],
     res: Option<f64>,
+    progress: Option<&[f64]>,
 ) -> Result<(Vec<SRobotQ<N, f64>>, Vec<f64>), LinearError> {
     let arc = |pts: &[SRobotQ<N, f64>]| -> Result<Vec<f64>, LinearError> {
         let pos: Vec<DVec3> = pts
@@ -382,7 +480,10 @@ fn smooth_path<const N: usize, FK: ContinuousFKChain<N, f64>>(
         }
         Ok(s)
     };
-    let s_raw = arc(raw)?;
+    let s_raw = match progress {
+        Some(p) => p.to_vec(),
+        None => arc(raw)?,
+    };
     let mut sd: Vec<f64> = Vec::with_capacity(raw.len());
     let mut qd: Vec<SRobotQ<N, f64>> = Vec::with_capacity(raw.len());
     for i in 0..raw.len() {
@@ -395,13 +496,17 @@ fn smooth_path<const N: usize, FK: ContinuousFKChain<N, f64>>(
     let step = match res {
         Some(r) if r > 0.0 && n >= 3 => r.min(SMOOTH_STEP),
         _ => {
-            let s = arc(&qd)?;
+            let s = match progress {
+                Some(_) => sd,
+                None => arc(&qd)?,
+            };
             return Ok((qd, s));
         }
     };
     let h: Vec<f64> = (0..n - 1).map(|i| (sd[i + 1] - sd[i]).max(1e-12)).collect();
     let mm = natural_cubic(&h, &qd);
     let mut out = vec![qd[0]];
+    let mut s_out = vec![sd[0]];
     for i in 0..n - 1 {
         let k = ((h[i] / step).ceil() as usize).max(1);
         for ss in 1..=k {
@@ -414,9 +519,13 @@ fn smooth_path<const N: usize, FK: ContinuousFKChain<N, f64>>(
                     + (mm[i][j] * (a * a * a - a) + mm[i + 1][j] * (b * b * b - b))
                         * (h[i] * h[i] / 6.0)
             })));
+            s_out.push(uu);
         }
     }
-    let s = arc(&out)?;
+    let s = match progress {
+        Some(_) => s_out,
+        None => arc(&out)?,
+    };
     Ok((out, s))
 }
 
@@ -586,9 +695,15 @@ fn verify_fd<const N: usize>(
     let n = q.len();
     let mut worst: Option<(f64, &'static str, usize, f64, f64, usize)> = None;
     let mut consider = |val: f64, limit: f64, kind: &'static str, j: usize, idx: usize| {
-        if val > limit * (1.0 + 1e-6) {
-            let r = val / limit;
-            if worst.is_none_or(|w| r > w.0) {
+        // Flag non-finite explicitly (fail-closed): `NaN > x` is false, which would
+        // silently pass a NaN/inf finite difference.
+        if !val.is_finite() || val > limit * (1.0 + 1e-6) {
+            let r = if limit > 0.0 {
+                val / limit
+            } else {
+                f64::INFINITY
+            };
+            if worst.is_none_or(|w| !r.is_finite() || r > w.0) {
                 worst = Some((r, kind, j, val, limit, idx));
             }
         }

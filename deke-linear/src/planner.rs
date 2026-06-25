@@ -19,6 +19,10 @@ use crate::error::LinearError;
 use crate::path::CartesianRun;
 use crate::util::ladder_dp;
 
+/// Backstop on the per-run sample count so a misconfigured `sample_ds` cannot
+/// drive an unbounded allocation (validation already rejects non-positive values).
+const MAX_SAMPLES: usize = 2_000_000;
+
 /// Analytic-IK branch-tracking planner over a single conditioned run.
 #[derive(Clone, Debug)]
 pub struct CartesianLinearPlanner<'a, const N: usize, FK> {
@@ -51,7 +55,10 @@ where
         run_idx: usize,
     ) -> Result<(SRobotPath<N, f64>, LinearPlannerDiagnostic), LinearError> {
         let length = run.length();
-        let n = ((length / opts.sample_ds).ceil() as usize).max(1) + 1;
+        if !(opts.sample_ds.is_finite() && opts.sample_ds > 0.0) {
+            return Err(LinearError::InvalidConfig { field: "sample_ds" });
+        }
+        let n = ((length / opts.sample_ds).ceil() as usize).clamp(1, MAX_SAMPLES) + 1;
 
         // Per sample: analytic IK + manipulability node cost for each branch that
         // passes the validator. `(q, node_cost, manipulability)`.

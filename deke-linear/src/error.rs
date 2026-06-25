@@ -50,6 +50,16 @@ pub enum LinearError {
         value: f64,
         limit: f64,
     },
+    #[error("output_dt must be finite and at least 1 microsecond")]
+    InvalidOutputDt,
+    #[error("joint and TCP limits (and the commanded speed) must be finite and strictly positive")]
+    InvalidLimits,
+    #[error("the input path contains non-finite (NaN/inf) joint values")]
+    NonFiniteInput,
+    #[error("seam_progress length {got} does not match the path length {expected}")]
+    ProgressLengthMismatch { expected: usize, got: usize },
+    #[error("{field} must be finite and strictly positive")]
+    InvalidConfig { field: &'static str },
     #[error(transparent)]
     Deke(#[from] DekeError),
 }

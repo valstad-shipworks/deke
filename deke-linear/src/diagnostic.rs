@@ -27,12 +27,12 @@ pub struct LinearRetimerDiagnostic {
     pub arc_length: f64,
     pub commanded_speed: f64,
     pub peak_speed: f64,
-    /// Peak continuous per-joint acceleration `|q'·a + q''·v²|` over the run.
+    /// Peak per-joint acceleration as the second finite difference of the
+    /// `dt`-sampled output (the quantity a controller reconstructs), not a
+    /// continuous derivative.
     pub peak_joint_accel: f64,
-    /// Peak continuous per-joint jerk `|q'·j_s + 3·q''·a·v + q'''·v³|` over the
-    /// run. Bounded by the joint jerk limit by construction (the FD third
-    /// difference of the dt-sampled output can read higher at the jerk steps a
-    /// jerk-limited profile necessarily takes).
+    /// Peak per-joint jerk as the third finite difference of the `dt`-sampled
+    /// output. The `verify_fd` backstop holds it under the joint jerk limit.
     pub peak_joint_jerk: f64,
 }
 
@@ -68,6 +68,25 @@ impl fmt::Display for RedundantDiagnostic {
             self.min_manipulability,
             self.yaw_range.0.to_degrees(),
             self.yaw_range.1.to_degrees()
+        )
+    }
+}
+
+/// Outcome of the rail-axis redundancy plan over one run.
+#[derive(Clone, Debug)]
+pub struct RailDiagnostic {
+    pub samples: usize,
+    pub min_manipulability: f64,
+    /// (min, max) resolved rail position along the rail axis, metres.
+    pub rail_range: (f64, f64),
+}
+
+impl fmt::Display for RailDiagnostic {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "rail: {} samples, min manipulability {:.3e}, x ∈ [{:.3} m, {:.3} m]",
+            self.samples, self.min_manipulability, self.rail_range.0, self.rail_range.1
         )
     }
 }

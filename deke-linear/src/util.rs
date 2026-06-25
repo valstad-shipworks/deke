@@ -21,6 +21,72 @@ pub(crate) fn interp(grid: &[f64], vals: &[f64], x: f64) -> f64 {
     }
 }
 
+/// Fritsch–Carlson monotone cubic (PCHIP) evaluation of `vals` at `x` against a
+/// sorted ascending `grid`. The interpolant passes through every knot, stays
+/// monotone on monotone data, and never overshoots the sample envelope — so a
+/// smoothed schedule built from it inherits the DP track's bounds. `grid` and
+/// `vals` are parallel and non-empty; `x` is clamped to the grid range.
+pub(crate) fn pchip(grid: &[f64], vals: &[f64], x: f64) -> f64 {
+    let n = grid.len();
+    if n == 1 {
+        return vals[0];
+    }
+    let x = x.clamp(grid[0], grid[n - 1]);
+
+    let mut delta = vec![0.0f64; n - 1];
+    let mut h = vec![0.0f64; n - 1];
+    for k in 0..n - 1 {
+        h[k] = (grid[k + 1] - grid[k]).max(1e-15);
+        delta[k] = (vals[k + 1] - vals[k]) / h[k];
+    }
+
+    let mut m = vec![0.0f64; n];
+    if n == 2 {
+        m[0] = delta[0];
+        m[1] = delta[0];
+    } else {
+        m[0] = endpoint_slope(h[1], h[0], delta[0], delta[1]);
+        m[n - 1] = endpoint_slope(h[n - 3], h[n - 2], delta[n - 2], delta[n - 3]);
+        for k in 1..n - 1 {
+            let (d0, d1) = (delta[k - 1], delta[k]);
+            if d0 * d1 <= 0.0 {
+                m[k] = 0.0;
+            } else {
+                let w1 = 2.0 * h[k] + h[k - 1];
+                let w2 = h[k] + 2.0 * h[k - 1];
+                m[k] = (w1 + w2) / (w1 / d0 + w2 / d1);
+            }
+        }
+    }
+
+    let i = match grid.binary_search_by(|v| v.total_cmp(&x)) {
+        Ok(j) => return vals[j],
+        Err(j) => (j.max(1) - 1).min(n - 2),
+    };
+    let t = (x - grid[i]) / h[i];
+    let t2 = t * t;
+    let t3 = t2 * t;
+    let h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
+    let h10 = t3 - 2.0 * t2 + t;
+    let h01 = -2.0 * t3 + 3.0 * t2;
+    let h11 = t3 - t2;
+    h00 * vals[i] + h10 * h[i] * m[i] + h01 * vals[i + 1] + h11 * h[i] * m[i + 1]
+}
+
+/// One-sided endpoint slope with the standard Fritsch–Carlson shape-preserving
+/// correction: a non-shape-preserving extrapolation is clamped to zero or to
+/// three times the boundary secant.
+fn endpoint_slope(h_far: f64, h_near: f64, d_near: f64, d_far: f64) -> f64 {
+    let m = ((2.0 * h_near + h_far) * d_near - h_near * d_far) / (h_near + h_far);
+    if m * d_near <= 0.0 {
+        0.0
+    } else if d_near * d_far <= 0.0 && m.abs() > 3.0 * d_near.abs() {
+        3.0 * d_near
+    } else {
+        m
+    }
+}
+
 /// Forward shortest path over a layered graph: choose one node per layer that
 /// minimises the cumulative node + edge cost, skipping infeasible edges.
 ///
@@ -86,4 +152,39 @@ pub(crate) fn ladder_dp(
         }
     }
     Some((chosen, total))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pchip;
+
+    #[test]
+    fn pchip_passes_through_knots() {
+        let grid = [0.0, 1.0, 2.0, 3.0];
+        let vals = [0.0, 0.5, 0.7, 2.0];
+        for (g, v) in grid.iter().zip(vals.iter()) {
+            assert!((pchip(&grid, &vals, *g) - v).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn pchip_no_overshoot_on_monotone_data() {
+        let grid = [0.0, 1.0, 2.0, 3.0, 4.0];
+        let vals = [0.0, 0.0, 0.0, 1.0, 1.0];
+        let lo = vals.iter().cloned().fold(f64::INFINITY, f64::min);
+        let hi = vals.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let mut prev = pchip(&grid, &vals, 0.0);
+        for i in 0..=400 {
+            let x = 4.0 * i as f64 / 400.0;
+            let y = pchip(&grid, &vals, x);
+            assert!(y >= lo - 1e-12 && y <= hi + 1e-12, "overshoot at {x}: {y}");
+            assert!(y >= prev - 1e-9, "non-monotone at {x}");
+            prev = y;
+        }
+    }
+
+    #[test]
+    fn pchip_single_point() {
+        assert_eq!(pchip(&[2.0], &[5.0], 9.0), 5.0);
+    }
 }

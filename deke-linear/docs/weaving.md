@@ -198,3 +198,65 @@ Deferred, and flagged as the reason temporal weave is a separate phase.
    back-compat.)
 5. **Promote the `q''·ṡ²` term globally or only under weave?** Doing it only for the
    weave case avoids regressing the validated straight-weld path.
+
+---
+
+## Implementation notes (as built — Phase 1, spatial weave)
+
+Shipped: `src/weave.rs` (`WeaveOptions`, `WeavePattern`), `CartesianRun::with_weave`
+(Stage A overlay), and `ConstantSpeedRetimer::retime_weave` (the one Stage-C change).
+
+- **Overlay in Stage A.** `with_weave` stores a `WeaveOptions`; `eval(s)` offsets the
+  seam translation by `0.5·amplitude·envelope(s)·shape(2π s/λ)` along `R(s)·axis`
+  (tool frame, per the design — degeneracy-free). Amplitude is **peak-to-peak**
+  (tip-to-tip). The envelope tapers (smoothstep) to zero over `taper` metres at each
+  run end so the weave vanishes into the rest ramps. The planner is unchanged — it
+  IK's the weaving poses. `with_weave` is purely additive (`weave: None` ⇒ identical
+  to today; regression-tested).
+- **Travel-speed retiming.** `retime_weave(c, path, seam_progress, …)` parameterises
+  the retimer by **seam progress** instead of the FK-tip arc length, so it holds
+  constant *travel* speed (`tcp.speed`) — heat input per unit seam, what a welder
+  wants — rather than constant total-tip speed (which crams the lateral strokes onto
+  the straights and inflates joint jerk). Implemented by threading an optional
+  `progress` into `smooth_path`; `None` keeps the exact FK-arc behaviour, so the
+  plain `retime` path is byte-identical (no regression). The discrete-LP retimer
+  bounds the per-tick joint FD by construction, so the weave's high curvature is
+  handled directly (the old `q''·ṡ²` concern in *Risks* applied to the prior
+  phase-plane retimer and no longer bites); `verify_fd` remains the airtight backstop.
+- **Nyquist.** `WeaveOptions::max_sample_ds()` returns `λ/15`; sample at least that
+  finely (the weave is the high-frequency path content — no coarse-grid escape).
+  `WeaveOptions::wavelength_for(freq, travel)` bridges "2 Hz at 18 IPM" → `λ`.
+
+**Verified** (`tests/weave.rs`): a 3 mm tip-to-tip, 2 Hz weave at 18 IPM travel on a
+straight seam executes within all per-joint FD v/a/j limits — measured ±1.499 mm
+(2.998 mm tip-to-tip), 1.99 Hz, 17.9 IPM. The weave is intrinsically gentle on the
+arm (joint jerk ~5 rad/s³ interior); the binding concern is **sampling/boundary**,
+not dynamics. A `no_weave` test guards that the overlay is purely additive.
+
+**Still deferred (Phase 2):** temporal dwell (a time concept — needs the retimer to
+know weave phase), orientation weave, and the welder-facing config/builder on a
+`FollowConfig` (orchestration is caller-side today). Practical caveat: choose the
+weave `axis` so the oscillation is transverse to travel (the test maps a tool-frame
+axis to world-Y for a world-X seam); a tool axis that lands along travel just dithers
+the feed.
+
+### Composition with rail and yaw redundancy
+
+The weave composes with both redundant planners — it is a Stage-A position overlay
+that every planner consumes through `CartesianRun::eval`, and `retime_weave` is
+generic over the DOF count:
+
+- **Weave + tool yaw** (`RedundantLinearPlanner`): works directly. The yaw is
+  resolved against the weaving position; the weave offset is taken in the run's base
+  orientation, so it stays transverse regardless of the resolved yaw.
+- **Weave + rail** (`RailLinearPlanner`) and **weave + rail + yaw**
+  (`RailYawPlanner`): work, after one fix. The rail planner's per-joint
+  jitter-removal filter was a fixed *distance* window (~0.003 m), which at the fine
+  weave sampling spanned ~0.8 of a weave cycle and averaged the oscillation away
+  (measured weave collapsed from ±1.5 mm to ±0.36 mm). Jitter is *per-sample* noise,
+  so the window is now a few samples — it still erases IK jitter (the fast-scan fix
+  is unaffected) but preserves genuine high-frequency joint motion like a weave.
+
+Verified in `tests/weave.rs`: 3 mm / 2 Hz / 18 IPM holds with yaw (±1.499 mm),
+rail (±1.456 mm), and rail+yaw (±1.500 mm), all within joint FD limits. Sample at
+`≤ λ/15` whichever planner is used (the weave is the high-frequency path content).

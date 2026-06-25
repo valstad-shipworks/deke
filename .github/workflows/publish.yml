@@ -5,9 +5,7 @@ name: Publish
 # uploaded, and only versions that are missing get published — so a single version
 # bump on main releases just that crate, and re-runs are idempotent.
 #
-# deke-bench-retimers is `publish = false` (skipped automatically). deke-topp3tcp-nlp
-# is excluded because it depends on sleipnir via a git URL, which crates.io rejects;
-# add it back once that dependency resolves from a registry.
+# deke-bench-retimers is `publish = false` (skipped automatically).
 #
 # Needs the CARGO_REGISTRY_TOKEN secret.
 on:
@@ -17,9 +15,6 @@ on:
 
 permissions:
   contents: read
-
-env:
-  EXCLUDE_NLP: deke-topp3tcp-nlp
 
 jobs:
   crates-dry-run:
@@ -36,7 +31,7 @@ jobs:
         with:
           key: publish-dry-run
 
-      - run: cargo publish --workspace --dry-run --exclude "$EXCLUDE_NLP"
+      - run: cargo publish --workspace --dry-run
 
   publish-crates:
     runs-on: ubuntu-latest
@@ -58,7 +53,7 @@ jobs:
           # would consume it. cargo publish waits for each crate to land in the index
           # before returning, so dependents resolve the freshly published versions.
           publish_order="deke-types deke-topp-speed deke-kin deke-wreck deke-rrt \
-            deke-topp3tcp-spline deke-linear deke-multipath"
+            deke-topp3tcp-spline deke-linear deke-topp3-lp deke-multipath"
 
           for crate in $publish_order; do
             version="$(cargo metadata --no-deps --format-version 1 \

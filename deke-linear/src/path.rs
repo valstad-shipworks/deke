@@ -25,21 +25,35 @@ pub struct CartesianRun {
     vtx_s: Vec<f64>,
     vtx_q: Vec<DQuat>,
     length: f64,
+    weave: Option<crate::weave::WeaveOptions>,
 }
 
 impl CartesianRun {
-    /// Total Cartesian arc length of the run (metres).
+    /// Total seam arc length of the run (metres). Unchanged by a weave overlay —
+    /// the weave is transverse to this length, not added to it.
     pub fn length(&self) -> f64 {
         self.length
     }
 
-    /// Pose at arc length `s ∈ [0, length]`.
+    /// Overlay a spatial weave: `eval` then traces the seam pose offset transversely
+    /// by the weave, so the planner follows the oscillation with no other change.
+    pub fn with_weave(mut self, weave: crate::weave::WeaveOptions) -> Self {
+        self.weave = Some(weave);
+        self
+    }
+
+    /// Pose at seam arc length `s ∈ [0, length]`. With a weave overlay the
+    /// translation is offset transversely (in the tool frame) by the weave; the
+    /// orientation is unchanged (positional weave only).
     pub fn eval(&self, s: f64) -> DAffine3 {
         let s = s.clamp(0.0, self.length);
         let t = self.t_at_s(s as f32);
         let p = self.spline.point(t);
-        let pos = DVec3::new(p.x as f64, p.y as f64, p.z as f64);
+        let mut pos = DVec3::new(p.x as f64, p.y as f64, p.z as f64);
         let rot = self.orientation_at(s);
+        if let Some(w) = &self.weave {
+            pos += (rot * w.axis.vector()) * w.offset(s, self.length);
+        }
         DAffine3::from_rotation_translation(rot, pos)
     }
 
@@ -87,6 +101,15 @@ pub fn condition(
 ) -> Result<Vec<CartesianRun>, LinearError> {
     if poses.len() < 2 {
         return Err(LinearError::TooFewPoses(poses.len()));
+    }
+    // A non-finite pose survives the translation-distance dedup (`inf > 1e-9` is
+    // true) and poisons the spline/arc tables → downstream usize-overflow abort or
+    // a `partial_cmp().unwrap()` panic. Reject it here.
+    if poses
+        .iter()
+        .any(|t| !t.translation.is_finite() || !t.matrix3.is_finite())
+    {
+        return Err(LinearError::NonFiniteInput);
     }
 
     let p: Vec<DVec3> = poses.iter().map(|t| t.translation).collect();
@@ -186,6 +209,7 @@ fn build_run(poses: &[DAffine3], run_idx: usize) -> Result<CartesianRun, LinearE
         vtx_s,
         vtx_q,
         length,
+        weave: None,
     })
 }
 

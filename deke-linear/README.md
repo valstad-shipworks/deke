@@ -90,15 +90,71 @@ singularity or wrist flip, so this cleanly separates "needs to slow down" from
 "can't be done continuously." `FollowConfig::weld()` wires it up; otherwise set
 `PlannerOptions::{max_velocity, joint_v_max, reconfig_vel_fraction}`.
 
+## Linear rail (7th external axis)
+
+A 6-DOF arm mounted on a prismatic linear rail can resolve the rail position as a
+second smooth redundant DOF, the same way the tool yaw is resolved. The output
+widens to a **rail-first** `SRobotQ<7>` = `[x_rail, q1..q6]` that flows through the
+same `ConstantSpeedRetimer` unchanged.
+
+```rust
+use deke_linear::{
+    ConstantSpeedRetimer, PlannerOptions, RailAxis, RailConfig, RailLinearPlanner,
+    RailMountedChain, RailOptions, RailRefine,
+};
+use deke_types::{Planner, Retimer};
+
+// `arm` is any ContinuousFKChain<6> + IkSolver<6> (the unmodified 6-DOF arm).
+let planner = RailLinearPlanner::<6, 7, _>::new(&arm);
+let chain = RailMountedChain::<6, 7, _>::new(&arm, RailAxis::PosX); // 7-DOF FK for the retimer
+let retimer = ConstantSpeedRetimer::new(&chain);
+
+let cfg = RailConfig::<6, 7> {
+    planner: PlannerOptions {
+        // 7-wide branch-tracking knobs; put the rail's velocity ceiling in slot 0
+        // of `joint_v_max` for the reconfiguration test.
+        ..PlannerOptions::default()
+    },
+    rail: RailOptions {
+        axis: RailAxis::PosX,             // world-frame rail axis (PosX/PosY/PosZ/Custom)
+        window: (-0.5, 0.5),              // rail travel limits (m)
+        samples: 21,                      // rail grid resolution for the DP
+        refine: RailRefine::Pchip,        // monotone (Fritsch–Carlson) rail schedule, no overshoot
+        ..RailOptions::default()
+    },
+};
+// for run in condition(&poses, &cond)? { planner.plan(&cfg, &run, ...); retimer.retime(&cons7, ...); }
+```
+
+- **Base-shift IK, inverse-free.** The rail is a world translation of the arm base:
+  the target is shifted by `−x·â` and solved by the unchanged 6-DOF analytic IK
+  (every branch, limit-filtered). `RailMountedChain` is a 7-DOF `ContinuousFKChain`
+  (FK / Jacobian / manipulability) but deliberately does **not** implement
+  `IkSolver<7>` — the redundancy is resolved in the planner, not by an
+  underdetermined 7-DOF solve.
+- **Arm-conditioned.** The DP scores the *arm's* manipulability so the rail is
+  spent to keep the arm off its singular sets; a 7-DOF measure would let the rail's
+  prismatic Jacobian column mask an arm singularity and the rail would never be
+  recruited.
+- **Smooth schedule.** The coarse rail track is refined with a monotone PCHIP
+  (`RailRefine::Pchip`, the default) so the slow heavy axis never overshoots — fed
+  to the retimer as dense knots, never differentiated for jerk.
+- **Rail + yaw.** `RailYawPlanner` composes the rail with the free tool yaw
+  hierarchically (rail first, then yaw on the fixed rail schedule).
+- **Same guarantees.** The rail's v/a/j ceilings sit in slot 0 of `JointLimits<7>`;
+  `is_reconfiguration` and the retimer's finite-difference verify already iterate
+  every joint, so the rail is bounded by construction like any other axis.
+
 ## Scope / notes
 
 - **Orientation** is a full TCP pose per vertex (slerped along the path). For a
   symmetric tool, declare the free axis via `with_redundancy` (see above) to let the
   planner resolve the yaw.
-- Joint **velocity** is enforced exactly; **acceleration/jerk** are enforced by the
-  path-tangent projection plus a jerk-limited integrator. The `q''(s)·ṡ²` curvature
-  cross-term is a deliberate first-pass approximation (negligible at process speeds;
-  see the corner tests).
+- Joint (and TCP) **velocity/acceleration/jerk** are honoured as bounds on the
+  *finite differences* of the emitted samples — exactly what the controller
+  reconstructs — by the discrete-LP retimer, with a verify-and-Err backstop against
+  the true limits. They hold by construction rather than by a continuous-derivative
+  approximation.
 - Geometry runs in `f32` (squiggle); kinematics and timing in `f64`.
 
 ## License

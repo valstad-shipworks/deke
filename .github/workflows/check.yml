@@ -1,10 +1,9 @@
 name: Check
 
-# The eight pure-Rust members get cargo check / clippy / test on a native runner
-# per target, so tests actually execute on each platform. deke-topp3tcp-nlp and
-# deke-bench-retimers (which depends on it) are excluded: they pull sleipnir, which
-# needs CMake and a C++23 toolchain (GCC 14+ / MSVC 19.37+) and won't build across
-# the musl/Windows runners, so they get no CI coverage here.
+# Every workspace member is pure Rust and gets cargo check + clippy on each target,
+# and tests execute natively per platform. deke-bench-retimers (an internal
+# comparison harness whose tests run every retimer under wall-clock timeouts) is
+# checked and linted but skipped in the test step to keep the matrix fast.
 
 on:
   push:
@@ -42,10 +41,10 @@ jobs:
           key: ${{ matrix.platform.target }}
 
       - name: Cargo check
-        run: cargo check --workspace --exclude deke-topp3tcp-nlp --exclude deke-bench-retimers --target ${{ matrix.platform.target }}
+        run: cargo check --workspace --target ${{ matrix.platform.target }}
 
       - name: Clippy
-        run: cargo clippy --workspace --exclude deke-topp3tcp-nlp --exclude deke-bench-retimers --target ${{ matrix.platform.target }} -- -D warnings
+        run: cargo clippy --workspace --target ${{ matrix.platform.target }} -- -D warnings
 
       - name: Tests
-        run: cargo test --workspace --exclude deke-topp3tcp-nlp --exclude deke-bench-retimers --target ${{ matrix.platform.target }}
+        run: cargo test --workspace --exclude deke-bench-retimers --target ${{ matrix.platform.target }}

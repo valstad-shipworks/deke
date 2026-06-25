@@ -1,7 +1,6 @@
-//! Comparative analysis across the four `deke_types::Retimer` implementations:
+//! Comparative analysis across the `deke_types::Retimer` implementations:
 //!
-//! - [`deke_topp3tcp_nlp::continuous::Topp3Tcp6`] (continuous NLP)
-//! - [`deke_topp3tcp_nlp::discrete::Topp3Tcp6Discrete`] (discrete NLP)
+//! - [`deke_topp3_lp::Topp3LpTcp`] (joint-space convex-LP, exact path)
 //! - [`deke_topp3tcp_spline::Topp3TcpSpline`] (B-spline + DFS over jerk)
 //! - [`deke_topp_speed::ToppSolver`] (real-time jerk-limited shaper)
 //!
@@ -713,30 +712,27 @@ fn timeout_result<const N: usize>(name: &'static str) -> BenchResult<N> {
     }
 }
 
-pub fn run_topp3tcp6<const N: usize, FK: ContinuousFKChain<N, f64> + 'static>(
+pub fn run_topp3_lp<const N: usize, FK: ContinuousFKChain<N, f64> + 'static>(
     problem: &BenchProblem<N>,
     fk: &FK,
 ) -> BenchResult<N> {
     let problem = problem.clone();
     let fk = fk.clone();
-    with_timeout(move || run_topp3tcp6_inner::<N, FK>(&problem, &fk))
-        .unwrap_or_else(|| timeout_result::<N>("topp3tcp6"))
+    with_timeout(move || run_topp3_lp_inner::<N, FK>(&problem, &fk))
+        .unwrap_or_else(|| timeout_result::<N>("topp3-lp"))
 }
 
-fn run_topp3tcp6_inner<const N: usize, FK: ContinuousFKChain<N, f64>>(
+fn run_topp3_lp_inner<const N: usize, FK: ContinuousFKChain<N, f64>>(
     problem: &BenchProblem<N>,
     fk: &FK,
 ) -> BenchResult<N> {
-    use deke_topp3tcp_nlp::continuous::{
-        BoundaryConditions, DensificationOptions, JointLimits, SolverOptions, TcpLimits, Topp3Tcp6,
-        Topp3Tcp6Constraints,
-    };
+    use deke_topp3_lp::{JointLimits, TcpLimits, Topp3LpConstraints, Topp3LpTcp};
 
     let path = match problem.path() {
         Ok(p) => p,
         Err(e) => {
             return BenchResult {
-                retimer: "topp3tcp6",
+                retimer: "topp3-lp",
                 status: "path-construction".into(),
                 solve_time: Duration::ZERO,
                 trajectory_duration: Duration::ZERO,
@@ -750,100 +746,28 @@ fn run_topp3tcp6_inner<const N: usize, FK: ContinuousFKChain<N, f64>>(
         }
     };
 
-    let mut cfg = Topp3Tcp6Constraints::<N>::symmetric(1.0, 1.0, 1.0);
+    let dt = Duration::from_secs_f64(1.0 / problem.sample_rate_hz);
+    let mut cfg = Topp3LpConstraints::<N>::symmetric(1.0, 1.0, 1.0, dt);
     cfg.joint = JointLimits {
-        q_min: SRobotQ::from_array([f64::NEG_INFINITY; N]),
-        q_max: SRobotQ::from_array([f64::INFINITY; N]),
         v_max: SRobotQ::from_array(problem.v_max),
         a_max: SRobotQ::from_array(problem.a_max),
         j_max: SRobotQ::from_array(problem.j_max),
     };
-    cfg.tcp = problem.tcp_v_max.map(|v| TcpLimits {
-        v_max: v,
-        a_max: f64::INFINITY,
-        j_max: f64::INFINITY,
-    });
-    cfg.boundary = BoundaryConditions::rest_to_rest();
-    cfg.densification = DensificationOptions::default();
-    cfg.solver = SolverOptions::default();
-    cfg.sample_rate_hz = problem.sample_rate_hz;
+    cfg.tcp = TcpLimits {
+        v_max: problem.tcp_v_max,
+    };
 
     let validator = wide_validator::<N>();
     let t0 = Instant::now();
-    let (result, diag) = Topp3Tcp6::new(fk).retime(&cfg, &path, &validator, &());
+    // Topp3LpTcp covers both joint-only (tcp v_max None) and TCP-capped cases.
+    let (result, _diag) = Topp3LpTcp::new(fk).retime(&cfg, &path, &validator, &());
     let solve_time = t0.elapsed();
-    let status = format!("{:?}", diag.status);
-    finalize_result("topp3tcp6", status, solve_time, result, problem, fk)
-}
-
-pub fn run_topp3tcp6_discrete<const N: usize, FK: ContinuousFKChain<N, f64> + 'static>(
-    problem: &BenchProblem<N>,
-    fk: &FK,
-) -> BenchResult<N> {
-    let problem = problem.clone();
-    let fk = fk.clone();
-    with_timeout(move || run_topp3tcp6_discrete_inner::<N, FK>(&problem, &fk))
-        .unwrap_or_else(|| timeout_result::<N>("topp3tcp6-discrete"))
-}
-
-fn run_topp3tcp6_discrete_inner<const N: usize, FK: ContinuousFKChain<N, f64>>(
-    problem: &BenchProblem<N>,
-    fk: &FK,
-) -> BenchResult<N> {
-    use deke_topp3tcp_nlp::discrete::{
-        BoundaryConditions, DensificationOptions, DiscreteSolverOptions, JointLimits, TcpLimits,
-        Topp3Tcp6Discrete, Topp3Tcp6DiscreteConstraints,
+    let status = if result.is_ok() {
+        "ok".into()
+    } else {
+        "failed".into()
     };
-
-    let path = match problem.path() {
-        Ok(p) => p,
-        Err(e) => {
-            return BenchResult {
-                retimer: "topp3tcp6-discrete",
-                status: "path-construction".into(),
-                solve_time: Duration::ZERO,
-                trajectory_duration: Duration::ZERO,
-                num_samples: 0,
-                joint_fd: None,
-                tcp_fd: None,
-                utilization: None,
-                max_path_deviation: None,
-                error: Some(format!("{}", e)),
-            };
-        }
-    };
-
-    let mut cfg = Topp3Tcp6DiscreteConstraints::<N>::symmetric(1.0, 1.0, 1.0);
-    cfg.joint = JointLimits {
-        q_min: SRobotQ::from_array([f64::NEG_INFINITY; N]),
-        q_max: SRobotQ::from_array([f64::INFINITY; N]),
-        v_max: SRobotQ::from_array(problem.v_max),
-        a_max: SRobotQ::from_array(problem.a_max),
-        j_max: SRobotQ::from_array(problem.j_max),
-    };
-    cfg.tcp = problem.tcp_v_max.map(|v| TcpLimits {
-        v_max: v,
-        a_max: f64::INFINITY,
-        j_max: f64::INFINITY,
-    });
-    cfg.boundary = BoundaryConditions::rest_to_rest();
-    cfg.densification = DensificationOptions::default();
-    cfg.solver = DiscreteSolverOptions::default();
-    cfg.sample_rate_hz = problem.sample_rate_hz;
-
-    let validator = wide_validator::<N>();
-    let t0 = Instant::now();
-    let (result, diag) = Topp3Tcp6Discrete::new(fk).retime(&cfg, &path, &validator, &());
-    let solve_time = t0.elapsed();
-    let status = format!("{:?}", diag.status);
-    finalize_result(
-        "topp3tcp6-discrete",
-        status,
-        solve_time,
-        result,
-        problem,
-        fk,
-    )
+    finalize_result("topp3-lp", status, solve_time, result, problem, fk)
 }
 
 pub fn run_topp3tcp_spline<const N: usize, FK: ContinuousFKChain<N, f64> + 'static>(
@@ -1009,15 +933,14 @@ fn run_topp_speed_inner<const N: usize, FK: ContinuousFKChain<N, f64>>(
     finalize_result("topp-speed", status, solve_time, result, problem, fk)
 }
 
-/// Runs all four retimers on `problem` and returns one [`BenchResult`] per
-/// retimer in fixed order.
+/// Runs every retimer on `problem` and returns one [`BenchResult`] per retimer
+/// in fixed order.
 pub fn run_all<const N: usize, FK: ContinuousFKChain<N, f64> + 'static>(
     problem: &BenchProblem<N>,
     fk: &FK,
 ) -> Vec<BenchResult<N>> {
     vec![
-        run_topp3tcp6(problem, fk),
-        run_topp3tcp6_discrete(problem, fk),
+        run_topp3_lp(problem, fk),
         run_topp3tcp_spline(problem, fk),
         run_topp_speed(problem, fk),
     ]
