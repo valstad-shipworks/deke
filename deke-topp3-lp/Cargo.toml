@@ -1,6 +1,6 @@
 [package]
 name = "deke-topp3-lp"
-version = "0.1.0"
+version = "2.0.0"
 edition = "2024"
 description = "Joint-space, path-exact, jerk-limited TOPP-3 retimer via a discrete convex LP, with an optional TCP-velocity cap."
 license = "Apache-2.0"
