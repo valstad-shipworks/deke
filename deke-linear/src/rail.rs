@@ -436,7 +436,6 @@ where
                 layers[k][i].0
             })
             .collect();
-
         // Remove the per-sample floating-point jitter of the independent analytic IK
         // solves (~1e-5 rad — sub-mm at the TCP, so well within path tolerance). A
         // fast scan cubes that jitter into a spurious jerk spike. The window is a

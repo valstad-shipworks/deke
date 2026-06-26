@@ -85,6 +85,10 @@ pub struct Kinematics<const N: usize, F: KinScalar = f32> {
     ee_id: bool,
     /// IK strategy resolved eagerly at construction, shared across clones.
     ik: std::sync::Arc<crate::ik::IkResolved<N>>,
+    /// User IK rules, retained so a clone that re-targets the chain
+    /// (`clone_with_ee_tf` / `clone_with_base_tf`) can re-resolve the strategy
+    /// for its new geometry rather than inverting against the original.
+    rules: std::sync::Arc<[IkRules<f64>]>,
 }
 
 impl<const N: usize, F: KinScalar> Kinematics<N, F> {
@@ -214,6 +218,7 @@ impl<const N: usize, F: KinScalar> Kinematics<N, F> {
         let mut c = self.clone();
         c.base_id = affine_is_identity::<F>(&base_tf);
         c.base_tf = base_tf;
+        c.reresolve_ik();
         c
     }
 
@@ -223,6 +228,7 @@ impl<const N: usize, F: KinScalar> Kinematics<N, F> {
         let mut c = self.clone();
         c.ee_id = affine_is_identity::<F>(&ee_tf);
         c.ee_tf = ee_tf;
+        c.reresolve_ik();
         c
     }
 
@@ -293,7 +299,20 @@ impl<const N: usize, F: KinScalar> Kinematics<N, F> {
             base_id: affine_is_identity::<F>(&base_tf),
             ee_id,
             ik,
+            rules: std::sync::Arc::from(rules),
         }
+    }
+
+    /// Re-resolve the IK strategy after the base or tool transform changed. The
+    /// analytic decomposition folds `base_to_first` and `end_to_ee` into the
+    /// reduced chain, so a clone that swaps either must rebuild the strategy or
+    /// `ik()` would invert against the original geometry (placing the *old* tool
+    /// frame at the target, not the new one).
+    fn reresolve_ik(&mut self) {
+        let spec = ContinuousFKChain::structure(self);
+        let (lower, upper) = self.ik.limits_f64();
+        let limits = crate::ik::Limits { lower, upper };
+        self.ik = crate::ik::resolve_ik(&spec, limits, &self.rules);
     }
 
     /// The IK strategy resolved for this chain at construction.
@@ -862,6 +881,170 @@ mod tests {
                 .all(|(a, b)| (a - b).abs() < 1e-6)
         });
         assert!(matched, "no analytic IK solution reproduced the pose");
+    }
+
+    /// IK must round-trip through a clone that swaps in a rotation-bearing tool
+    /// offset. The analytic strategy folds `end_to_ee` into the reduced chain,
+    /// so `clone_with_ee_tf` has to rebuild it; otherwise `ik` inverts against
+    /// the original tool and places the *old* frame at the target — leaving the
+    /// realized orientation rotated by the offset.
+    #[test]
+    fn ik_roundtrips_through_rotated_ee_tf() {
+        use deke_types::{IkOutcome, IkSolver};
+
+        let ee = DAffine3::from_axis_angle(DVec3::Z, std::f64::consts::FRAC_PI_2)
+            * DAffine3::from_translation(DVec3::new(0.05, -0.08, 0.15));
+        let chain = puma().clone_with_ee_tf(ee);
+
+        let q = q6([0.2, -0.4, 0.7, 0.3, 0.6, -0.5]);
+        let target = chain.fk_end(&q).unwrap();
+        let sols = match chain.ik(target).unwrap() {
+            IkOutcome::Solved(s) => s,
+            _ => panic!("no IK solutions for rotated-ee target"),
+        };
+        let want = target.to_cols_array();
+        let matched = sols.iter().any(|s| {
+            let got = chain.fk_end(s).unwrap().to_cols_array();
+            want.iter()
+                .zip(got.iter())
+                .all(|(a, b)| (a - b).abs() < 1e-6)
+        });
+        assert!(
+            matched,
+            "no IK solution reproduced the rotated-ee target pose"
+        );
+    }
+
+    /// Mirror orchestra's rail-scan chain: build via `from_kinspec` with a
+    /// rotated tool already baked into `end_to_ee` (the torch TCP), then
+    /// `clone_with_ee_tf` to a *different* rotated tool (the sensor eye). IK on
+    /// the clone must land the eye at the target, not the torch.
+    #[test]
+    fn ik_roundtrips_from_kinspec_then_ee_swap() {
+        use deke_types::{IkOutcome, IkSolver};
+
+        let spec = ContinuousFKChain::structure(&puma());
+        let tcp = DAffine3::from_axis_angle(DVec3::new(0.3, 0.2, 1.0).normalize(), 1.1)
+            * DAffine3::from_translation(DVec3::new(-0.01, -0.1, 0.41));
+        let limits = JointLimits::symmetric(6.3);
+        let base = Kinematics::<6, f64>::from_kinspec(
+            KinSpec {
+                base_to_first: spec.base_to_first,
+                joints: spec.joints,
+                end_to_ee: tcp,
+            },
+            limits,
+            &[],
+        );
+        let eye = DAffine3::from_axis_angle(DVec3::Z, std::f64::consts::FRAC_PI_2)
+            * DAffine3::from_translation(DVec3::new(-0.016, -0.085, 0.151));
+        let chain = base.clone_with_ee_tf(eye);
+
+        let q = q6([0.2, -0.4, 0.7, 0.3, 0.6, -0.5]);
+        let target = chain.fk_end(&q).unwrap();
+        let sols = match chain.ik(target).unwrap() {
+            IkOutcome::Solved(s) => s,
+            _ => panic!("no IK solutions after from_kinspec + ee swap"),
+        };
+        let want = target.to_cols_array();
+        let matched = sols.iter().any(|s| {
+            let got = chain.fk_end(s).unwrap().to_cols_array();
+            want.iter()
+                .zip(got.iter())
+                .all(|(a, b)| (a - b).abs() < 1e-6)
+        });
+        assert!(
+            matched,
+            "no IK solution reproduced the eye target after ee swap"
+        );
+    }
+
+    /// `structure()` must round-trip through `from_kinspec`: orchestra's rail
+    /// planner rebuilds the arm chain from the 7-DOF chain's `structure()`, so a
+    /// lossy round-trip means the planner's FK silently diverges from the real
+    /// kinematics (the eye lands somewhere other than planned).
+    #[test]
+    fn structure_roundtrips_through_from_kinspec() {
+        let chain = puma();
+        let spec = ContinuousFKChain::structure(&chain);
+        let rebuilt = Kinematics::<6, f64>::from_kinspec(spec, JointLimits::symmetric(6.3), &[]);
+        for q in [
+            q6([0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+            q6([0.2, -0.4, 0.7, 0.3, 0.6, -0.5]),
+            q6([1.1, 0.9, -1.2, 2.0, -0.7, 1.5]),
+        ] {
+            let a = chain.fk_end(&q).unwrap().to_cols_array();
+            let b = rebuilt.fk_end(&q).unwrap().to_cols_array();
+            for k in 0..12 {
+                assert!(
+                    (a[k] - b[k]).abs() < 1e-9,
+                    "fk mismatch at q={q:?} elem {k}: {} vs {}",
+                    a[k],
+                    b[k]
+                );
+            }
+        }
+    }
+
+    /// Orchestra's `arm_at_rail_chain` folds the prismatic rail (joint 0) into
+    /// the base and rebuilds a 6-DOF arm from `structure().joints[1..7]`. At rail
+    /// 0 that 6-DOF chain's FK must equal the 7-DOF chain's FK, or the rail
+    /// planner plans against geometry the real robot doesn't have.
+    #[test]
+    fn rail_fold_into_base_matches_7dof_fk_at_zero() {
+        let arm = puma();
+        let aspec = ContinuousFKChain::structure(&arm);
+        // 7-DOF: prismatic X rail at joint 0 (with a non-trivial mount origin),
+        // then puma's 6R arm.
+        let rail_origin = DAffine3::from_axis_angle(DVec3::Y, 0.4)
+            * DAffine3::from_translation(DVec3::new(0.1, 0.0, 0.2));
+        let joints7: [(DAffine3, JointSpec<f64>); 7] = std::array::from_fn(|i| {
+            if i == 0 {
+                (
+                    rail_origin,
+                    JointSpec::Prismatic {
+                        axis_local: DVec3::X,
+                    },
+                )
+            } else {
+                aspec.joints[i - 1]
+            }
+        });
+        let chain7 = Kinematics::<7, f64>::from_kinspec(
+            KinSpec {
+                base_to_first: DAffine3::IDENTITY,
+                joints: joints7,
+                end_to_ee: aspec.end_to_ee,
+            },
+            JointLimits::symmetric(6.3),
+            &[],
+        );
+        let s7 = ContinuousFKChain::structure(&chain7);
+        // Mimic arm_at_rail_chain(0.0): base6 = base · joints[0].0, arm = joints[1..7].
+        let base6 = s7.base_to_first * s7.joints[0].0;
+        let joints6: [(DAffine3, JointSpec<f64>); 6] = std::array::from_fn(|i| s7.joints[i + 1]);
+        let arm6 = Kinematics::<6, f64>::from_kinspec(
+            KinSpec {
+                base_to_first: base6,
+                joints: joints6,
+                end_to_ee: s7.end_to_ee,
+            },
+            JointLimits::symmetric(6.3),
+            &[],
+        );
+        let aq = [0.2, -0.4, 0.7, 0.3, 0.6, -0.5];
+        let q7 = SRobotQ::<7, f64>::from_array([0.0, aq[0], aq[1], aq[2], aq[3], aq[4], aq[5]]);
+        let q6 = SRobotQ::<6, f64>::from_array(aq);
+        let f7 = chain7.fk_end(&q7).unwrap().to_cols_array();
+        let f6 = arm6.fk_end(&q6).unwrap().to_cols_array();
+        for k in 0..12 {
+            assert!(
+                (f7[k] - f6[k]).abs() < 1e-9,
+                "elem {k}: 7dof {} vs arm6 {}",
+                f7[k],
+                f6[k]
+            );
+        }
     }
 
     /// A generic 6R chain (no closed form) resolves to the eigenvalue fallback

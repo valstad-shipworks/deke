@@ -8,7 +8,11 @@ authors = ["Bowan Foryt <bowan@valstad.com>"]
 repository = "https://github.com/valstad-shipworks/deke"
 
 [dependencies]
-deke-types = { version = "2.0", path = "../deke-types" }
+# No path-dep on the local deke-types: when this crate is patched into the
+# valstad-tools graph it must share the single registry `deke-types 2.0.x` that
+# torkin and the other registry deke crates link, or the FKChain/IkSolver trait
+# identities split across two copies and nothing unifies.
+deke-types = { version = "2.0" }
 const_soft_float = "0.1.4"
 glam = "0.32.1"
 glam-traits-ext = "0.32.3"
