@@ -1,8 +1,8 @@
+use deke_rrt::scurve::{JointKinLimits, KinematicLimits};
 use deke_rrt::{
     AorrtcPlanner, AorrtcSettings, KrrtcPlanner, KrrtcSettings, RrtTermination, RrtcPlanner,
     RrtcSettings, StartEnd,
 };
-use deke_rrt::scurve::{JointKinLimits, KinematicLimits};
 use deke_types::{DekeError, DekeResult, Planner, SRobotQ, SRobotQLike, Validator};
 
 #[derive(Debug, Clone)]

@@ -37,11 +37,15 @@ pub(crate) fn require_positive_finite(name: &str, v: f64) -> Result<(), String> 
     }
 }
 
-pub(crate) fn validate_dof_weights<const N: usize>(weights: &SRobotQ<N, f64>) -> Result<(), String> {
+pub(crate) fn validate_dof_weights<const N: usize>(
+    weights: &SRobotQ<N, f64>,
+) -> Result<(), String> {
     for i in 0..N {
         let w = weights.0[i];
         if !w.is_finite() || w <= 0.0 {
-            return Err(format!("dof_cost_weights[{i}] must be finite and > 0, got {w}"));
+            return Err(format!(
+                "dof_cost_weights[{i}] must be finite and > 0, got {w}"
+            ));
         }
     }
     Ok(())
@@ -700,20 +704,14 @@ mod tests {
     fn range_normalized_weights_balance_a_long_rail_against_a_joint() {
         // A 10 m rail and a ~1 rad joint: weights are 1/span^2, so a unit move
         // on each axis contributes equally to the squared metric.
-        let w = RrtcSettings::range_normalized_weights(
-            &SRobotQ([0.0, 0.0]),
-            &SRobotQ([10.0, 1.0]),
-        );
+        let w = RrtcSettings::range_normalized_weights(&SRobotQ([0.0, 0.0]), &SRobotQ([10.0, 1.0]));
         assert!((w.0[0] - 0.01).abs() < 1e-12);
         assert!((w.0[1] - 1.0).abs() < 1e-12);
     }
 
     #[test]
     fn range_normalized_zero_span_axis_falls_back_to_unit() {
-        let w = RrtcSettings::range_normalized_weights(
-            &SRobotQ([5.0, 0.0]),
-            &SRobotQ([5.0, 2.0]),
-        );
+        let w = RrtcSettings::range_normalized_weights(&SRobotQ([5.0, 0.0]), &SRobotQ([5.0, 2.0]));
         assert_eq!(w.0[0], 1.0);
         assert!((w.0[1] - 0.25).abs() < 1e-12);
     }

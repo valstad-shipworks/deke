@@ -95,13 +95,10 @@ fn roundtrip<const N: usize>(seed: u64, rounds: usize) {
 
         // The planted configuration must be among the solutions.
         let recovered = sols.iter().any(|s| {
-            s.as_slice()
-                .iter()
-                .zip(q_arr.iter())
-                .all(|(a, b)| {
-                    let d = (a - b).rem_euclid(std::f64::consts::TAU);
-                    d < 1e-5 || (std::f64::consts::TAU - d) < 1e-5
-                })
+            s.as_slice().iter().zip(q_arr.iter()).all(|(a, b)| {
+                let d = (a - b).rem_euclid(std::f64::consts::TAU);
+                d < 1e-5 || (std::f64::consts::TAU - d) < 1e-5
+            })
         });
         assert!(
             recovered,
@@ -110,7 +107,9 @@ fn roundtrip<const N: usize>(seed: u64, rounds: usize) {
         );
     }
 
-    eprintln!("{N}R: {generic_chains}/{rounds} generic chains, {total_solutions} solutions, all roundtrip");
+    eprintln!(
+        "{N}R: {generic_chains}/{rounds} generic chains, {total_solutions} solutions, all roundtrip"
+    );
     assert!(
         generic_chains >= 20,
         "too few non-decomposable {N}R chains exercised the generic path: {generic_chains}/{rounds}"
