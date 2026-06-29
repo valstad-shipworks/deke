@@ -1,11 +1,11 @@
 use deke_types::{DekeError, DekeResult, SRobotPath, SRobotQ, Validator};
 
 use crate::randomizer::{DekeRng, RandomizerType};
-use crate::rrtc::{sample_uniform, validate_edge, validate_edge_stats};
-use crate::scurve::{
-    KinematicLimits, direction_cosine, kinematic_interpolate, kinematic_path_cost,
-    time_optimal_cost,
+use crate::rrtc::{
+    invalid_settings_result, require_positive_finite, sample_uniform, validate_edge,
+    validate_edge_stats,
 };
+use crate::scurve::{KinematicLimits, direction_cosine, kinematic_path_cost, time_optimal_cost};
 use crate::tree::RrtTree;
 use crate::{ExtensionStats, RrtDiagnostic, RrtTermination};
 
@@ -56,6 +56,27 @@ impl<const N: usize> KrrtcSettings<N> {
             smoothing_iterations: 100,
         }
     }
+
+    /// Reject settings that would poison the metric or never terminate, before
+    /// any tree is built. As [`RrtcSettings::validate`], plus every joint's
+    /// kinematic limits must be finite and strictly positive — a zero `v_max`
+    /// produces an infinite velocity coefficient that poisons the kd-tree.
+    pub fn validate(&self) -> Result<(), String> {
+        require_positive_finite("range", self.range)?;
+        require_positive_finite("resolution", self.resolution)?;
+        if self.max_iterations == 0 {
+            return Err("max_iterations must be > 0".into());
+        }
+        if self.max_samples < 2 {
+            return Err("max_samples must be >= 2".into());
+        }
+        if let Some(i) = self.kin_limits.first_invalid_joint() {
+            return Err(format!(
+                "kin_limits.joints[{i}] must have finite, strictly positive v_max/a_max/j_max"
+            ));
+        }
+        Ok(())
+    }
 }
 
 fn kinematic_steer<const N: usize>(
@@ -68,7 +89,12 @@ fn kinematic_steer<const N: usize>(
     if cost <= range {
         *toward
     } else {
-        kinematic_interpolate(from, toward, range / cost)
+        // Advance the intended fraction of the time-optimal cost along the
+        // straight chord. The quintic ease in `kinematic_interpolate` is a
+        // time-reparameterization for retiming a fixed segment, not a chord
+        // selector — easing here would place the node at only ~6% of the chord
+        // for a 20% request, starving exploration.
+        *from + (*toward - *from) * (range / cost)
     }
 }
 
@@ -311,6 +337,9 @@ pub(crate) fn solve<const N: usize, V: Validator<N, (), f64>, R: DekeRng<N>>(
     rng: &mut R,
 ) -> (DekeResult<SRobotPath<N, f64>>, RrtDiagnostic) {
     let timer = std::time::Instant::now();
+    if settings.validate().is_err() {
+        return invalid_settings_result(timer.elapsed().as_nanos());
+    }
     let coeffs = settings.kin_limits.velocity_coeffs();
 
     let mut stats = ExtensionStats::default();
@@ -566,5 +595,42 @@ fn extend_and_connect<const N: usize, V: Validator<N, (), f64>>(
         }
 
         connect_idx = step_idx;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scurve::JointKinLimits;
+
+    fn joint(v: f64) -> JointKinLimits {
+        JointKinLimits {
+            v_max: v,
+            a_max: 10.0,
+            j_max: 50.0,
+        }
+    }
+
+    fn settings(j0: JointKinLimits, j1: JointKinLimits) -> KrrtcSettings<2> {
+        KrrtcSettings::new(
+            SRobotQ([0.0, 0.0]),
+            SRobotQ([1.0, 1.0]),
+            KinematicLimits { joints: [j0, j1] },
+        )
+    }
+
+    #[test]
+    fn finite_positive_limits_pass() {
+        assert!(settings(joint(1.0), joint(2.0)).validate().is_ok());
+    }
+
+    #[test]
+    fn zero_vmax_rejected() {
+        assert!(settings(joint(1.0), joint(0.0)).validate().is_err());
+    }
+
+    #[test]
+    fn non_finite_limit_rejected() {
+        assert!(settings(joint(f64::NAN), joint(1.0)).validate().is_err());
     }
 }

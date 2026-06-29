@@ -205,6 +205,26 @@ pub struct RrtDiagnostic {
     pub anytime: Option<AnytimeInfo>,
 }
 
+impl RrtDiagnostic {
+    /// Diagnostic for a run rejected at the input-validation gate, before any
+    /// tree was built. Pairs with the [`DekeError::InvalidSettings`] returned
+    /// from the same call and reports [`RrtTermination::InputInvalid`].
+    pub(crate) fn invalid(elapsed_ns: u128) -> Self {
+        Self {
+            iterations: 0,
+            start_tree_size: 0,
+            goal_tree_size: 0,
+            path_cost: f64::INFINITY,
+            elapsed_ns,
+            termination: RrtTermination::InputInvalid,
+            extension_stats: ExtensionStats::default(),
+            c_min: f64::NAN,
+            closest_approach: f64::INFINITY,
+            anytime: None,
+        }
+    }
+}
+
 impl fmt::Display for RrtDiagnostic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(

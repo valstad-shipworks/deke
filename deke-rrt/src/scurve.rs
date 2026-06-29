@@ -7,12 +7,30 @@ pub struct JointKinLimits {
     pub j_max: f64,
 }
 
+impl JointKinLimits {
+    /// Every limit must be finite and strictly positive for [`min_time_1d`] and
+    /// [`KinematicLimits::velocity_coeffs`] to yield finite, well-ordered
+    /// results — a zero `v_max` produces an infinite metric coefficient that
+    /// poisons the kd-tree, and a zero `a_max`/`j_max` divides by zero.
+    pub fn is_valid(&self) -> bool {
+        [self.v_max, self.a_max, self.j_max]
+            .iter()
+            .all(|x| x.is_finite() && *x > 0.0)
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct KinematicLimits<const N: usize> {
     pub joints: [JointKinLimits; N],
 }
 
 impl<const N: usize> KinematicLimits<N> {
+    /// Index of the first joint whose limits are not finite and strictly
+    /// positive, or `None` when every joint is valid.
+    pub fn first_invalid_joint(&self) -> Option<usize> {
+        (0..N).find(|&i| !self.joints[i].is_valid())
+    }
+
     /// Derives velocity-scaled coefficients for KDTree nearest-neighbor queries.
     /// coeff[i] = 1/v_max[i]^2 so that the Euclidean distance in scaled space
     /// approximates the time-optimal cost (lower bound).
@@ -55,12 +73,11 @@ pub fn min_time_1d(delta_q: f64, limits: &JointKinLimits) -> f64 {
     let d_min_reach_a = 2.0 * a * t_j * t_j;
 
     if d < d_min_reach_a {
-        // Case 1: Can't reach a_max — triangular jerk profile
-        // Each side has one jerk phase of duration t_j'
-        // Peak accel = j * t_j', peak vel = j * t_j'^2 / 2
-        // Displacement = 2 * (j * t_j'^3 / 6 + j * t_j'^2 / 2 * t_j' - j * t_j'^3 / 6)
-        // Simplified: d = j * t_j'^3
-        let tj_prime = (d / j).cbrt();
+        // Case 1: Can't reach a_max — triangular jerk profile of four equal
+        // jerk phases (jerk+ | jerk- | jerk- | jerk+) each of duration t_j'.
+        // Integrating velocity over the four phases gives d = 2 * j * t_j'^3,
+        // so t_j' = (d / (2 j))^(1/3) and the total time is 4 * t_j'.
+        let tj_prime = (d / (2.0 * j)).cbrt();
         return 4.0 * tj_prime;
     }
 
@@ -95,7 +112,7 @@ pub fn min_time_1d(delta_q: f64, limits: &JointKinLimits) -> f64 {
 
             if t_a_actual < 0.0 {
                 // Falls back to case 1 territory (shouldn't happen given our checks, but guard)
-                let tj_prime = (d / j).cbrt();
+                let tj_prime = (d / (2.0 * j)).cbrt();
                 return 4.0 * tj_prime;
             }
 
@@ -118,7 +135,7 @@ pub fn min_time_1d(delta_q: f64, limits: &JointKinLimits) -> f64 {
 
     if d < d_no_coast {
         // Can't reach v_max either — pure triangular (same as case 1)
-        let tj_solve = (d / j).cbrt();
+        let tj_solve = (d / (2.0 * j)).cbrt();
         return 4.0 * tj_solve;
     }
 
@@ -160,7 +177,7 @@ pub fn kinematic_interpolate<const N: usize>(
     to: &SRobotQ<N, f64>,
     t_normalized: f64,
 ) -> SRobotQ<N, f64> {
-    let s = quintic_interp(t_normalized) as f32;
+    let s = quintic_interp(t_normalized);
     *from + (*to - *from) * s
 }
 
@@ -253,11 +270,38 @@ mod tests {
             a_max: 100.0,
             j_max: 1000.0,
         };
-        // Very small displacement: d = j * t_j'^3 → t_j' = (d/j)^(1/3)
+        // Very small displacement: d = 2 j t_j'^3 → t_j' = (d/(2j))^(1/3)
         let d = 0.001;
         let t = min_time_1d(d, &lim);
-        let expected = 4.0 * (d / lim.j_max).cbrt();
+        let expected = 4.0 * (d / (2.0 * lim.j_max)).cbrt();
         assert!((t - expected).abs() < 1e-10, "expected {expected}, got {t}");
+    }
+
+    #[test]
+    fn continuous_and_monotone_across_reach_a_boundary() {
+        let lim = typical_limits();
+        // The case-1/case-2 boundary sits at d_min_reach_a = 2 a^3 / j^2.
+        let boundary = 2.0 * lim.a_max.powi(3) / (lim.j_max * lim.j_max);
+        let lo = boundary * 0.5;
+        let hi = boundary * 1.5;
+        let steps = 2000;
+        let mut prev_d = lo;
+        let mut prev_t = min_time_1d(lo, &lim);
+        for k in 1..=steps {
+            let d = lo + (hi - lo) * k as f64 / steps as f64;
+            let t = min_time_1d(d, &lim);
+            assert!(t > prev_t, "non-monotone at d={d}: t={t} prev_t={prev_t}");
+            // Lipschitz across the boundary: no discontinuous jump. Slope near
+            // the boundary is bounded well under 1/v_max here.
+            assert!(
+                (t - prev_t) < 1.0 * (d - prev_d) + 1e-9,
+                "discontinuity at d={d}: jumped {} over {}",
+                t - prev_t,
+                d - prev_d
+            );
+            prev_d = d;
+            prev_t = t;
+        }
     }
 
     #[test]

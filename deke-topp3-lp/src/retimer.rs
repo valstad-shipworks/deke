@@ -463,6 +463,10 @@ fn time_chord<const N: usize>(
     // the horizon (more ticks at the corner ⇒ lower σ̇ ⇒ smaller leak) and re-solve
     // until it passes, rather than emit an over-limit trajectory.
     let mut last_violation: Option<(&'static str, usize, f64, f64)> = None;
+    // First feasible reconstruction kept around so that, if growing the horizon
+    // never clears the FD verify, we can fall back to uniformly slowing it (see
+    // `time_scale_to_limits`) instead of failing outright.
+    let mut best: Option<Vec<SRobotQ<N, f64>>> = None;
     for _grow in 0..8 {
         if kk > MAX_TICKS {
             // The grid the limits demand at this dt exceeds the budget — this is a
@@ -522,6 +526,9 @@ fn time_chord<const N: usize>(
                 None => return Ok(samples),
                 Some((kind, joint_idx, value, limit, _idx)) => {
                     last_violation = Some((kind, joint_idx, value, limit));
+                    if best.is_none() {
+                        best = Some(samples);
+                    }
                 }
             }
 
@@ -560,11 +567,26 @@ fn time_chord<const N: usize>(
                     None => return Ok(samples),
                     Some((kind, joint_idx, value, limit, _idx)) => {
                         last_violation = Some((kind, joint_idx, value, limit));
+                        if best.is_none() {
+                            best = Some(samples);
+                        }
                     }
                 }
             }
         }
         kk = (kk as f64 * 1.6) as usize + 16;
+    }
+    // Growing the horizon failed to clear the verify. On a straight, slow-axis-
+    // dominated chord that is expected: the LP ramps the binding joint at its
+    // limit regardless of horizon, and an ill-conditioned solve can leave its own
+    // σ rows slightly (sometimes grossly) violated, which more ticks never shrink.
+    // Uniformly slow the best feasible reconstruction until the true-limit FD
+    // verify passes — always safe (it stays exactly on the chord and only lowers
+    // every derivative) and independent of solver precision.
+    if let Some(best) = best
+        && let Some(scaled) = time_scale_to_limits(&best, joint, dt)
+    {
+        return Ok(scaled);
     }
     match last_violation {
         Some((kind, joint_idx, value, limit)) => Err(Topp3LpError::JointLimitExceeded {
@@ -621,6 +643,67 @@ fn verify_joint_fd<const N: usize>(
         }
     }
     worst.map(|(_, kind, j, val, limit, idx)| (kind, j, val, limit, idx))
+}
+
+/// Uniformly slow `samples` until every finite-difference v/a/j is under the true
+/// limit, returning the slowed trajectory (or `None` if it cannot converge). A
+/// time stretch by `s` scales the order-`d` finite difference by `1/sᵈ`, so this
+/// always reduces the violation and — because it only resamples along the chord
+/// the samples already lie on — never leaves the planned path. It is the robust
+/// backstop for an ill-conditioned σ-LP whose returned profile overruns its own
+/// planned caps: correctness no longer hinges on the convex solver's precision.
+fn time_scale_to_limits<const N: usize>(
+    samples: &[SRobotQ<N, f64>],
+    joint: &JointLimits<N>,
+    dt: f64,
+) -> Option<Vec<SRobotQ<N, f64>>> {
+    let mut cur = samples.to_vec();
+    for _ in 0..16 {
+        match verify_joint_fd(&cur, joint, dt) {
+            None => return Some(cur),
+            Some((kind, _j, value, limit, _idx)) => {
+                let order = match kind {
+                    "velocity" => 1.0,
+                    "acceleration" => 2.0,
+                    _ => 3.0,
+                };
+                // Slow just enough to bring the worst derivative under, with a
+                // little headroom so the next verify clears rather than lands on
+                // the bound.
+                let s = (value / limit).powf(1.0 / order) * 1.01;
+                if !s.is_finite() || s <= 1.0 {
+                    return None;
+                }
+                cur = resample_stretch(&cur, s);
+            }
+        }
+    }
+    None
+}
+
+/// Resample `samples` onto a `s×`-longer uniform grid (same `dt`): the identical
+/// on-chord polyline traversed `s` times slower, endpoints pinned. New tick `i`
+/// reads the old trajectory at time `i/s`.
+fn resample_stretch<const N: usize>(samples: &[SRobotQ<N, f64>], s: f64) -> Vec<SRobotQ<N, f64>> {
+    let len = samples.len();
+    if len < 2 {
+        return samples.to_vec();
+    }
+    let last = len - 1;
+    let m = ((last as f64) * s).round() as usize + 1;
+    (0..m)
+        .map(|i| {
+            let x = (i as f64) / s;
+            if x >= last as f64 {
+                return samples[last];
+            }
+            let lo = x.floor() as usize;
+            let frac = x - lo as f64;
+            SRobotQ(std::array::from_fn(|j| {
+                samples[lo].0[j] * (1.0 - frac) + samples[lo + 1].0[j] * frac
+            }))
+        })
+        .collect()
 }
 
 /// Peak per-joint finite-difference velocity/acceleration/jerk of the output.

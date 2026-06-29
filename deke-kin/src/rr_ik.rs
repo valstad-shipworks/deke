@@ -1034,7 +1034,13 @@ fn solve_x4x5(e9: &SMat<6, 9>) -> Vec<(f64, f64)> {
         }
         cands.push((x4, x5));
     };
-    for i in 0..6 {
+    // Every true (x4,x5) is common to all six conics, so it is a root of the
+    // x5-resultant of any non-degenerate row pair; spurious resultant roots are
+    // rejected by the six-row residual check below. The first pair that yields a
+    // verified candidate has therefore already produced the complete solution
+    // set, so the remaining pairs (which only reproduce the same roots) are
+    // skipped.
+    'pairs: for i in 0..6 {
         for j in (i + 1)..6 {
             let (a1, b1, c1) = (&rows[i].0[..], &rows[i].1[..], &rows[i].2[..]);
             let (a2, b2, c2) = (&rows[j].0[..], &rows[j].1[..], &rows[j].2[..]);
@@ -1079,6 +1085,9 @@ fn solve_x4x5(e9: &SMat<6, 9>) -> Vec<(f64, f64)> {
                         push(x4, x5, &mut cands);
                     }
                 }
+            }
+            if !cands.is_empty() {
+                break 'pairs;
             }
         }
     }
@@ -1501,6 +1510,171 @@ mod tests {
             "planted solution not recovered; got {} solutions",
             sols.len()
         );
+    }
+
+    /// The early-break in `solve_x4x5` (use the first non-degenerate row pair)
+    /// must produce the same FK-verified solution set as exhaustively combining
+    /// all 15 row pairs. Checked over many random generic chains and poses.
+    #[test]
+    fn x4x5_early_break_matches_all_pairs() {
+        fn solve_x4x5_allpairs(e9: &SMat<6, 9>) -> Vec<(f64, f64)> {
+            let rows: [([f64; 3], [f64; 3], [f64; 3]); 6] = std::array::from_fn(|i| {
+                let r: [f64; 9] = std::array::from_fn(|j| e9.at(i, j));
+                ([r[5], r[2], r[0]], [r[7], r[3], r[1]], [r[8], r[6], r[4]])
+            });
+            let mut cands: Vec<(f64, f64)> = Vec::new();
+            let push = |x4: f64, x5: f64, cands: &mut Vec<(f64, f64)>| {
+                if !x4.is_finite() || !x5.is_finite() || x4.abs() > 1e8 || x5.abs() > 1e8 {
+                    return;
+                }
+                if cands
+                    .iter()
+                    .any(|&(u, v)| (u - x4).abs() <= 1e-7 && (v - x5).abs() <= 1e-7)
+                {
+                    return;
+                }
+                cands.push((x4, x5));
+            };
+            for i in 0..6 {
+                for j in (i + 1)..6 {
+                    let (a1, b1, c1) = (&rows[i].0[..], &rows[i].1[..], &rows[i].2[..]);
+                    let (a2, b2, c2) = (&rows[j].0[..], &rows[j].1[..], &rows[j].2[..]);
+                    let mut res = poly_mul(&poly_mul(a2, a2), &poly_mul(c1, c1));
+                    res = poly_addw(&res, &poly_mul(&poly_mul(a1, a1), &poly_mul(c2, c2)), 1.0);
+                    res = poly_addw(&res, &poly_mul(&poly_mul(a1, a2), &poly_mul(c1, c2)), -2.0);
+                    res = poly_addw(&res, &poly_mul(&poly_mul(a1, c1), &poly_mul(b2, b2)), 1.0);
+                    res = poly_addw(&res, &poly_mul(&poly_mul(a2, c2), &poly_mul(b1, b1)), 1.0);
+                    res = poly_addw(&res, &poly_mul(&poly_mul(a2, c1), &poly_mul(b1, b2)), -1.0);
+                    res = poly_addw(&res, &poly_mul(&poly_mul(a1, c2), &poly_mul(b1, b2)), -1.0);
+                    let res = poly_trim(&res);
+                    if res.len() <= 1 {
+                        continue;
+                    }
+                    for x4 in poly_real_roots(&res, 1e-7) {
+                        let av = poly_eval(a1, x4);
+                        let bv = poly_eval(b1, x4);
+                        let cv = poly_eval(c1, x4);
+                        for x5 in solve_quadratic(av, bv, cv) {
+                            let vec = [
+                                x4 * x4 * x5 * x5,
+                                x4 * x4 * x5,
+                                x4 * x5 * x5,
+                                x4 * x5,
+                                x4 * x4,
+                                x5 * x5,
+                                x4,
+                                x5,
+                                1.0,
+                            ];
+                            let mut worst = 0.0f64;
+                            for rr in 0..6 {
+                                let mut s = 0.0;
+                                for (k, &vk) in vec.iter().enumerate() {
+                                    s += e9.at(rr, k) * vk;
+                                }
+                                worst = worst.max(s.abs());
+                            }
+                            if worst <= 1e-3 {
+                                push(x4, x5, &mut cands);
+                            }
+                        }
+                    }
+                }
+            }
+            cands
+        }
+
+        fn solve_screw_ref(c: &[M4; 6], target: &M4, cfg: &RrConfig) -> Vec<[f64; 6]> {
+            let finv = FInv::new();
+            let model = build_pq_model(c, target, &finv);
+            let pivot = match select_pivot_rows(&model.q) {
+                Some(p) => p,
+                None => return Vec::new(),
+            };
+            let n = match left_elim_matrix(&model.q, &pivot) {
+                Some(n) => n,
+                None => return Vec::new(),
+            };
+            let map = halfangle_map();
+            let (m0, m1, m2) = sigma_coeffs(&model, &n, &map);
+            let roots = x3_roots(&m0, &m1, &m2, cfg);
+            let mut sols: Vec<[f64; 6]> = Vec::new();
+            for x3 in roots {
+                let theta3 = normalize_angle(2.0 * x3.atan());
+                let (p, q) = pq_at_x3(c, target, x3, &finv);
+                let e9 = e9_at_x3(&model, &n, &map, x3);
+                for (x4, x5) in solve_x4x5_allpairs(&e9) {
+                    let theta4 = normalize_angle(2.0 * x4.atan());
+                    let theta5 = normalize_angle(2.0 * x5.atan());
+                    let (theta1, theta2) = recover_theta12(&p, &q, theta4, theta5);
+                    let theta6 =
+                        recover_theta6(c, target, &[theta1, theta2, theta3, theta4, theta5]);
+                    let cand = [
+                        normalize_angle(theta1),
+                        normalize_angle(theta2),
+                        theta3,
+                        theta4,
+                        theta5,
+                        theta6,
+                    ];
+                    if pose_residual(c, target, &cand) <= cfg.residual_tol {
+                        let dup = sols.iter().any(|s| {
+                            (0..6)
+                                .map(|k| normalize_angle(s[k] - cand[k]).abs())
+                                .fold(0.0f64, f64::max)
+                                <= cfg.dedup_tol
+                        });
+                        if !dup {
+                            sols.push(cand);
+                        }
+                    }
+                }
+            }
+            sols
+        }
+
+        let mut seed = 0x9E3779B97F4A7C15u64;
+        let mut rng = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let cfg = RrConfig::default();
+        let mut cases = 0usize;
+        let mut total = 0usize;
+        for _ in 0..600 {
+            let dh: [DhJoint; 6] = std::array::from_fn(|_| DhJoint {
+                a: 0.1 + 0.3 * rng(),
+                alpha: (rng() - 0.5) * 2.4,
+                d: 0.1 + 0.2 * rng(),
+            });
+            let q: [f64; 6] = std::array::from_fn(|_| (rng() - 0.5) * 6.0);
+            let target = fk_dh(&dh, &q);
+            let c: [M4; 6] = std::array::from_fn(|i| ais(&dh[i]));
+            let early = solve_dh(&dh, &target, &cfg);
+            let refr = solve_screw_ref(&c, &target, &cfg);
+            assert_eq!(
+                early.len(),
+                refr.len(),
+                "solution count differs (early {} vs all-pairs {}) for dh={dh:?} q={q:?}",
+                early.len(),
+                refr.len()
+            );
+            for sa in &early {
+                let matched = refr.iter().any(|sb| {
+                    (0..6)
+                        .map(|k| normalize_angle(sa[k] - sb[k]).abs())
+                        .fold(0.0f64, f64::max)
+                        < 1e-6
+                });
+                assert!(matched, "early solution {sa:?} absent from all-pairs set");
+            }
+            cases += 1;
+            total += early.len();
+        }
+        eprintln!("differential x4x5: {cases} cases, {total} solutions, all-pairs == early-break");
+        assert!(total > 0, "no solutions exercised");
     }
 
     /// A 6R `KinSpec` with arbitrary (non-DH, non-Z) joint axes. The solver must
