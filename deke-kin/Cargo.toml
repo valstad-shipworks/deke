@@ -1,6 +1,6 @@
 [package]
 name = "deke-kin"
-version = "2.0.0"
+version = "2.0.1"
 edition = "2024"
 description = "Pure-Rust port of EAIK — Efficient Analytical Inverse Kinematics for 1–6R serial manipulators."
 license = "MIT"
