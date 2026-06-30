@@ -21,6 +21,12 @@ const LIMIT_MARGIN: f64 = 0.999;
 /// treated as un-timeable rather than allocating an enormous LP.
 const MAX_TICKS: usize = 200_000;
 
+/// Cap on recursive run bisection in the un-timeable-run recovery. A run halves on
+/// each level, so this bounds the recovery to at most `2^depth` rest-to-rest pieces
+/// — far more than any real run needs before it either times or bottoms out at a
+/// 2-waypoint segment.
+const MAX_SEGMENT_DEPTH: usize = 12;
+
 /// Joint-space, path-exact, jerk-limited retimer. Needs no FK; rejects a TCP cap.
 #[derive(Clone, Copy, Debug)]
 pub struct Topp3Lp<const N: usize>;
@@ -180,7 +186,7 @@ where
         let mut all: Vec<SRobotQ<N, f64>> = Vec::new();
         let mut total_arc = 0.0;
         for run in &runs {
-            let (samples, total) = self.time_run(c, run, dt)?;
+            let (samples, total) = self.time_run_segmented(c, run, dt, 0)?;
             total_arc += total;
             concat_run(&mut all, samples);
         }
@@ -202,6 +208,46 @@ where
             });
         }
         build(all, total_arc, dt, c.output_dt, peak)
+    }
+
+    /// Time a run, recovering from an un-timeable (too-curved / too-tight) run by
+    /// bisecting it at its middle waypoint and timing each half rest-to-rest.
+    ///
+    /// The split point is an existing waypoint on the chord, so every emitted sample
+    /// still lies exactly on the planned polyline — the recovery never deviates from
+    /// the path. It only brings the move to rest at that waypoint, trading a brief
+    /// stop for a solution where a single pass was infeasible (a sharp wrist
+    /// reversal, a near-singular reconfiguration). Bisection recurses until each
+    /// piece times or a piece is too short to split (&lt; 3 waypoints), in which case
+    /// the original timing error surfaces. Only timing failures are recovered;
+    /// malformed-input errors (degenerate, non-finite, bad limits) propagate.
+    fn time_run_segmented(
+        &self,
+        c: &Topp3LpConstraints<N>,
+        run: &[SRobotQ<N, f64>],
+        dt: f64,
+        depth: usize,
+    ) -> Result<(Vec<SRobotQ<N, f64>>, f64), Topp3LpError> {
+        match self.time_run(c, run, dt) {
+            Ok(out) => Ok(out),
+            Err(e) => {
+                let recoverable = matches!(
+                    e,
+                    Topp3LpError::Infeasible
+                        | Topp3LpError::TickBudgetExceeded { .. }
+                        | Topp3LpError::JointLimitExceeded { .. }
+                        | Topp3LpError::TcpLimitExceeded { .. }
+                );
+                if !recoverable || depth >= MAX_SEGMENT_DEPTH || run.len() < 3 {
+                    return Err(e);
+                }
+                let mid = run.len() / 2;
+                let (mut head, t_head) = self.time_run_segmented(c, &run[..=mid], dt, depth + 1)?;
+                let (tail, t_tail) = self.time_run_segmented(c, &run[mid..], dt, depth + 1)?;
+                concat_run(&mut head, tail);
+                Ok((head, t_head + t_tail))
+            }
+        }
     }
 
     /// Time one rest-to-rest run, honouring the TCP velocity cap when set. Returns
