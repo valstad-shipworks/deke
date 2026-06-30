@@ -29,6 +29,42 @@ pub struct RrtcSettings<const N: usize> {
     pub reduce_range_ratio: f64,
 }
 
+pub(crate) fn require_positive_finite(name: &str, v: f64) -> Result<(), String> {
+    if !v.is_finite() || v <= 0.0 {
+        Err(format!("{name} must be finite and > 0, got {v}"))
+    } else {
+        Ok(())
+    }
+}
+
+pub(crate) fn validate_dof_weights<const N: usize>(
+    weights: &SRobotQ<N, f64>,
+) -> Result<(), String> {
+    for i in 0..N {
+        let w = weights.0[i];
+        if !w.is_finite() || w <= 0.0 {
+            return Err(format!(
+                "dof_cost_weights[{i}] must be finite and > 0, got {w}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The `(Err, diagnostic)` pair returned when a planner rejects its settings at
+/// the validation gate. The precise reason is available from each settings
+/// type's `validate()`; the planner surfaces it as
+/// [`RrtTermination::InputInvalid`] (the exact, crate-owned signal) paired with
+/// the closest existing [`DekeError`].
+pub(crate) fn invalid_settings_result<const N: usize>(
+    elapsed_ns: u128,
+) -> (DekeResult<SRobotPath<N, f64>>, RrtDiagnostic) {
+    (
+        Err(DekeError::JointsNonFinite),
+        RrtDiagnostic::invalid(elapsed_ns),
+    )
+}
+
 impl<const N: usize> RrtcSettings<N> {
     pub fn new(lower: SRobotQ<N, f64>, upper: SRobotQ<N, f64>) -> Self {
         Self {
@@ -54,6 +90,55 @@ impl<const N: usize> RrtcSettings<N> {
             reduce_max_steps: 25,
             reduce_range_ratio: 0.8,
         }
+    }
+
+    /// Per-DOF cost weights that normalize each axis by the square of its
+    /// configured travel range, so a long linear rail (meters) and revolute
+    /// joints (radians) contribute comparably to the weighted metric. Axes with
+    /// a zero range fall back to weight `1.0`.
+    ///
+    /// Use this — or [`Self::new_normalized`] — whenever joint ranges differ by
+    /// more than an order of magnitude (the rail case); the default
+    /// `splat(1.0)` lets the largest-range axis dominate nearest-neighbor
+    /// queries, `c_min`, and the informed ellipsoid.
+    pub fn range_normalized_weights(
+        lower: &SRobotQ<N, f64>,
+        upper: &SRobotQ<N, f64>,
+    ) -> SRobotQ<N, f64> {
+        let mut w = [0.0f64; N];
+        for (i, wi) in w.iter_mut().enumerate() {
+            let span = (upper.0[i] - lower.0[i]).abs();
+            *wi = if span > 0.0 { 1.0 / (span * span) } else { 1.0 };
+        }
+        SRobotQ::from_array(w)
+    }
+
+    /// Like [`Self::new`] but seeds `dof_cost_weights` with
+    /// [`Self::range_normalized_weights`] so the mixed-unit metric is meaningful
+    /// out of the box.
+    pub fn new_normalized(lower: SRobotQ<N, f64>, upper: SRobotQ<N, f64>) -> Self {
+        let weights = Self::range_normalized_weights(&lower, &upper);
+        let mut s = Self::new(lower, upper);
+        s.dof_cost_weights = weights;
+        s
+    }
+
+    /// Reject settings that would poison the metric or never terminate, before
+    /// any tree is built: a non-positive `range` never advances the connect
+    /// loop, a non-positive `resolution` panics in `validate_edge`, an empty
+    /// budget does no work, and any non-finite or non-positive
+    /// `dof_cost_weights` entry breaks the kd-tree metric (a zero weight
+    /// silently drops that DOF — e.g. the rail — from nearest-neighbor).
+    pub fn validate(&self) -> Result<(), String> {
+        require_positive_finite("range", self.range)?;
+        require_positive_finite("resolution", self.resolution)?;
+        if self.max_iterations == 0 {
+            return Err("max_iterations must be > 0".into());
+        }
+        if self.max_samples < 2 {
+            return Err("max_samples must be >= 2".into());
+        }
+        validate_dof_weights(&self.dof_cost_weights)
     }
 }
 
@@ -302,6 +387,9 @@ pub(crate) fn solve<const N: usize, V: Validator<N, (), f64>, R: DekeRng<N>>(
     rng: &mut R,
 ) -> (DekeResult<SRobotPath<N, f64>>, RrtDiagnostic) {
     let timer = std::time::Instant::now();
+    if settings.validate().is_err() {
+        return invalid_settings_result(timer.elapsed().as_nanos());
+    }
     let dof_coeffs = {
         let mut c = [0.0f64; N];
         c[..N].copy_from_slice(&settings.dof_cost_weights.0[..N]);
@@ -573,5 +661,58 @@ fn extend_and_connect<const N: usize, V: Validator<N, (), f64>>(
         }
 
         connect_idx = step_idx;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn settings() -> RrtcSettings<2> {
+        RrtcSettings::new(SRobotQ([0.0, 0.0]), SRobotQ([1.0, 1.0]))
+    }
+
+    #[test]
+    fn valid_settings_pass() {
+        assert!(settings().validate().is_ok());
+    }
+
+    #[test]
+    fn nonpositive_range_rejected() {
+        let mut s = settings();
+        s.range = 0.0;
+        assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn zero_resolution_rejected() {
+        let mut s = settings();
+        s.resolution = 0.0;
+        assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn zero_or_negative_dof_weight_rejected() {
+        let mut s = settings();
+        s.dof_cost_weights = SRobotQ([1.0, 0.0]);
+        assert!(s.validate().is_err());
+        s.dof_cost_weights = SRobotQ([-1.0, 1.0]);
+        assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn range_normalized_weights_balance_a_long_rail_against_a_joint() {
+        // A 10 m rail and a ~1 rad joint: weights are 1/span^2, so a unit move
+        // on each axis contributes equally to the squared metric.
+        let w = RrtcSettings::range_normalized_weights(&SRobotQ([0.0, 0.0]), &SRobotQ([10.0, 1.0]));
+        assert!((w.0[0] - 0.01).abs() < 1e-12);
+        assert!((w.0[1] - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn range_normalized_zero_span_axis_falls_back_to_unit() {
+        let w = RrtcSettings::range_normalized_weights(&SRobotQ([5.0, 0.0]), &SRobotQ([5.0, 2.0]));
+        assert_eq!(w.0[0], 1.0);
+        assert!((w.0[1] - 0.25).abs() < 1e-12);
     }
 }

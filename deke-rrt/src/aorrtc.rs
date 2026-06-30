@@ -2,7 +2,8 @@ use deke_types::{DekeResult, SRobotPath, SRobotQ, Validator};
 
 use crate::randomizer::{DekeRng, RandomizerType};
 use crate::rrtc::{
-    RrtcSettings, path_cost, reduce, sample_uniform, shortcut, smooth_bspline, solve as rrtc_solve,
+    RrtcSettings, invalid_settings_result, path_cost, reduce, require_positive_finite,
+    sample_uniform, shortcut, smooth_bspline, solve as rrtc_solve, validate_dof_weights,
     validate_edge_stats, weighted_distance,
 };
 use crate::tree::RrtTree;
@@ -56,6 +57,34 @@ impl<const N: usize> AorrtcSettings<N> {
             simplify_reduce_max_steps: 25,
             simplify_reduce_range_ratio: 0.8,
         }
+    }
+
+    /// Like [`Self::new`] but seeds the cost weights with
+    /// [`RrtcSettings::range_normalized_weights`] on *both* the refinement
+    /// (`dof_cost_weights`) and seed (`rrtc.dof_cost_weights`) vectors, so the
+    /// mixed-unit metric is meaningful out of the box and the two phases agree.
+    pub fn new_normalized(lower: SRobotQ<N, f64>, upper: SRobotQ<N, f64>) -> Self {
+        let weights = RrtcSettings::range_normalized_weights(&lower, &upper);
+        let mut s = Self::new(lower, upper);
+        s.dof_cost_weights = weights;
+        s.rrtc.dof_cost_weights = weights;
+        s
+    }
+
+    /// Reject settings before any tree is built. The top-level
+    /// `dof_cost_weights` governs both phases (the seed is run with a synced
+    /// copy), so the embedded `rrtc` settings are validated with those weights
+    /// substituted in.
+    pub fn validate(&self) -> Result<(), String> {
+        validate_dof_weights(&self.dof_cost_weights)?;
+        let mut rrtc = self.rrtc;
+        rrtc.dof_cost_weights = self.dof_cost_weights;
+        rrtc.validate()?;
+        if self.penalize_static_dof {
+            require_positive_finite("static_dof_penalty", self.static_dof_penalty)?;
+            require_positive_finite("static_dof_threshold", self.static_dof_threshold)?;
+        }
+        Ok(())
     }
 }
 
@@ -268,6 +297,15 @@ pub(crate) fn solve<const N: usize, V: Validator<N, (), f64>, S: DekeRng<N>, A: 
     aux_rng: &mut A,
 ) -> (DekeResult<SRobotPath<N, f64>>, RrtDiagnostic) {
     let timer = std::time::Instant::now();
+    if settings.validate().is_err() {
+        return invalid_settings_result(timer.elapsed().as_nanos());
+    }
+    // The initial RRTC seed must grow under the same metric the refinement
+    // phase scores and refines it against; otherwise c_min, the informed
+    // ellipsoid, and the optimality ratio describe a geometry the seed never
+    // optimized. The top-level `dof_cost_weights` is authoritative for both.
+    let mut rrtc_settings = settings.rrtc;
+    rrtc_settings.dof_cost_weights = settings.dof_cost_weights;
     let dof_coeffs = {
         let mut c = [0.0f64; N];
         for (i, ci) in c.iter_mut().enumerate() {
@@ -283,7 +321,7 @@ pub(crate) fn solve<const N: usize, V: Validator<N, (), f64>, S: DekeRng<N>, A: 
     };
 
     let (initial_result, initial_diag) =
-        rrtc_solve(start, goal, validator, ctx, &settings.rrtc, sample_rng);
+        rrtc_solve(start, goal, validator, ctx, &rrtc_settings, sample_rng);
 
     let initial_path = match initial_result {
         Ok(path) => path,

@@ -65,8 +65,9 @@ pub enum IkStrategy {
     /// A closed-form subproblem decomposition is available. `family` names the
     /// recognised kinematic class (e.g. `"6R spherical wrist"`).
     Analytic { family: String },
-    /// No closed form, but the chain is an all-revolute 6-DOF manipulator, so
-    /// the general Raghavan–Roth/Manocha–Canny eigenvalue solver applies.
+    /// No closed form. The general Raghavan–Roth/Manocha–Canny eigenvalue solver
+    /// applies: directly for a 6R chain, and for a 5R chain by lifting it to a
+    /// generic 6R with a virtual joint that is required to return to zero.
     Generic6R,
     /// [`IkRules`] reduce an over-actuated chain (>6 DOF, or with linear axes)
     /// to a solvable ≤6R sub-problem. `free_dof` is the number of unconstrained
@@ -135,6 +136,25 @@ pub(crate) struct IkResolved<const N: usize> {
     /// Joints to additionally emit wrapped by ±2π (within limits).
     wrap: Vec<usize>,
     viable: bool,
+    /// Present only for a chain with no swept (discrete) axis, where the fold is
+    /// independent of the target pose. `None` for the discrete-sweep path.
+    cache: Option<CachedReduced>,
+}
+
+/// Pose-independent solve artifacts for a chain with no swept (discrete) axis.
+/// With no discrete sweep the fold and its reduced screws are the same for every
+/// target, so they are resolved once and the analytical [`RuntimeRobot`] is held
+/// ready to solve.
+#[allow(dead_code)]
+pub(crate) struct CachedReduced {
+    joints: Vec<(DAffine3, JointSpec<f64>)>,
+    free_idx: Vec<usize>,
+    base: DAffine3,
+    end_to_ee: DAffine3,
+    h: Vec<DVec3>,
+    p: Vec<DVec3>,
+    r6t: DMat3,
+    robot: crate::RuntimeRobot,
 }
 
 impl<const N: usize> std::fmt::Debug for IkResolved<N> {
@@ -204,6 +224,7 @@ pub(crate) fn resolve_ik<const N: usize, F: KinScalar>(
             roles,
             wrap: wrap.clone(),
             viable: false,
+            cache: None,
         })
     };
 
@@ -250,7 +271,7 @@ pub(crate) fn resolve_ik<const N: usize, F: KinScalar>(
     });
     let strategy_name = match reduce_and_classify(&spec, &roles, &probe) {
         Some(family) => format!("analytic ({family})"),
-        None if free_dof == 6 => "generic 6R eigenvalue solver".to_string(),
+        None if (5..=6).contains(&free_dof) => "generic eigenvalue solver".to_string(),
         None => "reduced revolute sub-problem".to_string(),
     };
 
@@ -261,16 +282,22 @@ pub(crate) fn resolve_ik<const N: usize, F: KinScalar>(
         // No reducing rules: behave like the plain chain.
         match reduce_and_classify(&spec, &roles, &probe) {
             Some(family) => IkStrategy::Analytic { family },
-            None if free_dof == 6 => IkStrategy::Generic6R,
+            None if (5..=6).contains(&free_dof) => IkStrategy::Generic6R,
             None => {
                 return not_viable(format!(
-                    "no analytical decomposition is known for this {N}-DOF chain, and the \
-                     general solver only supports all-revolute 6-DOF manipulators"
+                    "no analytical decomposition is known for this {N}-DOF chain; the \
+                     general eigenvalue solver supports 5R and 6R"
                 ));
             }
         }
     } else {
         IkStrategy::Ruled { free_dof, discrete }
+    };
+
+    let cache = if discrete == 0 {
+        build_cache(&spec, &roles)
+    } else {
+        None
     };
 
     Arc::new(IkResolved {
@@ -285,6 +312,37 @@ pub(crate) fn resolve_ik<const N: usize, F: KinScalar>(
         roles,
         wrap,
         viable: true,
+        cache,
+    })
+}
+
+/// Fold the static (free + fixed) geometry once and build the reduced analytical
+/// solver, for a chain with no swept axis. Returns `None` when the reduced chain
+/// is out of the solvable `1..=6` range or has no closed-form decomposition (the
+/// per-call path then handles the generic fallback).
+fn build_cache<const N: usize>(spec: &KinSpec<f64, N>, roles: &[Role; N]) -> Option<CachedReduced> {
+    let frozen: [Option<f64>; N] = std::array::from_fn(|i| match roles[i] {
+        Role::Fixed(v) => Some(v),
+        _ => None,
+    });
+    let (joints, free_idx, base, end_to_ee) = fold(spec, &frozen);
+    if joints.is_empty() || joints.len() > 6 {
+        return None;
+    }
+    let (h, p, r6t) = reduced_screws(base, &joints, end_to_ee);
+    let robot = crate::solver_robot(&h, &p, r6t)?;
+    if !robot.has_known_decomposition() {
+        return None;
+    }
+    Some(CachedReduced {
+        joints,
+        free_idx,
+        base,
+        end_to_ee,
+        h,
+        p,
+        r6t,
+        robot,
     })
 }
 
@@ -310,12 +368,18 @@ impl<const N: usize, F: KinScalar> IkSolver<N, F> for Kinematics<N, F> {
 /// reduced chain, reassemble to N joints, FK-verify, apply IncludeWrapped, and
 /// filter by joint limits.
 fn solve_ruled<const N: usize>(r: &IkResolved<N>, target: &DMat4) -> Vec<[f64; N]> {
-    let mut out: Vec<[f64; N]> = Vec::new();
-
     // Indices of the discrete (swept) axes and their sample grids.
     let discrete_axes: Vec<usize> = (0..N)
         .filter(|&i| matches!(r.roles[i], Role::Discrete { .. }))
         .collect();
+
+    if discrete_axes.is_empty()
+        && let Some(cache) = &r.cache
+    {
+        return solve_cached(r, cache, target);
+    }
+
+    let mut out: Vec<[f64; N]> = Vec::new();
 
     // Optional rail fast-path: a single discrete *prismatic* axis at joint 0,
     // prune samples whose wrist-centre lies outside the reduced arm's reach.
@@ -560,7 +624,7 @@ fn solve_reduced<const N: usize>(
             full[i] = frozen[i].unwrap_or(0.0);
         }
         for (k, &orig) in free_idx.iter().enumerate() {
-            full[orig] = reduced[k];
+            full[orig] = reduced.as_slice()[k];
         }
         // FK-verify against the true full chain — a fold or screw error cannot
         // ship a wrong solution.
@@ -574,6 +638,44 @@ fn solve_reduced<const N: usize>(
                         let mut v = full;
                         v[w] = wrapped;
                         out.push(v);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Solve via the precomputed [`CachedReduced`] for a chain with no swept axis:
+/// the cached analytical solver yields free-joint values directly, which are
+/// reassembled, FK-verified, and limit-filtered exactly as [`solve_reduced`]
+/// does per call.
+fn solve_cached<const N: usize>(
+    r: &IkResolved<N>,
+    cache: &CachedReduced,
+    target: &DMat4,
+) -> Vec<[f64; N]> {
+    let mut out: Vec<[f64; N]> = Vec::new();
+    for reduced in cache.robot.solve(*target) {
+        let mut full = [0.0f64; N];
+        #[allow(clippy::needless_range_loop)]
+        for i in 0..N {
+            if let Role::Fixed(v) = r.roles[i] {
+                full[i] = v;
+            }
+        }
+        for (k, &orig) in cache.free_idx.iter().enumerate() {
+            full[orig] = reduced.as_slice()[k];
+        }
+        if pose_close(&kinspec_fk(&r.spec, &full), target) {
+            push_filtered(r, full, &mut out);
+            for &w in &r.wrap {
+                for delta in [-std::f64::consts::TAU, std::f64::consts::TAU] {
+                    let wrapped = full[w] + delta;
+                    if wrapped >= r.limits.lower[w] && wrapped <= r.limits.upper[w] {
+                        let mut v = full;
+                        v[w] = wrapped;
+                        push_filtered(r, v, &mut out);
                     }
                 }
             }
@@ -719,4 +821,61 @@ fn dvec3<F: KinScalar>(v: <F as KinScalar>::AVec3) -> DVec3 {
 #[inline]
 fn to_f64<F: KinScalar>(x: F) -> f64 {
     num_traits::ToPrimitive::to_f64(&x).expect("scalar is representable as f64")
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+    use crate::{DHJoint, JointLimits};
+
+    fn puma() -> Kinematics<6, f64> {
+        let pi = std::f64::consts::PI;
+        let alpha = [-pi / 2.0, 0.0, pi / 2.0, -pi / 2.0, pi / 2.0, 0.0];
+        let a = [0.0, 0.4318, -0.0203, 0.0, 0.0, 0.0];
+        let d = [0.6718, 0.1397, 0.0, 0.4318, 0.0, 0.0565];
+        let joints = std::array::from_fn(|i| DHJoint {
+            a: a[i],
+            alpha: alpha[i],
+            d: d[i],
+            theta_offset: 0.0,
+        });
+        Kinematics::from_dh(joints, JointLimits::symmetric(100.0), &[])
+    }
+
+    #[test]
+    fn cached_path_matches_uncached_bit_for_bit() {
+        let chain = puma();
+        let r = chain.ik_resolved();
+        assert!(
+            r.cache.is_some(),
+            "static Puma geometry must populate the reduced cache"
+        );
+
+        for cfg in [
+            [0.0, 0.3, -0.4, 0.2, 0.5, -0.1],
+            [-1.0, 0.7, -0.3, 1.2, -0.9, 0.4],
+            [0.8, -0.6, 1.1, -0.2, 0.9, 1.3],
+        ] {
+            let target = kinspec_fk(&r.spec, &cfg);
+
+            let cached = solve_ruled(r, &target);
+
+            let frozen: [Option<f64>; 6] = [None; 6];
+            let mut expected: Vec<[f64; 6]> = Vec::new();
+            for full in solve_reduced(r, &frozen, &target) {
+                push_filtered(r, full, &mut expected);
+            }
+
+            assert_eq!(
+                cached.len(),
+                expected.len(),
+                "solution count mismatch for {cfg:?}"
+            );
+            for (c, e) in cached.iter().zip(expected.iter()) {
+                for k in 0..6 {
+                    assert_eq!(c[k].to_bits(), e[k].to_bits(), "bit mismatch for {cfg:?}");
+                }
+            }
+        }
+    }
 }

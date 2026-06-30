@@ -38,7 +38,18 @@ impl<const N: usize> RrtTree<N> {
 
     pub fn add(&mut self, q: SRobotQ<N, f64>, parent: usize, radius: f64, cost: f64) -> usize {
         let idx = self.nodes.len();
-        let scaled = self.scale(&q);
+        let mut scaled = self.scale(&q);
+        // kiddo's KdTree panics when more points than its bucket size share a
+        // coordinate on a split axis — which happens whenever a DOF is pinned
+        // for the whole plan (e.g. the rail stays fixed across an arm-only
+        // transition, leaving q[0] constant on every node). Nudge each key by a
+        // unique per-node amount far below joint resolution so no axis ever has
+        // coincident values; the stored config and all returned geometry are
+        // untouched, only kiddo's internal index shifts by ~1e-9.
+        let dejitter = idx as f64 * 1e-9;
+        for s in &mut scaled {
+            *s += dejitter;
+        }
         self.kdtree.add(&scaled, idx as u64);
         self.nodes.push(q);
         self.parents.push(parent);

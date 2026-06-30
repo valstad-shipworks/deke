@@ -418,7 +418,6 @@ pub(crate) fn solver_robot(h: &[DVec3], p: &[DVec3], r6t: DMat3) -> Option<Runti
 /// A runtime-DOF analytical solver over a reduced (already-folded) revolute
 /// chain. Mirrors [`Robot`]'s internals without the const-generic `N`.
 pub(crate) struct RuntimeRobot {
-    remodeled_h: Vec<DVec3>,
     r6t_partial: DMat3,
     solver: solver::Solver,
 }
@@ -429,7 +428,6 @@ impl RuntimeRobot {
         let p_remodeled = remodel::remodel_kinematics(&h, &p, 1e-13, 1e-9);
         let solver = solver::Solver::build(&h, &p_remodeled, 1e-13, 1e-9);
         Self {
-            remodeled_h: h,
             r6t_partial: r6t,
             solver,
         }
@@ -443,11 +441,11 @@ impl RuntimeRobot {
         self.solver.kinematic_family()
     }
 
-    /// Solve the reduced chain at `pose`, returning each solution as the
-    /// free-joint values (length == effective DOF).
-    fn solve(&self, mut pose: DMat4) -> Vec<Vec<f64>> {
+    /// Solve the reduced chain at `pose`. Each solution is padded to 6 slots;
+    /// only the first effective-DOF entries are meaningful.
+    pub(crate) fn solve(&self, mut pose: DMat4) -> solver::Solutions {
         if !self.solver.has_known_decomposition() {
-            return Vec::new();
+            return solver::Solutions::new();
         }
         let r = DMat3::from_cols(
             pose.x_axis.truncate(),
@@ -457,12 +455,7 @@ impl RuntimeRobot {
         pose.x_axis = r.x_axis.extend(0.0);
         pose.y_axis = r.y_axis.extend(0.0);
         pose.z_axis = r.z_axis.extend(0.0);
-        let n_eff = self.remodeled_h.len();
-        self.solver
-            .solve(&pose)
-            .into_iter()
-            .map(|j| j.as_slice()[..n_eff].to_vec())
-            .collect()
+        self.solver.solve(&pose)
     }
 }
 
@@ -479,23 +472,73 @@ pub(crate) fn solve_reduced_chain(
     base: glam::DAffine3,
     end_to_ee: glam::DAffine3,
     target: &DMat4,
-) -> Vec<Vec<f64>> {
+) -> solver::Solutions {
     let Some(robot) = solver_robot(h, p, r6t) else {
-        return Vec::new();
+        return solver::Solutions::new();
     };
     if robot.has_known_decomposition() {
         return robot.solve(*target);
     }
-    // Generic fallback only applies to an exactly-6R reduced chain.
-    if joints.len() == 6 {
+    let n = joints.len();
+    if n == 6 {
         let spec_joints: [(glam::DAffine3, deke_types::JointSpec<f64>); 6] =
             std::array::from_fn(|i| joints[i]);
         let spec = deke_types::KinSpec::new(base, spec_joints, end_to_ee);
         if let Ok(sols) = rr_ik::solve_kinspec(&spec, *target, &rr_ik::RrConfig::default()) {
-            return sols.into_iter().map(|q| q.0.to_vec()).collect();
+            return sols.into_iter().collect();
+        }
+    } else if n == 5 {
+        return solve_generic_5r(joints, base, end_to_ee, target);
+    }
+    solver::Solutions::new()
+}
+
+/// One virtual revolute joint that lifts a 5R chain to a generic 6R for the
+/// eigenvalue fallback. At a zero joint angle it contributes only its constant
+/// frame (which the caller cancels into `end_to_ee`), so a lifted solution with
+/// the virtual joint at zero is exactly a solution of the original 5R. The
+/// constants are arbitrary, chosen so the lifted 6R carries no
+/// parallel/intersecting-axis structure that would defeat the general solver.
+fn virtual_pad_joint() -> (glam::DAffine3, deke_types::JointSpec<f64>) {
+    use glam::DAffine3;
+    let g = DAffine3::from_translation(DVec3::new(0.137, -0.211, 0.173))
+        * DAffine3::from_axis_angle(DVec3::new(0.41, 0.57, 0.71).normalize(), 0.61);
+    (
+        g,
+        deke_types::JointSpec::Revolute {
+            axis_local: DVec3::new(0.33, 0.62, 0.71).normalize(),
+        },
+    )
+}
+
+/// Solve a non-decomposable 5R reduced chain by lifting it to a generic 6R with
+/// a virtual joint, solving with the eigenvalue solver, and keeping only the
+/// solutions whose virtual joint returns to zero (the embeddings of the 5R).
+fn solve_generic_5r(
+    joints: &[(glam::DAffine3, deke_types::JointSpec<f64>)],
+    base: glam::DAffine3,
+    end_to_ee: glam::DAffine3,
+    target: &DMat4,
+) -> solver::Solutions {
+    let v = virtual_pad_joint();
+    let spec_joints: [(glam::DAffine3, deke_types::JointSpec<f64>); 6] =
+        std::array::from_fn(|i| if i < 5 { joints[i] } else { v });
+    let spec = deke_types::KinSpec::new(base, spec_joints, v.0.inverse() * end_to_ee);
+    let Ok(sols) = rr_ik::solve_kinspec(&spec, *target, &rr_ik::RrConfig::default()) else {
+        return solver::Solutions::new();
+    };
+
+    const VIRT_TOL: f64 = 1e-4;
+    let mut out = solver::Solutions::new();
+    for s in sols {
+        let a = s.0;
+        if a[5].abs() < VIRT_TOL {
+            let mut buf = [0.0f64; 6];
+            buf[..5].copy_from_slice(&a[..5]);
+            out.push(SRobotQ::from_array(buf));
         }
     }
-    Vec::new()
+    out
 }
 
 #[cfg(test)]
@@ -505,6 +548,91 @@ mod tests {
     //! these exercise the engine directly, which is what those public paths
     //! delegate to.
     use super::*;
+    use glam::DAffine3;
+
+    fn xs(s: &mut u64) -> f64 {
+        *s ^= *s << 13;
+        *s ^= *s >> 7;
+        *s ^= *s << 17;
+        (*s >> 11) as f64 / (1u64 << 53) as f64
+    }
+    fn rr(s: &mut u64, lo: f64, hi: f64) -> f64 {
+        lo + (hi - lo) * xs(s)
+    }
+    fn raxis(s: &mut u64) -> DVec3 {
+        DVec3::new(rr(s, -1.0, 1.0), rr(s, -1.0, 1.0), rr(s, -1.0, 1.0)).normalize()
+    }
+    fn raff(s: &mut u64) -> DAffine3 {
+        DAffine3::from_axis_angle(raxis(s), rr(s, -2.5, 2.5))
+            * DAffine3::from_translation(DVec3::new(
+                rr(s, -0.3, 0.3),
+                rr(s, -0.3, 0.3),
+                rr(s, 0.05, 0.3),
+            ))
+    }
+    fn axis_of(j: &(DAffine3, deke_types::JointSpec<f64>)) -> DVec3 {
+        match j.1 {
+            deke_types::JointSpec::Revolute { axis_local } => axis_local,
+            _ => unreachable!("generic padded test uses revolute joints only"),
+        }
+    }
+    fn fk_nr(
+        joints: &[(DAffine3, deke_types::JointSpec<f64>)],
+        base: DAffine3,
+        end: DAffine3,
+        q: &[f64],
+    ) -> DMat4 {
+        let mut t = base;
+        for (i, j) in joints.iter().enumerate() {
+            t = t * j.0 * DAffine3::from_axis_angle(axis_of(j), q[i]);
+        }
+        DMat4::from(t * end)
+    }
+
+    /// Directly exercise the generic 5R padding fallback over random non-DH 5R
+    /// chains: plant a configuration, then require that the solve recovers it and
+    /// that every returned solution reproduces the target pose.
+    #[test]
+    fn generic_5r_recovers_planted() {
+        let mut s = 0xC0FFEE_u64;
+        for _ in 0..120 {
+            let joints: Vec<(DAffine3, deke_types::JointSpec<f64>)> = (0..5)
+                .map(|_| {
+                    (
+                        raff(&mut s),
+                        deke_types::JointSpec::Revolute {
+                            axis_local: raxis(&mut s),
+                        },
+                    )
+                })
+                .collect();
+            let base = DAffine3::IDENTITY;
+            let end = raff(&mut s);
+            let q: Vec<f64> = (0..5).map(|_| rr(&mut s, -2.5, 2.5)).collect();
+            let target = fk_nr(&joints, base, end, &q);
+
+            let sols = solve_generic_5r(&joints, base, end, &target);
+            assert!(
+                !sols.is_empty(),
+                "5R fallback returned no solution for a reachable target"
+            );
+            let tc = target.to_cols_array();
+            for sol in &sols {
+                let got = fk_nr(&joints, base, end, &sol.as_slice()[..5]).to_cols_array();
+                assert!(
+                    got.iter().zip(tc.iter()).all(|(p, q)| (p - q).abs() < 1e-6),
+                    "5R solution does not reach the target"
+                );
+            }
+            let recovered = sols.iter().any(|sol| {
+                (0..5).all(|i| {
+                    let d = (sol.as_slice()[i] - q[i]).rem_euclid(std::f64::consts::TAU);
+                    d < 1e-5 || (std::f64::consts::TAU - d) < 1e-5
+                })
+            });
+            assert!(recovered, "5R fallback did not recover planted q={q:?}");
+        }
+    }
 
     fn puma_dh() -> Robot<6> {
         let pi = std::f64::consts::PI;
