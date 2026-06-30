@@ -293,7 +293,8 @@ where
                 .iter()
                 .map(|k| v_tcp * derate / k.max(1e-12))
                 .collect();
-            let (samples, recovery) = time_chord(&knots, &s, &secant, &c.joint, dt, Some(&tcp_cap))?;
+            let (samples, recovery) =
+                time_chord(&knots, &s, &secant, &c.joint, dt, Some(&tcp_cap))?;
             let peak = self.tcp_speed_peak(&samples, dt)?;
             last_peak = peak;
             if peak <= v_tcp * (1.0 + 1e-6) {
