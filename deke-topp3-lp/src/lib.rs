@@ -38,6 +38,6 @@ pub mod retimer;
 mod solve;
 
 pub use constraints::{Conditioning, JointLimits, TcpLimits, Topp3LpConstraints};
-pub use diagnostic::Topp3LpDiagnostic;
+pub use diagnostic::{RetimeRecovery, Topp3LpDiagnostic};
 pub use error::Topp3LpError;
 pub use retimer::{Topp3Lp, Topp3LpTcp};

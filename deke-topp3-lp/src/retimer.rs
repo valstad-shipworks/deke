@@ -7,7 +7,7 @@ use deke_types::{
 
 use crate::chord;
 use crate::constraints::{JointLimits, Topp3LpConstraints};
-use crate::diagnostic::Topp3LpDiagnostic;
+use crate::diagnostic::{RetimeRecovery, Topp3LpDiagnostic};
 use crate::error::Topp3LpError;
 use crate::solve::solve_sigma;
 
@@ -60,11 +60,13 @@ impl<const N: usize> Topp3Lp<N> {
 
         let mut all: Vec<SRobotQ<N, f64>> = Vec::new();
         let mut total_arc = 0.0;
+        let mut recovery = RetimeRecovery::default();
         for run in &runs {
             let (knots, s) = chord::condition(run, c.conditioning);
             let total = check_timeable(&knots, &s)?;
             let secant = chord::secants(&knots, &s);
-            let samples = time_chord(&knots, &s, &secant, &c.joint, dt, None)?;
+            let (samples, run_recovery) = time_chord(&knots, &s, &secant, &c.joint, dt, None)?;
+            recovery.merge(run_recovery);
             total_arc += total;
             concat_run(&mut all, samples);
         }
@@ -76,7 +78,7 @@ impl<const N: usize> Topp3Lp<N> {
                 limit,
             });
         }
-        build(all, total_arc, dt, c.output_dt, 0.0)
+        build(all, total_arc, dt, c.output_dt, 0.0, recovery)
     }
 }
 
@@ -185,8 +187,10 @@ where
 
         let mut all: Vec<SRobotQ<N, f64>> = Vec::new();
         let mut total_arc = 0.0;
+        let mut recovery = RetimeRecovery::default();
         for run in &runs {
-            let (samples, total) = self.time_run_segmented(c, run, dt, 0)?;
+            let (samples, total, run_recovery) = self.time_run_segmented(c, run, dt, 0)?;
+            recovery.merge(run_recovery);
             total_arc += total;
             concat_run(&mut all, samples);
         }
@@ -207,7 +211,7 @@ where
                 limit: v_tcp,
             });
         }
-        build(all, total_arc, dt, c.output_dt, peak)
+        build(all, total_arc, dt, c.output_dt, peak, recovery)
     }
 
     /// Time a run, recovering from an un-timeable (too-curved / too-tight) run by
@@ -227,7 +231,7 @@ where
         run: &[SRobotQ<N, f64>],
         dt: f64,
         depth: usize,
-    ) -> Result<(Vec<SRobotQ<N, f64>>, f64), Topp3LpError> {
+    ) -> Result<(Vec<SRobotQ<N, f64>>, f64, RetimeRecovery), Topp3LpError> {
         match self.time_run(c, run, dt) {
             Ok(out) => Ok(out),
             Err(e) => {
@@ -242,29 +246,35 @@ where
                     return Err(e);
                 }
                 let mid = run.len() / 2;
-                let (mut head, t_head) = self.time_run_segmented(c, &run[..=mid], dt, depth + 1)?;
-                let (tail, t_tail) = self.time_run_segmented(c, &run[mid..], dt, depth + 1)?;
+                let (mut head, t_head, mut rec) =
+                    self.time_run_segmented(c, &run[..=mid], dt, depth + 1)?;
+                let (tail, t_tail, tail_rec) =
+                    self.time_run_segmented(c, &run[mid..], dt, depth + 1)?;
                 concat_run(&mut head, tail);
-                Ok((head, t_head + t_tail))
+                rec.merge(tail_rec);
+                // This level's split inserted one on-chord rest stop (the halves'
+                // own splits are already counted in their recoveries).
+                rec.bisections += 1;
+                Ok((head, t_head + t_tail, rec))
             }
         }
     }
 
     /// Time one rest-to-rest run, honouring the TCP velocity cap when set. Returns
-    /// the run's samples and its arc length.
+    /// the run's samples, its arc length, and which recovery backstops were needed.
     fn time_run(
         &self,
         c: &Topp3LpConstraints<N>,
         run: &[SRobotQ<N, f64>],
         dt: f64,
-    ) -> Result<(Vec<SRobotQ<N, f64>>, f64), Topp3LpError> {
+    ) -> Result<(Vec<SRobotQ<N, f64>>, f64, RetimeRecovery), Topp3LpError> {
         let (knots, s) = chord::condition(run, c.conditioning);
         let total = check_timeable(&knots, &s)?;
         let secant = chord::secants(&knots, &s);
 
         let Some(v_tcp) = c.tcp.v_max else {
-            let samples = time_chord(&knots, &s, &secant, &c.joint, dt, None)?;
-            return Ok((samples, total));
+            let (samples, recovery) = time_chord(&knots, &s, &secant, &c.joint, dt, None)?;
+            return Ok((samples, total, recovery));
         };
 
         // `‖dp/ds‖` per segment from the Jacobian: ṗ = J_lin·secant·σ̇, so the
@@ -283,11 +293,11 @@ where
                 .iter()
                 .map(|k| v_tcp * derate / k.max(1e-12))
                 .collect();
-            let samples = time_chord(&knots, &s, &secant, &c.joint, dt, Some(&tcp_cap))?;
+            let (samples, recovery) = time_chord(&knots, &s, &secant, &c.joint, dt, Some(&tcp_cap))?;
             let peak = self.tcp_speed_peak(&samples, dt)?;
             last_peak = peak;
             if peak <= v_tcp * (1.0 + 1e-6) {
-                return Ok((samples, total));
+                return Ok((samples, total, recovery));
             }
             derate /= (peak / v_tcp) * 1.01;
         }
@@ -397,6 +407,7 @@ fn build<const N: usize>(
     dt: f64,
     output_dt: Duration,
     peak_tcp_speed: f64,
+    recovery: RetimeRecovery,
 ) -> Result<(SRobotTraj<N, f64>, Topp3LpDiagnostic), Topp3LpError> {
     let (v, a, jk) = fd_peaks(&samples, dt);
     let diag = Topp3LpDiagnostic {
@@ -407,6 +418,7 @@ fn build<const N: usize>(
         peak_joint_accel: a,
         peak_joint_jerk: jk,
         peak_tcp_speed,
+        recovery,
     };
     let path = SRobotPath::try_new(samples)?;
     Ok((SRobotTraj::new(output_dt, path), diag))
@@ -425,7 +437,7 @@ fn time_chord<const N: usize>(
     joint: &JointLimits<N>,
     dt: f64,
     tcp_vel_cap: Option<&[f64]>,
-) -> Result<Vec<SRobotQ<N, f64>>, Topp3LpError> {
+) -> Result<(Vec<SRobotQ<N, f64>>, RetimeRecovery), Topp3LpError> {
     let nb = knots.len();
     let total = s[nb - 1];
 
@@ -517,6 +529,23 @@ fn time_chord<const N: usize>(
     // tightened in place whenever a reconstruction's realized FD overruns the true
     // cap (see the derate at the end of the loop).
     let mut plan = joint.clone();
+    // The net planned-limit derate at the point a solve is accepted: `(joint, kind,
+    // factor)` for every axis whose planned cap ended up below its true cap.
+    let derates_of = |plan: &JointLimits<N>| -> Vec<(usize, &'static str, f64)> {
+        let mut out = Vec::new();
+        for j in 0..N {
+            for (kind, p, t) in [
+                ("velocity", plan.v_max.0[j], joint.v_max.0[j]),
+                ("acceleration", plan.a_max.0[j], joint.a_max.0[j]),
+                ("jerk", plan.j_max.0[j], joint.j_max.0[j]),
+            ] {
+                if t > 0.0 && p < t * (1.0 - 1e-9) {
+                    out.push((j, kind, p / t));
+                }
+            }
+        }
+        out
+    };
     for _grow in 0..8 {
         if kk > MAX_TICKS {
             // The grid the limits demand at this dt exceeds the budget — this is a
@@ -573,7 +602,15 @@ fn time_chord<const N: usize>(
             // leak), take it without a second solve.
             let samples = recon_samples(&sg);
             match verify_joint_fd(&samples, joint, dt) {
-                None => return Ok(samples),
+                None => {
+                    return Ok((
+                        samples,
+                        RetimeRecovery {
+                            derates: derates_of(&plan),
+                            ..Default::default()
+                        },
+                    ));
+                }
                 Some((kind, joint_idx, value, limit, _idx)) => {
                     last_violation = Some((kind, joint_idx, value, limit));
                     if best.is_none() {
@@ -614,7 +651,15 @@ fn time_chord<const N: usize>(
             if let Some(boxed) = boxed {
                 let samples = recon_samples(&boxed);
                 match verify_joint_fd(&samples, joint, dt) {
-                    None => return Ok(samples),
+                    None => {
+                        return Ok((
+                            samples,
+                            RetimeRecovery {
+                                derates: derates_of(&plan),
+                                ..Default::default()
+                            },
+                        ));
+                    }
                     Some((kind, joint_idx, value, limit, _idx)) => {
                         last_violation = Some((kind, joint_idx, value, limit));
                         if best.is_none() {
@@ -655,7 +700,14 @@ fn time_chord<const N: usize>(
     if let Some(best) = best
         && let Some(scaled) = time_scale_to_limits(&best, joint, dt)
     {
-        return Ok(scaled);
+        return Ok((
+            scaled,
+            RetimeRecovery {
+                derates: derates_of(&plan),
+                time_scaled: true,
+                ..Default::default()
+            },
+        ));
     }
     match last_violation {
         Some((kind, joint_idx, value, limit)) => Err(Topp3LpError::JointLimitExceeded {
