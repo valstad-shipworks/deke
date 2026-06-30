@@ -467,6 +467,10 @@ fn time_chord<const N: usize>(
     // never clears the FD verify, we can fall back to uniformly slowing it (see
     // `time_scale_to_limits`) instead of failing outright.
     let mut best: Option<Vec<SRobotQ<N, f64>>> = None;
+    // The σ-LP plans against these limits, which start at the true caps and are
+    // tightened in place whenever a reconstruction's realized FD overruns the true
+    // cap (see the derate at the end of the loop).
+    let mut plan = joint.clone();
     for _grow in 0..8 {
         if kk > MAX_TICKS {
             // The grid the limits demand at this dt exceeds the budget — this is a
@@ -499,9 +503,9 @@ fn time_chord<const N: usize>(
                 total,
                 &mvals,
                 &cvals,
-                &joint.v_max,
-                &joint.a_max,
-                &joint.j_max,
+                &plan.v_max,
+                &plan.a_max,
+                &plan.j_max,
                 tcp_ds.as_deref(),
                 None,
                 None,
@@ -551,9 +555,9 @@ fn time_chord<const N: usize>(
                 total,
                 &mvals,
                 &cvals,
-                &joint.v_max,
-                &joint.a_max,
-                &joint.j_max,
+                &plan.v_max,
+                &plan.a_max,
+                &plan.j_max,
                 tcp_ds.as_deref(),
                 Some(&lo),
                 Some(&hi),
@@ -571,6 +575,25 @@ fn time_chord<const N: usize>(
                             best = Some(samples);
                         }
                     }
+                }
+            }
+        }
+        // The σ-LP solves its v/a/j rows only to the convex solver's tolerance. On
+        // the jerk rows — whose RHS is `limit·dt³`, vanishingly small — that
+        // tolerance can leave the realized FD a few-to-20% over the true cap, an
+        // overrun that is precision (not a cross-bin leak) and so survives any
+        // horizon growth. Derate the offending joint's planned limit by the overrun
+        // (with a little headroom) and re-solve: the next reconstruction lands under
+        // the true cap while keeping the LP's smooth, minimally-slowed profile —
+        // instead of falling through to a uniform time-stretch that slows the whole
+        // move many-fold to clear one ramp's jerk spike.
+        if let Some((kind, jidx, value, limit)) = last_violation {
+            let shrink = (limit / value) / 1.02;
+            if shrink.is_finite() && shrink < 1.0 {
+                match kind {
+                    "velocity" => plan.v_max.0[jidx] *= shrink,
+                    "acceleration" => plan.a_max.0[jidx] *= shrink,
+                    _ => plan.j_max.0[jidx] *= shrink,
                 }
             }
         }
